@@ -91,6 +91,73 @@ struct Region {  // strategic region: weather + air operations grouping
     bool sandstorm = false;
     // Air control per country, written by the air phase (derived, single writer).
     std::vector<std::pair<CountryId, double>> air_control;
+    // Naval control per country in sea zones, written by the naval phase.
+    std::vector<std::pair<CountryId, double>> naval_control;
+};
+
+// ---------------------------------------------------------------- navy -------
+
+enum class NavalMission : uint8_t {
+    None = 0,
+    Patrol,
+    StrikeForce,
+    ConvoyEscort,
+    ConvoyRaid,
+    InvasionSupport,
+    Training,
+    Count
+};
+
+const char* naval_mission_name(NavalMission m);
+bool naval_mission_is_offensive(NavalMission m);
+
+struct Ship {
+    ShipId id;
+    CountryId country;
+    EquipmentId equipment;
+    std::string name;
+    FleetId fleet;
+    TaskForceId task_force;
+    double strength = 1.0;      // hull integrity 0..1
+    double organisation = 1.0;  // crew readiness 0..1
+    double experience = 0.0;
+    double fuel = 1.0;
+    ProvinceId port;      // home port
+    RegionId sea_region;  // current sea zone while at sea
+    bool at_sea = false;
+};
+
+struct TaskForce {
+    TaskForceId id;
+    CountryId country;
+    FleetId fleet;
+    std::string name;
+    std::vector<ShipId> ships;
+    ProvinceId port;      // base port
+    RegionId sea_region;  // sea zone it operates in
+    NavalMission mission = NavalMission::None;
+    bool at_sea = false;
+    double detection = 0.0;  // derived each tick from ships present
+    Tick last_engagement = 0;
+};
+
+struct Fleet {
+    FleetId id;
+    CountryId country;
+    std::string name;
+    std::vector<TaskForceId> task_forces;
+};
+
+// A naval invasion in progress: divisions waiting at a port, crossing, or landed.
+struct NavalInvasion {
+    ArmyId army;
+    CountryId country;
+    ProvinceId origin;   // friendly port the troops load at
+    ProvinceId target;   // hostile coastal province to land on
+    RegionId sea_region;  // sea zone crossed
+    double progress = 0.0;  // 0..1 crossing progress
+    Tick started = 0;
+    bool landed = false;
 };
 
 // ----------------------------------------------------------------- air -------
@@ -366,6 +433,16 @@ struct TrainingDivision {
     double days_left = 0.0;
 };
 
+struct Content;
+
+// Which factory pool a production line draws on: dockyards build ships and convoys,
+// military factories build everything else. Validation, the industry phase and the
+// auditor all use this one rule.
+enum class FactoryPool : uint8_t { Military = 0, Dockyard };
+
+FactoryPool line_factory_pool(const Content& content, const ProductionLine& line);
+FactoryPool equipment_factory_pool(const Content& content, EquipmentId equipment);
+
 struct Country {
     CountryId id;
     std::string tag;
@@ -398,6 +475,7 @@ struct Country {
     std::vector<TemplateId> templates;
     std::vector<CharacterId> generals;
     std::vector<AirWingId> wings;                    // air wings this country fields
+    std::vector<FleetId> fleets;                     // naval fleets this country fields
     std::vector<TrainingDivision> training;  // divisions being trained (off-map)
     std::vector<WarId> wars;
     uint32_t faction = 0;  // 0 = none
@@ -450,6 +528,10 @@ struct World {
     Store<War> wars;
     Store<Character> characters;
     Store<AirWing> air_wings;
+    Store<Ship> ships;
+    Store<TaskForce> task_forces;
+    Store<Fleet> fleets;
+    std::vector<NavalInvasion> invasions;
 
     std::vector<Faction> factions;
     // Relations keyed by ordered pair (low id first) for deterministic iteration.
@@ -480,6 +562,14 @@ struct World {
     }
     [[nodiscard]] AirWing* wing(AirWingId id) { return air_wings.try_get(id); }
     [[nodiscard]] const AirWing* wing(AirWingId id) const { return air_wings.try_get(id); }
+    [[nodiscard]] Ship* ship(ShipId id) { return ships.try_get(id); }
+    [[nodiscard]] const Ship* ship(ShipId id) const { return ships.try_get(id); }
+    [[nodiscard]] TaskForce* task_force(TaskForceId id) { return task_forces.try_get(id); }
+    [[nodiscard]] const TaskForce* task_force(TaskForceId id) const {
+        return task_forces.try_get(id);
+    }
+    [[nodiscard]] Fleet* fleet(FleetId id) { return fleets.try_get(id); }
+    [[nodiscard]] const Fleet* fleet(FleetId id) const { return fleets.try_get(id); }
 
     [[nodiscard]] CountryId province_owner(ProvinceId id) const {
         const Province* p = province(id);

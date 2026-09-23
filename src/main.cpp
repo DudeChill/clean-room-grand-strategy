@@ -188,11 +188,11 @@ void print_country_summary(const Game& g) {
 void print_metrics(const Game& g) {
     const SimMetrics& m = g.metrics;
     std::printf("\nperformance (avg ms/tick): total %.3f | commands %.3f | diplomacy %.3f | "
-                "movement %.3f | combat %.3f | territory %.3f | supply %.3f | air %.3f | industry %.3f | "
+                "movement %.3f | combat %.3f | territory %.3f | supply %.3f | air %.3f | naval %.3f | industry %.3f | "
                 "research %.3f | training %.3f | politics %.3f | weather %.3f | ai %.3f | "
                 "cleanup %.3f\n",
                 m.average_tick_ms(), m.ms_commands, m.ms_diplomacy, m.ms_movement, m.ms_combat,
-                m.ms_territory, m.ms_supply, m.ms_air, m.ms_industry, m.ms_research, m.ms_training,
+                m.ms_territory, m.ms_supply, m.ms_air, m.ms_naval, m.ms_industry, m.ms_research, m.ms_training,
                 m.ms_politics, m.ms_weather, m.ms_ai, m.ms_cleanup);
     std::printf("tick p50 %.3f ms, p95 %.3f ms, p99 %.3f ms over %zu samples\n",
                 m.percentile_tick_ms(0.50), m.percentile_tick_ms(0.95), m.percentile_tick_ms(0.99),

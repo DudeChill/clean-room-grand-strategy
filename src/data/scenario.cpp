@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "data/content.h"
+#include "game/game.h"
+#include "sim/navy.h"
 #include "sim/world.h"
 
 namespace hoi {
@@ -133,6 +135,78 @@ struct MapKeyIndex {
     std::map<std::string, StateId> states;
     std::map<std::string, ProvinceId> provinces;
 };
+
+// Best land province of a state: highest victory points, then population, then
+// lowest id, so the pick never depends on container order. With `coastal_only` the
+// search skips provinces that do not touch a sea zone.
+ProvinceId best_land_province(const World& w, const State& state, bool coastal_only) {
+    ProvinceId best;
+    int best_vp = -1;
+    double best_pop = -1.0;
+    for (ProvinceId pid : state.provinces) {
+        const Province* prov = w.provinces.try_get(pid);
+        if (prov == nullptr || prov->is_sea) continue;
+        if (coastal_only && !prov->coastal) continue;
+        const bool better =
+            prov->victory_points > best_vp ||
+            (prov->victory_points == best_vp && prov->population > best_pop) ||
+            (prov->victory_points == best_vp && prov->population == best_pop &&
+             (!best.valid() || pid.v < best.v));
+        if (better) {
+            best_vp = prov->victory_points;
+            best_pop = prov->population;
+            best = pid;
+        }
+    }
+    return best;
+}
+
+// The port a country bases its navy at, derived from the loaded world so no
+// scenario has to hand-maintain a province list: the coastal capital province when
+// the capital reaches the sea, otherwise the best coastal province of the country's
+// largest coastal state (most factories, lowest state id on a tie).
+ProvinceId main_naval_port(const World& w, CountryId cid) {
+    const Country* country = w.country(cid);
+    if (country == nullptr) return ProvinceId{};
+    const State* capital = w.state(country->capital);
+    if (capital != nullptr) {
+        const ProvinceId best = best_land_province(w, *capital, true);
+        if (best.valid()) return best;
+    }
+    StateId largest;
+    int largest_factories = -1;
+    w.states.for_each([&](StateId sid, const State& state) {
+        if (state.owner != cid) return;
+        if (!best_land_province(w, state, true).valid()) return;
+        if (state.total_factories() > largest_factories) {
+            largest_factories = state.total_factories();
+            largest = sid;
+        }
+    });
+    const State* big = w.state(largest);
+    return big != nullptr ? best_land_province(w, *big, true) : ProvinceId{};
+}
+
+// Case/separator-insensitive match of a scenario mission name against the engine's
+// NavalMission names, mirroring the other matchers above.
+int match_naval_mission(const std::string& key) {
+    std::string want;
+    for (char ch : key) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        if (c >= 'A' && c <= 'Z') c = static_cast<unsigned char>(c - 'A' + 'a');
+        if (c >= 'a' && c <= 'z') want.push_back(static_cast<char>(c));
+    }
+    for (int i = 0; i < static_cast<int>(NavalMission::Count); ++i) {
+        std::string have;
+        for (const char* p = naval_mission_name(static_cast<NavalMission>(i)); *p != '\0'; ++p) {
+            unsigned char c = static_cast<unsigned char>(*p);
+            if (c >= 'A' && c <= 'Z') c = static_cast<unsigned char>(c - 'A' + 'a');
+            if (c >= 'a' && c <= 'z') have.push_back(static_cast<char>(c));
+        }
+        if (have == want) return i;
+    }
+    return -1;
+}
 
 }  // namespace
 
@@ -505,22 +579,26 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         // Capitulation thresholds and production lines are based on what actually
         // fits into the country's states, not on what the scenario asked for.
         int placed_military = 0;
+        int placed_dockyards = 0;
         int placed_total = 0;
         for (StateId sid : states) {
             const State* s = world->states.try_get(sid);
             if (s == nullptr) continue;
             placed_military += s->military_factories;
+            placed_dockyards += s->dockyards;
             placed_total += s->total_factories();
         }
         country.starting_factories = placed_total;
 
-        // Starting production lines. The scenario may name more factories than the
-        // country's military industry has; the clamp keeps the sum honest so the
+        // Starting production lines. Ships and convoys draw on dockyards, everything
+        // else on military factories (the one factory-pool rule the command layer and
+        // the industry phase use); the clamp keeps each pool's sum honest so the
         // "unassigned factories" figure in the UI starts at zero for a planned
         // scenario.
         const Json& jlines = c["production_lines"];
         if (jlines.is_array()) {
-            int factories_left = placed_military;
+            int military_left = placed_military;
+            int dockyards_left = placed_dockyards;
             for (size_t k = 0; k < jlines.size(); ++k) {
                 const Json& entry = jlines[k];
                 const std::string eq_key = entry["equipment"].as_string();
@@ -533,6 +611,9 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
                     }
                     continue;
                 }
+                const bool dockyard =
+                    equipment_factory_pool(content, eq) == FactoryPool::Dockyard;
+                int& factories_left = dockyard ? dockyards_left : military_left;
                 int factories = static_cast<int>(entry["factories"].as_int(0));
                 if (factories > factories_left) factories = factories_left;
                 if (factories <= 0) continue;
@@ -557,30 +638,10 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
     // scenario with a capital and industry gets the same treatment and wings can be
     // formed from the first tick.
     {
-        auto best_province_of = [&](const State& state) {
-            ProvinceId best;
-            int best_vp = -1;
-            double best_pop = -1.0;
-            for (ProvinceId pid : state.provinces) {
-                const Province* prov = world->provinces.try_get(pid);
-                if (prov == nullptr || prov->is_sea) continue;
-                const bool better =
-                    prov->victory_points > best_vp ||
-                    (prov->victory_points == best_vp && prov->population > best_pop) ||
-                    (prov->victory_points == best_vp && prov->population == best_pop &&
-                     (!best.valid() || pid.v < best.v));
-                if (better) {
-                    best_vp = prov->victory_points;
-                    best_pop = prov->population;
-                    best = pid;
-                }
-            }
-            return best;
-        };
         world->countries.for_each([&](CountryId cid, const Country& country) {
             const State* capital = world->states.try_get(country.capital);
             if (capital != nullptr) {
-                Province* p = world->provinces.try_get(best_province_of(*capital));
+                Province* p = world->provinces.try_get(best_land_province(*world, *capital, false));
                 if (p != nullptr && p->air_base < 2) p->air_base = 2;
             }
             StateId largest;
@@ -594,11 +655,37 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
             });
             const State* big = world->states.try_get(largest);
             if (big != nullptr) {
-                Province* p = world->provinces.try_get(best_province_of(*big));
+                Province* p = world->provinces.try_get(best_land_province(*world, *big, false));
                 if (p != nullptr && p->air_base < 1) p->air_base = 1;
             }
         });
     }
+
+    // ---- naval bases -----------------------------------------------------
+    // Ports are derived from the map, never hand-listed in the scenario. A coastal
+    // capital and the derived main naval port get a level-2 base (so a starting task
+    // force fits: capacity is level * capacity per level), and every country whose
+    // largest coastal state is elsewhere still gets a level-1 base in it.
+    world->countries.for_each([&](CountryId cid, const Country& country) {
+        Province* port = world->provinces.try_get(main_naval_port(*world, cid));
+        if (port != nullptr && port->coastal && port->naval_base < 2) port->naval_base = 2;
+        StateId largest;
+        int largest_factories = -1;
+        world->states.for_each([&](StateId sid, const State& state) {
+            if (state.owner != cid) return;
+            if (!best_land_province(*world, state, true).valid()) return;
+            if (state.total_factories() > largest_factories) {
+                largest_factories = state.total_factories();
+                largest = sid;
+            }
+        });
+        const State* big = world->states.try_get(largest);
+        if (big != nullptr) {
+            const ProvinceId best = best_land_province(*world, *big, true);
+            Province* p = world->provinces.try_get(best);
+            if (p != nullptr && p->naval_base < 1) p->naval_base = 1;
+        }
+    });
 
     // ---- starting research, laws, stockpile -------------------------------
     for (size_t i = 0; i < jcountries.size(); ++i) {
@@ -994,6 +1081,110 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         for (size_t i = 0; i < warnings.size(); ++i) {
             if (i != 0) *err += "; ";
             *err += warnings[i];
+        }
+    }
+    return true;
+}
+
+// Second scenario pass (declared in content.h, called by Game::create right after
+// load_scenario). It needs the finished Game because the content it creates must
+// go through the same helpers the commands use. Starting navies are formed with
+// form_task_force and the fleet bookkeeping of CreateFleet, so no Ship or TaskForce
+// field is guessed here; only a missing/unreadable scenario file is a hard error.
+bool load_scenario_forces(const std::string& scenario_path, Game& g, std::string* err) {
+    Json scenario;
+    std::string parse_err;
+    if (!Json::parse_file(scenario_path, &scenario, &parse_err)) {
+        if (err) {
+            *err = scenario_path + ": " + (parse_err.empty() ? "cannot read file" : parse_err);
+        }
+        return false;
+    }
+    std::vector<std::string> warnings;
+    auto report = [&](const std::string& msg) { warnings.push_back(msg); };
+
+    const Json& jcountries = scenario["countries"];
+    if (!jcountries.is_array()) {
+        if (err) err->clear();
+        return true;
+    }
+    for (size_t i = 0; i < jcountries.size(); ++i) {
+        const Json& c = jcountries[i];
+        const Json& navy = c["navy"];
+        if (!navy.is_object()) continue;
+        const std::string tag = c["tag"].as_string();
+        CountryId cid;
+        g.world.countries.for_each([&](CountryId id, const Country& cc) {
+            if (cc.tag == tag) cid = id;
+        });
+        Country* country = g.world.country(cid);
+        if (country == nullptr) {
+            report(scenario_path + ": navy references unknown country " + tag);
+            continue;
+        }
+        // The port is derived, not listed by the scenario (see main_naval_port).
+        const ProvinceId port = main_naval_port(g.world, cid);
+        if (!port.valid()) {
+            report(scenario_path + ": country " + tag +
+                   " has no coastal port to base its starting navy at");
+            continue;
+        }
+        // Fleet, created with the same bookkeeping as the CreateFleet command.
+        Fleet fleet;
+        fleet.country = cid;
+        fleet.name = navy["fleet"].as_string(country->tag + " Fleet");
+        const FleetId fleet_id = g.world.fleets.create(fleet);
+        country->fleets.push_back(fleet_id);
+
+        const Json& task_forces = navy["task_forces"];
+        if (!task_forces.is_array()) continue;
+        for (size_t k = 0; k < task_forces.size(); ++k) {
+            const Json& t = task_forces[k];
+            const std::string eq_key = t["equipment"].as_string();
+            const EquipmentId eq = g.content.equipment_id(eq_key);
+            const EquipmentDef* def = g.content.equipment_def(eq);
+            if (def == nullptr || def->is_archetype ||
+                def->category != EquipmentCategory::Ship) {
+                report(scenario_path + ": country " + tag + ": navy equipment " + eq_key +
+                       " is not a ship model");
+                continue;
+            }
+            const int ships = static_cast<int>(t["ships"].as_int(0));
+            if (ships <= 0) {
+                report(scenario_path + ": country " + tag +
+                       ": task force with non-positive ship count");
+                continue;
+            }
+            const std::string name = t["name"].as_string(def->name + " task force");
+            const TaskForceId tf_id = form_task_force(g, cid, port, eq, ships, name);
+            if (!tf_id.valid()) {
+                report(scenario_path + ": country " + tag + ": cannot form '" + name +
+                       "' from " + eq_key);
+                continue;
+            }
+            TaskForce* tf = g.world.task_force(tf_id);
+            // form_task_force attaches the task force (and each ship) to the
+            // country's first fleet -- the fleet created just above -- and lists it
+            // in that fleet's roster, so nothing else to wire here.
+            const std::string mission = t["mission"].as_string();
+            if (!mission.empty()) {
+                const int m = match_naval_mission(mission);
+                if (m < 0) {
+                    report(scenario_path + ": country " + tag + ": unknown naval mission " +
+                           mission);
+                } else {
+                    // The same assignment SetNavalMission makes; the task force's sea
+                    // region is already its port's sea zone.
+                    tf->mission = static_cast<NavalMission>(m);
+                }
+            }
+        }
+    }
+
+    if (err) {
+        for (const std::string& w : warnings) {
+            if (!err->empty()) *err += "; ";
+            *err += w;
         }
     }
     return true;

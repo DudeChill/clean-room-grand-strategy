@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "data/content.h"
+
 namespace hoi {
 
 namespace {
@@ -69,6 +71,36 @@ bool air_mission_is_offensive(AirMission m) {
         default:
             return false;
     }
+}
+
+FactoryPool equipment_factory_pool(const Content& content, EquipmentId equipment) {
+    const EquipmentDef* def = content.equipment_def(equipment);
+    if (!def) return FactoryPool::Military;
+    if (def->category == EquipmentCategory::Ship || def->category == EquipmentCategory::Convoy) {
+        return FactoryPool::Dockyard;
+    }
+    return FactoryPool::Military;
+}
+
+FactoryPool line_factory_pool(const Content& content, const ProductionLine& line) {
+    return equipment_factory_pool(content, line.equipment);
+}
+
+const char* naval_mission_name(NavalMission m) {
+    switch (m) {
+        case NavalMission::None: return "none";
+        case NavalMission::Patrol: return "patrol";
+        case NavalMission::StrikeForce: return "strike_force";
+        case NavalMission::ConvoyEscort: return "convoy_escort";
+        case NavalMission::ConvoyRaid: return "convoy_raid";
+        case NavalMission::InvasionSupport: return "invasion_support";
+        case NavalMission::Training: return "training";
+        default: return "unknown";
+    }
+}
+
+bool naval_mission_is_offensive(NavalMission m) {
+    return m == NavalMission::ConvoyRaid || m == NavalMission::StrikeForce;
 }
 
 bool World::at_war(CountryId a, CountryId b) const {

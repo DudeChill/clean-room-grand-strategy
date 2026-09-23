@@ -205,6 +205,35 @@ void build_world(Game* g) {
     c.equipment_by_key[fighter.key] = fighter.id;
     const EquipmentId fighter_id = fighter.id;
 
+    // A ship model: the naval equipment statistics (guns, torpedoes, detection,
+    // visibility) travel in the Economy content snapshot like every other table, and
+    // the ships and task forces below reference the model by id.
+    EquipmentDef destroyer;
+    destroyer.id = EquipmentId(static_cast<uint32_t>(c.equipment.size()));
+    destroyer.key = "destroyer_1";
+    destroyer.name = "Destroyer I";
+    destroyer.category = EquipmentCategory::Ship;
+    destroyer.year = 1936;
+    destroyer.archetype = "destroyer";
+    destroyer.naval_attack = 12.0;
+    destroyer.torpedo_attack = 8.0;
+    destroyer.sub_detection = 6.0;
+    destroyer.detection = 5.0;
+    destroyer.visibility = 0.7;
+    destroyer.defense = 10.0;
+    destroyer.armor = 3.0;
+    destroyer.piercing = 5.0;
+    destroyer.speed = 35.0;
+    destroyer.max_strength = 1.0;
+    destroyer.reliability = 0.9;
+    destroyer.build_cost = 40.0;
+    destroyer.manpower = 250.0;
+    destroyer.supply_use = 0.3;
+    destroyer.fuel_use = 0.4;
+    destroyer.resources[static_cast<int>(Resource::Steel)] = 5.0;
+    c.equipment.push_back(destroyer);
+    c.equipment_by_key[destroyer.key] = destroyer.id;
+
     DivisionTemplate infantry;
     infantry.id = TemplateId(0);
     infantry.key = "infantry_division";
@@ -277,6 +306,12 @@ void build_world(Game* g) {
     south->name = "Southland";
     south->temperature = 22.0;
     south->rain = true;
+    // A sea region: naval control is a per-region map like air control, and the
+    // ships created below operate in a real sea zone.
+    Region* sea_zone = add(w.regions);
+    sea_zone->id = RegionId(2);
+    sea_zone->name = "The Narrows";
+    sea_zone->is_sea = true;
 
     const char* state_names[4] = {"Northwest", "Northeast", "Southwest", "Southeast"};
     for (int i = 0; i < 4; ++i) {
@@ -310,6 +345,7 @@ void build_world(Game* g) {
         p->y = i * 2;
         p->railway_level = i % 3;
         p->air_base = (i % 3 == 0) ? 3 : 1;
+        p->naval_base = (i == 5 || i == 6) ? 2 : 0;
         p->anti_air = i % 2;
         p->supply_hub = (i == 2);
         p->fort_level = i == 4 ? 2 : 0;
@@ -326,9 +362,10 @@ void build_world(Game* g) {
     sea->is_sea = true;
     sea->terrain = Terrain::ShallowSea;
     sea->state = StateId{};
-    sea->region = RegionId{};
+    sea->region = RegionId(2);
     sea->supply_source = ProvinceId{};
     sea->supply_bottleneck = ProvinceId{};
+    sea_zone->provinces.push_back(sea->id);
 
     const int chain[7][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 4}, {4, 5}, {5, 6}, {6, 0}};
     for (const auto& edge : chain) {
@@ -631,6 +668,63 @@ void enrich(Game& g) {
         });
     }
 
+    // Naval state: a fleet, a task force and a ship per country, an invasion and the
+    // per-region naval control map. It is built here (after the tick loop, so no
+    // naval phase has acted on it) to give the Military/Countries/Map sections
+    // non-empty naval content: a store that serialised empty would prove nothing.
+    const EquipmentId destroyer = g.content.equipment_id("destroyer_1");
+    const NavalMission missions[3] = {NavalMission::ConvoyRaid, NavalMission::Patrol,
+                                      NavalMission::InvasionSupport};
+    w.countries.for_each([&](CountryId id, Country& c) {
+        Fleet* fleet = add(w.fleets);
+        fleet->country = id;
+        fleet->name = std::string("Home Fleet ") + c.tag;
+        TaskForce* task_force = add(w.task_forces);
+        task_force->country = id;
+        task_force->fleet = fleet->id;
+        task_force->name = std::string("Task Force ") + c.tag;
+        task_force->port = ProvinceId(5);
+        task_force->sea_region = RegionId(2);
+        task_force->mission = missions[id.v % 3];
+        task_force->at_sea = true;
+        task_force->detection = 0.4 + 0.1 * id.v;
+        task_force->last_engagement = 3 + id.v;
+        Ship* ship = add(w.ships);
+        ship->country = id;
+        ship->equipment = destroyer;
+        ship->name = std::string("DD ") + c.tag;
+        ship->fleet = fleet->id;
+        ship->task_force = task_force->id;
+        ship->strength = 0.9 - 0.05 * id.v;
+        ship->organisation = 0.8 - 0.1 * id.v;
+        ship->experience = 0.05 * id.v;
+        ship->fuel = 0.7 - 0.05 * id.v;
+        ship->port = ProvinceId(5);
+        ship->sea_region = RegionId(2);
+        ship->at_sea = true;
+        task_force->ships.push_back(ship->id);
+        fleet->task_forces.push_back(task_force->id);
+        c.fleets.push_back(fleet->id);
+    });
+
+    // A naval invasion crossing to a hostile coast: the list is dense, so one entry
+    // gives it a non-empty round trip.
+    NavalInvasion invasion;
+    invasion.army = w.countries[CountryId(2)].armies.front();
+    invasion.country = CountryId(2);
+    invasion.origin = ProvinceId(5);
+    invasion.target = ProvinceId(0);
+    invasion.sea_region = RegionId(2);
+    invasion.progress = 0.35;
+    invasion.started = 20;
+    invasion.landed = false;
+    w.invasions.push_back(invasion);
+
+    // Naval control per region, seeded so the Map round trip carries it even though
+    // the naval phase never ran on this hand-built world.
+    w.regions[RegionId(2)].naval_control = {{CountryId(0), 0.55}, {CountryId(2), 0.45}};
+    w.regions[RegionId(0)].naval_control = {{CountryId(1), 0.30}};
+
     // A battle per country pair is too much: keep exactly one, with debug lines so
     // the Battles section is never empty even if the simulation ended every battle.
     if (w.battles.size() == 0) {
@@ -708,6 +802,13 @@ Fixture build_fixture() {
     // the tick loop would serialise an empty store and prove nothing.
     CHECK_GT(f.source.world.air_wings.size(), 0u);
     CHECK(!f.source.world.regions[RegionId(0)].air_control.empty());
+    // The naval slice must be exercised too: an empty ship store or invasion list
+    // would serialise nothing and prove nothing.
+    CHECK_GT(f.source.world.ships.size(), 0u);
+    CHECK_GT(f.source.world.task_forces.size(), 0u);
+    CHECK_GT(f.source.world.fleets.size(), 0u);
+    CHECK(!f.source.world.invasions.empty());
+    CHECK(!f.source.world.regions[RegionId(2)].naval_control.empty());
     return f;
 }
 
@@ -990,6 +1091,9 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"region.air_control.size", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { r.air_control.push_back({CountryId(1), 0.25}); }); }},
         {"region.air_control.country", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { for (auto& e : r.air_control) e.first = CountryId(2); }); }},
         {"region.air_control.share", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { for (auto& e : r.air_control) e.second -= 0.05; }); }},
+        {"region.naval_control.size", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { r.naval_control.push_back({CountryId(1), 0.25}); }); }},
+        {"region.naval_control.country", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { for (auto& e : r.naval_control) e.first = CountryId(2); }); }},
+        {"region.naval_control.share", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { for (auto& e : r.naval_control) e.second -= 0.05; }); }},
         {"country.tag", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.tag += "x"; }); }},
         {"country.name", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.name += "x"; }); }},
         {"country.alive", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.alive = !c.alive; }); }},
@@ -1005,6 +1109,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"country.national_modifiers", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.national_modifiers.v[3] += 0.01; }); }},
         {"country.generals", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.generals.push_back(CharacterId(0)); }); }},
         {"country.wings", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.wings.push_back(AirWingId(0)); }); }},
+        {"country.fleets", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.fleets.push_back(FleetId(0)); }); }},
         {"country.starting_factories", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.starting_factories += 1; }); }},
         {"country.resources_produced", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.resources_produced[1] += 1.0; }); }},
         {"country.resources_consumed", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.resources_consumed[1] += 1.0; }); }},
@@ -1068,6 +1173,11 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"equipment.ground_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.ground_attack += 1.0; }},
         {"equipment.agility", +[](Game& g) { for (auto& e : g.content.equipment) e.agility += 1.0; }},
         {"equipment.range", +[](Game& g) { for (auto& e : g.content.equipment) e.range += 1.0; }},
+        {"equipment.naval_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.naval_attack += 1.0; }},
+        {"equipment.torpedo_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.torpedo_attack += 1.0; }},
+        {"equipment.sub_detection", +[](Game& g) { for (auto& e : g.content.equipment) e.sub_detection += 1.0; }},
+        {"equipment.detection", +[](Game& g) { for (auto& e : g.content.equipment) e.detection += 1.0; }},
+        {"equipment.visibility", +[](Game& g) { for (auto& e : g.content.equipment) e.visibility += 0.1; }},
         {"equipment.defense", +[](Game& g) { for (auto& e : g.content.equipment) e.defense += 1.0; }},
         {"equipment.breakthrough", +[](Game& g) { for (auto& e : g.content.equipment) e.breakthrough += 1.0; }},
         {"equipment.armor", +[](Game& g) { for (auto& e : g.content.equipment) e.armor += 1.0; }},
@@ -1166,6 +1276,39 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"wing.experience", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.experience += 0.01; }); }},
         {"wing.losses", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.losses += 1; }); }},
         {"wing.last_sortie", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.last_sortie += 1; }); }},
+        {"ship.country", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.country = CountryId(2); }); }},
+        {"ship.equipment", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.equipment = EquipmentId(0); }); }},
+        {"ship.name", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.name += "x"; }); }},
+        {"ship.fleet", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.fleet = FleetId(0); }); }},
+        {"ship.task_force", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.task_force = TaskForceId(0); }); }},
+        {"ship.strength", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.strength -= 0.01; }); }},
+        {"ship.organisation", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.organisation -= 0.01; }); }},
+        {"ship.experience", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.experience += 0.01; }); }},
+        {"ship.fuel", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.fuel -= 0.01; }); }},
+        {"ship.port", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.port = ProvinceId(6); }); }},
+        {"ship.sea_region", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.sea_region = RegionId(0); }); }},
+        {"ship.at_sea", +[](Game& g) { g.world.ships.for_each([](ShipId, Ship& s) { s.at_sea = !s.at_sea; }); }},
+        {"task_force.country", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.country = CountryId(2); }); }},
+        {"task_force.fleet", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.fleet = FleetId(0); }); }},
+        {"task_force.name", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.name += "x"; }); }},
+        {"task_force.ships", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.ships.push_back(ShipId(0)); }); }},
+        {"task_force.port", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.port = ProvinceId(6); }); }},
+        {"task_force.sea_region", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.sea_region = RegionId(0); }); }},
+        {"task_force.mission", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.mission = NavalMission::Training; }); }},
+        {"task_force.at_sea", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.at_sea = !t.at_sea; }); }},
+        {"task_force.detection", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.detection += 0.05; }); }},
+        {"task_force.last_engagement", +[](Game& g) { g.world.task_forces.for_each([](TaskForceId, TaskForce& t) { t.last_engagement += 1; }); }},
+        {"fleet.country", +[](Game& g) { g.world.fleets.for_each([](FleetId, Fleet& fl) { fl.country = CountryId(2); }); }},
+        {"fleet.name", +[](Game& g) { g.world.fleets.for_each([](FleetId, Fleet& fl) { fl.name += "x"; }); }},
+        {"fleet.task_forces", +[](Game& g) { g.world.fleets.for_each([](FleetId, Fleet& fl) { fl.task_forces.push_back(TaskForceId(0)); }); }},
+        {"invasion.army", +[](Game& g) { for (auto& i : g.world.invasions) i.army = ArmyId(1); }},
+        {"invasion.country", +[](Game& g) { for (auto& i : g.world.invasions) i.country = CountryId(1); }},
+        {"invasion.origin", +[](Game& g) { for (auto& i : g.world.invasions) i.origin = ProvinceId(6); }},
+        {"invasion.target", +[](Game& g) { for (auto& i : g.world.invasions) i.target = ProvinceId(1); }},
+        {"invasion.sea_region", +[](Game& g) { for (auto& i : g.world.invasions) i.sea_region = RegionId(0); }},
+        {"invasion.progress", +[](Game& g) { for (auto& i : g.world.invasions) i.progress += 0.01; }},
+        {"invasion.started", +[](Game& g) { for (auto& i : g.world.invasions) i.started += 1; }},
+        {"invasion.landed", +[](Game& g) { for (auto& i : g.world.invasions) i.landed = !i.landed; }},
         {"battle.province", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.province = ProvinceId(2); }); }},
         {"battle.start_tick", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.start_tick += 1; }); }},
         {"battle.attacker.divisions", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.attacker.divisions.push_back(DivisionId(1)); }); }},
@@ -1204,10 +1347,10 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"war.start_tick", +[](Game& g) { g.world.wars.for_each([](WarId, War& w) { w.start_tick += 1; }); }},
         {"war.active", +[](Game& g) { g.world.wars.for_each([](WarId, War& w) { w.active = !w.active; }); }},
         {"war.aggressor", +[](Game& g) { g.world.wars.for_each([](WarId, War& w) { w.aggressor = CountryId(2); }); }},
-        {"faction.id", +[](Game& g) { for (auto& f : g.world.factions) f.id += 1; }},
-        {"faction.name", +[](Game& g) { for (auto& f : g.world.factions) f.name += "x"; }},
-        {"faction.leader", +[](Game& g) { for (auto& f : g.world.factions) f.leader = CountryId(1); }},
-        {"faction.members", +[](Game& g) { for (auto& f : g.world.factions) f.members.push_back(CountryId(1)); }},
+        {"faction.id", +[](Game& g) { for (auto& fa : g.world.factions) fa.id += 1; }},
+        {"faction.name", +[](Game& g) { for (auto& fa : g.world.factions) fa.name += "x"; }},
+        {"faction.leader", +[](Game& g) { for (auto& fa : g.world.factions) fa.leader = CountryId(1); }},
+        {"faction.members", +[](Game& g) { for (auto& fa : g.world.factions) fa.members.push_back(CountryId(1)); }},
         {"relation.value", +[](Game& g) { for (auto& e : g.world.relations) e.second.value += 1.0; }},
         {"relation.non_aggression", +[](Game& g) { for (auto& e : g.world.relations) e.second.non_aggression = !e.second.non_aggression; }},
         {"relation.military_access", +[](Game& g) { for (auto& e : g.world.relations) e.second.military_access = !e.second.military_access; }},
@@ -1334,6 +1477,39 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         &SimConstants::air_support_max_modifier,
         &SimConstants::air_mission_weight_contested,
         &SimConstants::air_mission_weight_support,
+        &SimConstants::naval_base_capacity_per_level,
+        &SimConstants::naval_detection_scale,
+        &SimConstants::naval_combat_roll_base,
+        &SimConstants::naval_combat_scale,
+        &SimConstants::naval_org_damage_scale,
+        &SimConstants::naval_torpedo_large_hull_bonus,
+        &SimConstants::naval_sub_detection_penalty,
+        &SimConstants::naval_aa_carrier_air_factor,
+        &SimConstants::naval_air_attacks_per_hour,
+        &SimConstants::naval_screen_share_cap,
+        &SimConstants::naval_retreat_strength_threshold,
+        &SimConstants::naval_retreat_org_threshold,
+        &SimConstants::naval_repair_per_hour,
+        &SimConstants::naval_repair_org_per_hour,
+        &SimConstants::naval_repair_cost_fuel,
+        &SimConstants::naval_repair_cost_stockpile_share,
+        &SimConstants::naval_fuel_use_per_hour,
+        &SimConstants::naval_training_experience_per_hour,
+        &SimConstants::naval_combat_experience_per_hour,
+        &SimConstants::naval_raid_convoy_damage,
+        &SimConstants::naval_raid_control_cut,
+        &SimConstants::naval_escort_protection,
+        &SimConstants::naval_max_engagement_ships,
+        &SimConstants::naval_large_hull_hp,
+        &SimConstants::naval_base_supply_per_level,
+        &SimConstants::naval_supply_sea_range_penalty,
+        &SimConstants::naval_supply_convoy_use_per_capacity,
+        &SimConstants::naval_supply_raid_threshold,
+        &SimConstants::naval_invasion_convoys_per_division,
+        &SimConstants::naval_invasion_hours_per_sea_hop,
+        &SimConstants::naval_invasion_interception_base,
+        &SimConstants::naval_invasion_interception_threat_scale,
+        &SimConstants::naval_invasion_escort_mitigation,
         &SimConstants::political_power_per_day,
         &SimConstants::stability_drift,
         &SimConstants::war_support_drift,
@@ -1344,7 +1520,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
     // constants record (a count followed by one double per member), so the count the
     // serializer actually wrote is compared with this table.
     constexpr size_t constant_count = sizeof(constant_members) / sizeof(constant_members[0]);
-    static_assert(constant_count == 78,
+    static_assert(constant_count == 111,
                   "SimConstants changed: update constant_members and save.cpp write/read_constants");
     ByteWriter economy;
     serialize_subsystem(f.source, Subsystem::Economy, &economy);

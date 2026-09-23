@@ -22,6 +22,7 @@
 #include "sim/diplomacy.h"
 #include "sim/industry.h"
 #include "sim/map.h"
+#include "sim/navy.h"
 #include "sim/phases.h"
 #include "sim/politics.h"
 #include "sim/research.h"
@@ -170,14 +171,17 @@ CommandResult do_set_production_line(Game& g, const Command& cmd) {
         return CommandResult::Applied;
     }
 
+    const FactoryPool pool = equipment_factory_pool(g.content, cmd.equipment);
     int others = 0;
     for (const auto& line : c.lines) {
         if (&line == existing) continue;
+        if (line_factory_pool(g.content, line) != pool) continue;
         others += line.factories;
     }
     int mil = 0, civ = 0, dock = 0;
     count_factories(g.world, cmd.country, &civ, &mil, &dock);
-    if (others + cmd.value > mil) return CommandResult::InsufficientResources;
+    const int available = pool == FactoryPool::Dockyard ? dock : mil;
+    if (others + cmd.value > available) return CommandResult::InsufficientResources;
 
     if (existing) {
         existing->factories = cmd.value;
@@ -549,6 +553,59 @@ CommandResult do_disband_air_wing(Game& g, const Command& cmd) {
     return CommandResult::Applied;
 }
 
+CommandResult do_create_fleet(Game& g, const Command& cmd) {
+    Country& c = g.world.countries[cmd.country];
+    Fleet fleet;
+    fleet.country = cmd.country;
+    fleet.name = cmd.text.empty() ? ("Fleet " + std::to_string(c.fleets.size() + 1)) : cmd.text;
+    const FleetId id = g.world.fleets.create(fleet);
+    c.fleets.push_back(id);
+    g.log_event("navy", "fleet '" + fleet.name + "' formed", cmd.country);
+    return CommandResult::Applied;
+}
+
+CommandResult do_create_task_force(Game& g, const Command& cmd) {
+    const TaskForceId id =
+        form_task_force(g, cmd.country, cmd.province, cmd.equipment, cmd.value, cmd.text);
+    return id.valid() ? CommandResult::Applied : CommandResult::InsufficientResources;
+}
+
+CommandResult do_set_naval_mission(Game& g, const Command& cmd) {
+    TaskForce* tf = g.world.task_force(cmd.task_force);
+    if (!tf) return CommandResult::UnknownEntity;
+    tf->mission = static_cast<NavalMission>(cmd.value);
+    tf->sea_region = cmd.region;
+    return CommandResult::Applied;
+}
+
+CommandResult do_assign_ship(Game& g, const Command& cmd) {
+    Ship* ship = g.world.ship(cmd.ship_id);
+    TaskForce* tf = g.world.task_force(cmd.task_force);
+    if (!ship || !tf) return CommandResult::UnknownEntity;
+    TaskForce* old = g.world.task_force(ship->task_force);
+    if (old && old->id != tf->id) {
+        old->ships.erase(std::remove(old->ships.begin(), old->ships.end(), ship->id),
+                         old->ships.end());
+    }
+    if (std::find(tf->ships.begin(), tf->ships.end(), ship->id) == tf->ships.end()) {
+        tf->ships.push_back(ship->id);
+    }
+    ship->task_force = tf->id;
+    ship->fleet = tf->fleet;
+    return CommandResult::Applied;
+}
+
+CommandResult do_launch_invasion(Game& g, const Command& cmd) {
+    return start_naval_invasion(g, cmd.army, cmd.province, cmd.province_b)
+               ? CommandResult::Applied
+               : CommandResult::InvalidTarget;
+}
+
+CommandResult do_cancel_invasion(Game& g, const Command& cmd) {
+    cancel_naval_invasion(g, cmd.army);
+    return CommandResult::Applied;
+}
+
 }  // namespace
 
 const char* command_type_name(CommandType t) {
@@ -577,6 +634,12 @@ const char* command_type_name(CommandType t) {
         case CommandType::DeployAirWing: return "deploy_air_wing";
         case CommandType::SetAirMission: return "set_air_mission";
         case CommandType::DisbandAirWing: return "disband_air_wing";
+        case CommandType::CreateFleet: return "create_fleet";
+        case CommandType::CreateTaskForce: return "create_task_force";
+        case CommandType::SetNavalMission: return "set_naval_mission";
+        case CommandType::AssignShipToTaskForce: return "assign_ship_to_task_force";
+        case CommandType::LaunchNavalInvasion: return "launch_naval_invasion";
+        case CommandType::CancelNavalInvasion: return "cancel_naval_invasion";
         case CommandType::SetLaw: return "set_law";
         case CommandType::SetTradePolicy: return "set_trade_policy";
         case CommandType::SetStance: return "set_stance";
@@ -616,15 +679,19 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
                 return CommandResult::PrerequisitesMissing;
             }
             // The factory budget is enforced here as well as in application, so a
-            // validated command is always one that changes state.
+            // validated command is always one that changes state. Ship and convoy
+            // lines draw on dockyards; everything else draws on military factories.
+            const FactoryPool pool = equipment_factory_pool(g.content, cmd.equipment);
             int others = 0;
             for (const auto& line : c->lines) {
                 if (line.equipment == cmd.equipment && line.factories > 0) continue;
+                if (line_factory_pool(g.content, line) != pool) continue;
                 others += line.factories;
             }
             int civ = 0, mil = 0, dock = 0;
             count_factories(g.world, cmd.country, &civ, &mil, &dock);
-            if (others + cmd.value > mil) return CommandResult::InsufficientResources;
+            const int available = pool == FactoryPool::Dockyard ? dock : mil;
+            if (others + cmd.value > available) return CommandResult::InsufficientResources;
             return CommandResult::Applied;
         }
         case CommandType::RemoveProductionLine: {
@@ -859,6 +926,55 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (!wing || wing->country != cmd.country) return CommandResult::UnknownEntity;
             return CommandResult::Applied;
         }
+        case CommandType::CreateFleet: {
+            return cmd.text.empty() ? CommandResult::InvalidValue : CommandResult::Applied;
+        }
+        case CommandType::CreateTaskForce: {
+            const EquipmentDef* def = g.content.equipment_def(cmd.equipment);
+            if (!def || def->is_archetype) return CommandResult::UnknownEntity;
+            if (def->category != EquipmentCategory::Ship) return CommandResult::InvalidTarget;
+            if (!equipment_unlocked(g, cmd.country, cmd.equipment)) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            if (!is_usable_port(g, cmd.country, cmd.province)) return CommandResult::NotOwner;
+            if (cmd.value < 1 || cmd.value > 40) return CommandResult::InvalidValue;
+            return CommandResult::Applied;
+        }
+        case CommandType::SetNavalMission: {
+            const TaskForce* tf = g.world.task_force(cmd.task_force);
+            if (!tf || tf->country != cmd.country) return CommandResult::UnknownEntity;
+            // Mission::None is legal: it means "stand down", which sends the force home
+            // to repair (the naval phase handles the return).
+            if (cmd.value < 0 || cmd.value >= static_cast<int>(NavalMission::Count)) {
+                return CommandResult::InvalidValue;
+            }
+            const Region* region = g.world.regions.try_get(cmd.region);
+            if (!region || !region->is_sea) return CommandResult::InvalidTarget;
+            return CommandResult::Applied;
+        }
+        case CommandType::AssignShipToTaskForce: {
+            const Ship* ship = g.world.ship(cmd.ship_id);
+            const TaskForce* tf = g.world.task_force(cmd.task_force);
+            if (!ship || ship->country != cmd.country) return CommandResult::UnknownEntity;
+            if (!tf || tf->country != cmd.country) return CommandResult::UnknownEntity;
+            return CommandResult::Applied;
+        }
+        case CommandType::LaunchNavalInvasion: {
+            const Army* a = nullptr;
+            if (!owns_army(g.world, cmd, &a)) return CommandResult::UnknownEntity;
+            const Province* origin = g.world.province(cmd.province);
+            const Province* target = g.world.province(cmd.province_b);
+            if (!origin || !target) return CommandResult::InvalidTarget;
+            if (!is_usable_port(g, cmd.country, cmd.province)) return CommandResult::NotOwner;
+            if (target->is_sea || !target->coastal) return CommandResult::InvalidTarget;
+            if (target->controller == cmd.country) return CommandResult::InvalidTarget;
+            return CommandResult::Applied;
+        }
+        case CommandType::CancelNavalInvasion: {
+            const Army* a = nullptr;
+            if (!owns_army(g.world, cmd, &a)) return CommandResult::UnknownEntity;
+            return CommandResult::Applied;
+        }
         case CommandType::SetLaw: {
             const LawDef* law = g.content.law(cmd.text);
             if (!law) return CommandResult::UnknownEntity;
@@ -929,6 +1045,12 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::DeployAirWing: return do_deploy_air_wing(g, cmd);
         case CommandType::SetAirMission: return do_set_air_mission(g, cmd);
         case CommandType::DisbandAirWing: return do_disband_air_wing(g, cmd);
+        case CommandType::CreateFleet: return do_create_fleet(g, cmd);
+        case CommandType::CreateTaskForce: return do_create_task_force(g, cmd);
+        case CommandType::SetNavalMission: return do_set_naval_mission(g, cmd);
+        case CommandType::AssignShipToTaskForce: return do_assign_ship(g, cmd);
+        case CommandType::LaunchNavalInvasion: return do_launch_invasion(g, cmd);
+        case CommandType::CancelNavalInvasion: return do_cancel_invasion(g, cmd);
         case CommandType::SetLaw: return do_set_law(g, cmd);
         case CommandType::SetTradePolicy: return do_set_trade_policy(g, cmd);
         case CommandType::SetStance: return do_set_stance(g, cmd);
@@ -1032,6 +1154,9 @@ void serialize_command(ByteWriter& w, const Command& c) {
     w.u32(c.army.v);
     w.u32(c.character.v);
     w.u32(c.wing.v);
+    w.u32(c.fleet_id.v);
+    w.u32(c.ship_id.v);
+    w.u32(c.task_force.v);
     w.u32(c.equipment.v);
     w.u32(c.template_id.v);
     w.u32(c.tech.v);
@@ -1065,6 +1190,9 @@ Command deserialize_command(ByteReader& r) {
     r.u32(&c.army.v);
     r.u32(&c.character.v);
     r.u32(&c.wing.v);
+    r.u32(&c.fleet_id.v);
+    r.u32(&c.ship_id.v);
+    r.u32(&c.task_force.v);
     r.u32(&c.equipment.v);
     r.u32(&c.template_id.v);
     r.u32(&c.tech.v);

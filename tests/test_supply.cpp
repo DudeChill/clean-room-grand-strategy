@@ -3,9 +3,11 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "game/game.h"
+#include "save/save.h"
 #include "sim/diplomacy.h"
 #include "sim/supply.h"
 #include "test.h"
@@ -109,6 +111,171 @@ void register_template(Game& g, double supply_use, double fuel_use) {
     t.supply_use = supply_use;
     t.fuel_use = fuel_use;
     g.content.templates.push_back(t);
+}
+
+// ---- ports, sea zones and convoys -------------------------------------------
+
+// A sea zone: a sea province in a sea region. Sea provinces carry the full generated
+// neighbour list in `adj` and sea neighbours in `sea_adj`, exactly as the loader
+// leaves them.
+RegionId make_sea_region(World& w, const std::string& name) {
+    Region r;
+    r.name = name;
+    r.is_sea = true;
+    const RegionId id = w.regions.create(r);
+    w.regions.try_get(id)->id = id;
+    return id;
+}
+
+ProvinceId make_sea(World& w, const std::string& name, RegionId region) {
+    ProvinceId id = w.provinces.create();
+    Province* p = w.provinces.try_get(id);
+    p->id = id;
+    p->name = name;
+    p->region = region;
+    p->is_sea = true;
+    p->terrain = Terrain::Ocean;
+    w.regions.try_get(region)->provinces.push_back(id);
+    return id;
+}
+
+// Land province <-> sea zone: the land side records the zone in sea_adj, the sea side
+// records the land province in its full neighbour list.
+void link_coast(World& w, ProvinceId land, ProvinceId sea) {
+    w.provinces.try_get(land)->coastal = true;
+    w.provinces.try_get(land)->sea_adj.push_back(sea);
+    w.provinces.try_get(sea)->adj.push_back(land);
+}
+
+void link_sea_zones(World& w, ProvinceId a, ProvinceId b) {
+    Province* pa = w.provinces.try_get(a);
+    Province* pb = w.provinces.try_get(b);
+    pa->adj.push_back(b);
+    pa->sea_adj.push_back(b);
+    pb->adj.push_back(a);
+    pb->sea_adj.push_back(a);
+}
+
+// The derived naval-control table phase_naval writes: (country, share) ascending.
+void set_naval_control(World& w, RegionId region,
+                       std::vector<std::pair<CountryId, double>> shares) {
+    std::sort(shares.begin(), shares.end(),
+              [](const std::pair<CountryId, double>& a, const std::pair<CountryId, double>& b) {
+                  return a.first.v < b.first.v;
+              });
+    w.regions.try_get(region)->naval_control = std::move(shares);
+}
+
+EquipmentId add_convoy_equipment(Game& g) {
+    EquipmentDef e;
+    e.key = "convoy_1";
+    e.name = "Convoy I";
+    e.category = EquipmentCategory::Convoy;
+    e.max_strength = 40.0;
+    e.build_cost = 8.0;
+    const EquipmentId id(static_cast<uint32_t>(g.content.equipment.size()));
+    e.id = id;
+    g.content.equipment.push_back(e);
+    g.content.equipment_by_key[e.key] = id;
+    return id;
+}
+
+void set_convoy_stock(World& w, CountryId c, EquipmentId convoy, double count) {
+    Country* country = w.countries.try_get(c);
+    if (country->equipment_stockpile.size() <= convoy.v) {
+        country->equipment_stockpile.resize(convoy.v + 1, 0.0);
+    }
+    country->equipment_stockpile[convoy.v] = count;
+}
+
+double convoy_stock(const World& w, CountryId c, EquipmentId convoy) {
+    const Country* country = w.country(c);
+    if (country == nullptr || convoy.v >= country->equipment_stockpile.size()) return 0.0;
+    return country->equipment_stockpile[convoy.v];
+}
+
+ShipId add_ship(World& w, CountryId c, ProvinceId port, RegionId sea) {
+    Ship s;
+    s.country = c;
+    s.port = port;
+    s.sea_region = sea;
+    s.at_sea = true;
+    s.strength = 1.0;
+    const ShipId id = w.ships.create(s);
+    w.ships.try_get(id)->id = id;
+    return id;
+}
+
+TaskForceId add_task_force(World& w, CountryId c, RegionId sea, NavalMission mission,
+                           std::vector<ShipId> ships) {
+    TaskForce tf;
+    tf.country = c;
+    tf.sea_region = sea;
+    tf.mission = mission;
+    tf.at_sea = true;
+    tf.ships = std::move(ships);
+    const TaskForceId id = w.task_forces.create(tf);
+    w.task_forces.try_get(id)->id = id;
+    for (ShipId s : w.task_forces.try_get(id)->ships) w.ships.try_get(s)->task_force = id;
+    return id;
+}
+
+// Two land masses joined only by sea: a home province with a port, an overseas
+// province with a port, and one sea-zone hop between them. Nothing else links them, so
+// the overseas province is unreachable by land.
+struct OverseasWorld {
+    Game game;
+    CountryId alpha;
+    CountryId beta;
+    ProvinceId capital;
+    ProvinceId home_port;
+    ProvinceId overseas_port;
+    ProvinceId overseas_land;
+    RegionId home_sea;
+    RegionId far_sea;
+    EquipmentId convoy;
+};
+
+OverseasWorld make_overseas_world() {
+    OverseasWorld o;
+    Game& g = o.game;
+    World& w = g.world;
+    const RegionId land_region = w.regions.create();
+    const RegionId home_sea = make_sea_region(w, "home_sea");
+    const RegionId far_sea = make_sea_region(w, "far_sea");
+    o.home_sea = home_sea;
+    o.far_sea = far_sea;
+
+    const StateId home = make_state(w, "home", land_region);
+    const StateId colony = make_state(w, "colony", land_region);
+    o.alpha = make_country(w, "AAA");
+    o.beta = make_country(w, "BBB");
+
+    o.capital = make_province(w, "capital", home, land_region);
+    o.home_port = make_province(w, "home_port", home, land_region);
+    link(w, o.capital, o.home_port);
+    give_state(w, home, o.alpha);
+    w.provinces.try_get(o.capital)->is_capital = true;
+    w.countries.try_get(o.alpha)->capital = home;
+
+    o.overseas_port = make_province(w, "overseas_port", colony, land_region);
+    o.overseas_land = make_province(w, "overseas_land", colony, land_region);
+    link(w, o.overseas_port, o.overseas_land);
+    give_state(w, colony, o.alpha);
+
+    w.provinces.try_get(o.home_port)->naval_base = 2;
+    w.provinces.try_get(o.overseas_port)->naval_base = 2;
+    const ProvinceId sea1 = make_sea(w, "sea1", home_sea);
+    const ProvinceId sea2 = make_sea(w, "sea2", far_sea);
+    link_coast(w, o.home_port, sea1);
+    link_coast(w, o.overseas_port, sea2);
+    link_sea_zones(w, sea1, sea2);
+
+    set_naval_control(w, home_sea, {{o.alpha, 0.9}});
+    set_naval_control(w, far_sea, {{o.alpha, 0.9}});
+    o.convoy = add_convoy_equipment(g);
+    set_convoy_stock(w, o.alpha, o.convoy, 50.0);
+    return o;
 }
 
 }  // namespace
@@ -283,4 +450,106 @@ HOI_TEST(supply_co_belligerent_hub_supplies_ally) {
     g.world.wars.for_each([&](WarId, War& war) { war.active = false; });
     g.world.factions[0].members = {alpha};
     CHECK(supply_sources(g.world, alpha).size() == 1);
+}
+
+// A port is a supply source like a hub, and a port the land network cannot reach is
+// fed over sea: this is what supplies an overseas province cut off by water.
+HOI_TEST(supply_port_supplies_overseas_province) {
+    OverseasWorld o = make_overseas_world();
+
+    // No friendly control in the far sea zone: the overseas port delivers nothing and
+    // the colony, reachable only by sea, is unsupplied.
+    set_naval_control(o.game.world, o.far_sea, {});
+    CHECK_NEAR(explain_supply_route(o.game, o.alpha, o.overseas_land, nullptr, nullptr), 0.0,
+               1e-12);
+
+    // Friendly control restores the route: home port (naval base 2 -> capacity 20)
+    // feeds the overseas port one sea-zone hop away, and one land hop reaches the
+    // colony. 20 / 1.15 (sea) / 1.1 (land).
+    set_naval_control(o.game.world, o.far_sea, {{o.alpha, 0.9}});
+    const double expected = 20.0 / 1.15 / 1.1;
+    CHECK_NEAR(explain_supply_route(o.game, o.alpha, o.overseas_land, nullptr, nullptr), expected,
+               1e-9);
+    // A port adds capacity to its own province exactly like a hub.
+    CHECK_NEAR(explain_supply_route(o.game, o.alpha, o.home_port, nullptr, nullptr), 20.0, 1e-9);
+
+    phase_supply(o.game);
+    const Province* colony = o.game.world.provinces.try_get(o.overseas_land);
+    CHECK_EQ(colony->supply_source, o.overseas_port);
+    CHECK_NEAR(colony->supply_level, 1.0, 1e-12);
+
+    // The auditor stays clean with ports, sea zones and convoys in the world.
+    const std::vector<std::string> problems = check_invariants(o.game);
+    CHECK(problems.empty());
+}
+
+// Enemy naval control in a port's zone scales the port's capacity down, and full
+// enemy control starves it; a hostile convoy-raiding force in the zone does the same.
+HOI_TEST(supply_blockade_and_raiders_starve_overseas_port) {
+    OverseasWorld o = make_overseas_world();
+    Game& g = o.game;
+    CHECK(declare_war(g, o.alpha, o.beta, {}).valid());
+
+    // No enemy: the route delivers in full.
+    CHECK_NEAR(explain_supply_route(g, o.alpha, o.overseas_land, nullptr, nullptr),
+               20.0 / 1.15 / 1.1, 1e-9);
+
+    // 10% enemy control: capacity scaled by (1 - 0.1).
+    set_naval_control(g.world, o.far_sea, {{o.alpha, 0.9}, {o.beta, 0.1}});
+    CHECK_NEAR(explain_supply_route(g, o.alpha, o.overseas_land, nullptr, nullptr),
+               20.0 * 0.9 / 1.15 / 1.1, 1e-9);
+
+    // Heavy enemy control: nearly everything is lost.
+    set_naval_control(g.world, o.far_sea, {{o.alpha, 0.1}, {o.beta, 0.9}});
+    CHECK_NEAR(explain_supply_route(g, o.alpha, o.overseas_land, nullptr, nullptr),
+               20.0 * 0.1 / 1.15 / 1.1, 1e-9);
+
+    // No friendly control at all: the port delivers nothing.
+    set_naval_control(g.world, o.far_sea, {{o.beta, 1.0}});
+    CHECK_NEAR(explain_supply_route(g, o.alpha, o.overseas_land, nullptr, nullptr), 0.0, 1e-12);
+
+    // Friendly control restored, but a raiding force above the threshold cuts it.
+    set_naval_control(g.world, o.far_sea, {{o.alpha, 1.0}});
+    CHECK_NEAR(explain_supply_route(g, o.alpha, o.overseas_land, nullptr, nullptr),
+               20.0 / 1.15 / 1.1, 1e-9);
+    const ShipId raider_a = add_ship(g.world, o.beta, o.overseas_port, o.far_sea);
+    const ShipId raider_b = add_ship(g.world, o.beta, o.overseas_port, o.far_sea);
+    add_task_force(g.world, o.beta, o.far_sea, NavalMission::ConvoyRaid, {raider_a, raider_b});
+    CHECK_NEAR(explain_supply_route(g, o.alpha, o.overseas_land, nullptr, nullptr), 0.0, 1e-12);
+}
+
+// Overseas supply is drawn from the convoy stock: it costs convoys while it runs, and
+// a country with none loses the overseas network but keeps its home network.
+HOI_TEST(supply_overseas_supply_needs_convoys) {
+    OverseasWorld o = make_overseas_world();
+
+    phase_supply(o.game);
+    const Province* colony = o.game.world.provinces.try_get(o.overseas_land);
+    CHECK_EQ(colony->supply_source, o.overseas_port);
+    CHECK_NEAR(colony->supply_level, 1.0, 1e-12);
+    // The sea route drew convoy_1: throughput 20/1.15, use 0.02 per capacity-hour.
+    CHECK_NEAR(convoy_stock(o.game.world, o.alpha, o.convoy), 50.0 - 20.0 / 1.15 * 0.02, 1e-9);
+
+    // No convoys left: the overseas province starves, the home port still flows.
+    set_convoy_stock(o.game.world, o.alpha, o.convoy, 0.0);
+    phase_supply(o.game);
+    colony = o.game.world.provinces.try_get(o.overseas_land);
+    CHECK_NEAR(colony->supply_level, 0.0, 1e-12);
+    CHECK(!colony->supply_source.valid());
+    CHECK_NEAR(o.game.world.provinces.try_get(o.home_port)->supply_level, 1.0, 1e-12);
+    CHECK_NEAR(o.game.world.provinces.try_get(o.capital)->supply_level, 1.0, 1e-12);
+    CHECK_NEAR(explain_supply_route(o.game, o.alpha, o.overseas_land, nullptr, nullptr), 0.0,
+               1e-12);
+}
+
+// Determinism: an identical setup computes an identical network, so the whole world
+// hashes the same across two runs.
+HOI_TEST(supply_overseas_is_deterministic) {
+    auto run = []() {
+        OverseasWorld o = make_overseas_world();
+        phase_supply(o.game);
+        phase_supply(o.game);
+        return world_hash(o.game);
+    };
+    CHECK_EQ(run(), run());
 }

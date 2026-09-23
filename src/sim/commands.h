@@ -43,6 +43,12 @@ enum class CommandType : uint8_t {
     DeployAirWing,      // rebase a wing to `province`
     SetAirMission,      // wing flies `value` (AirMission) in `region`
     DisbandAirWing,
+    CreateFleet,        // text = fleet name
+    CreateTaskForce,    // port + equipment + value = ship count; text = force name
+    SetNavalMission,    // task force flies `value` (NavalMission) in `region`
+    AssignShipToTaskForce,  // ship joins `task_force` (falls back to `task_force` name)
+    LaunchNavalInvasion,    // army invades `province_b` from `province`
+    CancelNavalInvasion,
     SetLaw,
     SetTradePolicy,
     SetStance,             // aggressive / defensive / garrison posture for an army
@@ -68,6 +74,9 @@ struct Command {
     ArmyId army;
     CharacterId character;
     AirWingId wing;
+    FleetId fleet_id;      // naval fleet this command refers to
+    ShipId ship_id;
+    TaskForceId task_force;
     EquipmentId equipment;
     TemplateId template_id;
     TechId tech;

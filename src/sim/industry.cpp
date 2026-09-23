@@ -29,23 +29,22 @@ namespace {
 
 using R = std::underlying_type_t<Resource>;
 
-bool is_dockyard_category(EquipmentCategory cat) {
-    return cat == EquipmentCategory::Ship || cat == EquipmentCategory::Convoy;
-}
-
-// Dockyards build ships and convoys, military factories build everything else.
-double line_ic_per_factory(const Content& content, const EquipmentDef* def) {
+// Dockyards build ships and convoys, military factories build everything else. The
+// pool rule lives in one place (`equipment_factory_pool`), so industry, command
+// validation and the auditor can never disagree about which factories a line uses.
+double line_ic_per_factory(const Content& content, const ProductionLine& line) {
     const SimConstants& k = content.constants;
-    return def && is_dockyard_category(def->category) ? k.ic_per_dockyard
-                                                      : k.ic_per_military_factory;
+    return line_factory_pool(content, line) == FactoryPool::Dockyard ? k.ic_per_dockyard
+                                                                     : k.ic_per_military_factory;
 }
 
 // Output modifier of the production line's facility kind. Ships draw on
 // DockyardOutput, every other line on FactoryOutput (both are additive fractions).
-double line_output_modifier(const Country& c, const EquipmentDef* def) {
+double line_output_modifier(const Country& c, const Content& content, const ProductionLine& line) {
     const Modifiers m = c.total_modifiers();
-    return def && is_dockyard_category(def->category) ? m.get(ModifierKind::DockyardOutput)
-                                                      : m.get(ModifierKind::FactoryOutput);
+    return line_factory_pool(content, line) == FactoryPool::Dockyard
+               ? m.get(ModifierKind::DockyardOutput)
+               : m.get(ModifierKind::FactoryOutput);
 }
 
 // Stockpiles are indexed by EquipmentId, so they are grown to the content size
@@ -382,12 +381,11 @@ void equipment_resource_cost(const EquipmentDef& def, double out[RESOURCE_COUNT]
 
 double line_hourly_output(const Game& g, const Country& c, const ProductionLine& line) {
     if (line.factories <= 0) return 0.0;
-    const EquipmentDef* def = g.content.equipment_def(line.equipment);
     const double efficiency = clamp01(line.efficiency);
-    const double ic = line_ic_per_factory(g.content, def);
+    const double ic = line_ic_per_factory(g.content, line);
     const double out =
         static_cast<double>(line.factories) * ic / static_cast<double>(TICKS_PER_DAY) *
-        efficiency * (1.0 + line_output_modifier(c, def));
+        efficiency * (1.0 + line_output_modifier(c, g.content, line));
     return std::isfinite(out) && out > 0.0 ? out : 0.0;
 }
 
@@ -463,29 +461,43 @@ void phase_industry(Game& g) {
         count_factories(w, id, &civ, &mil, &dock);
 
         // Broken-state rule (a repair, not a gameplay decision): after territorial
-        // loss a country can control fewer military factories than its production
-        // lines still claim. Nation loss is not something industry can play back,
-        // so the excess is released here, from the LAST line in `Country::lines`
-        // order, keeping the earliest (highest-priority) line intact. A line drained
-        // to zero is retired exactly as RemoveProductionLine retires it: its model
-        // goes onto the pending-switch queue and its equipment is cleared.
+        // loss a country can control fewer factories than its production lines still
+        // claim. The pools are independent - military factories for everything except
+        // ships and convoys, dockyards for those (see `line_factory_pool`) - so each
+        // pool is repaired on its own: losing the yards retires ship lines and leaves
+        // the rifle lines alone. Within a pool the excess is released from the LAST
+        // line in `Country::lines` order, keeping the earliest line intact. A line
+        // drained to zero is retired exactly as RemoveProductionLine retires it: its
+        // model goes onto the pending-switch queue and its equipment is cleared.
         //
         // Reporting is throttled by the release itself, not by a clock: a release is
         // only logged when it changes the country's line set (a line is retired), and
-        // one message carries the whole hour's total. A war that shaves a factory per
-        // hour off an eight-line country therefore logs at most once per retired line
-        // instead of once per hour, and no cross-tick scratch state is needed.
-        int assigned = 0;
-        for (const ProductionLine& line : c.lines) {
-            if (line.factories > 0) assigned += line.factories;
-        }
-        if (assigned > mil) {
-            int excess = assigned - mil;
+        // one message carries the whole hour's total for that pool. A war that shaves
+        // a factory per hour off an eight-line country therefore logs at most once
+        // per retired line instead of once per hour, and no cross-tick scratch state
+        // is needed.
+        const struct PoolBudget {
+            FactoryPool pool;
+            int controlled;
+        } pool_budgets[2] = {{FactoryPool::Military, mil}, {FactoryPool::Dockyard, dock}};
+        for (const PoolBudget& budget : pool_budgets) {
+            int assigned = 0;
+            for (const ProductionLine& line : c.lines) {
+                if (line.factories > 0 && line_factory_pool(content, line) == budget.pool) {
+                    assigned += line.factories;
+                }
+            }
+            if (assigned <= budget.controlled) continue;
+            int excess = assigned - budget.controlled;
             const int released = excess;
             int retired_lines = 0;
             for (size_t i = c.lines.size(); i-- > 0 && excess > 0;) {
                 ProductionLine& line = c.lines[i];
                 if (line.factories <= 0) continue;
+                // Retired lines have no equipment and are classified as military, but
+                // they hold no factories, so they are skipped above and cannot be
+                // mistaken for part of this pool.
+                if (line_factory_pool(content, line) != budget.pool) continue;
                 const int taken = std::min(excess, line.factories);
                 line.factories -= taken;
                 excess -= taken;
@@ -500,12 +512,14 @@ void phase_industry(Game& g) {
                 }
             }
             if (retired_lines > 0) {
-                HOI_WARN("industry: country %u released %d production-line factories it no longer "
-                         "controls (assigned %d, controlled %d) and retired %d line(s)",
-                         id.raw(), released, assigned, mil, retired_lines);
+                const char* pool_name =
+                    budget.pool == FactoryPool::Dockyard ? "dockyards" : "military factories";
+                HOI_WARN("industry: country %u released %d %s assignments it no longer controls "
+                         "(assigned %d, controlled %d) and retired %d line(s)",
+                         id.raw(), released, pool_name, assigned, budget.controlled, retired_lines);
                 g.log_event("production",
-                            c.name + " lost production lines: " + std::to_string(released) +
-                                " factory assignments released (industry lost)",
+                            c.name + " lost production lines: " + std::to_string(released) + " " +
+                                pool_name + " assignments released (industry lost)",
                             id);
             }
         }

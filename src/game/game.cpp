@@ -53,6 +53,7 @@ bool Game::create(const std::string& data_root_in, const std::string& scenario_p
     out->seed = seed_in;
     if (!load_content(data_root_in, &out->content, err)) return false;
     if (!load_scenario(scenario_path_in, out->content, &out->world, err)) return false;
+    if (!load_scenario_forces(scenario_path_in, *out, err)) return false;
 
     out->rng.seed(seed_in);
     out->world.world_seed = seed_in;
@@ -90,6 +91,7 @@ void Game::tick_once() {
     HOI_PHASE(phase_territory, ms_territory);
     HOI_PHASE(phase_supply, ms_supply);
     HOI_PHASE(phase_air, ms_air);
+    HOI_PHASE(phase_naval, ms_naval);
     HOI_PHASE(phase_industry, ms_industry);
     HOI_PHASE(phase_research, ms_research);
     HOI_PHASE(phase_training, ms_training);
@@ -193,12 +195,24 @@ std::vector<std::string> check_invariants(const Game& g) {
                 out.push_back(fmt("country %u line efficiency out of range (%f)", cid.v, line.efficiency));
             }
         }
-        int assigned = 0;
-        for (const auto& line : c.lines) assigned += line.factories;
+        int assigned_mil = 0;
+        int assigned_dock = 0;
+        for (const auto& line : c.lines) {
+            if (line_factory_pool(g.content, line) == FactoryPool::Dockyard) {
+                assigned_dock += line.factories;
+            } else {
+                assigned_mil += line.factories;
+            }
+        }
         int civ = 0, mil = 0, dock = 0;
         count_factories(w, cid, &civ, &mil, &dock);
-        if (assigned > mil) {
-            out.push_back(fmt("country %u assigned %d factories but controls only %d", cid.v, assigned, mil));
+        if (assigned_mil > mil) {
+            out.push_back(fmt("country %u assigned %d military factories but controls only %d",
+                              cid.v, assigned_mil, mil));
+        }
+        if (assigned_dock > dock) {
+            out.push_back(fmt("country %u assigned %d dockyards but controls only %d", cid.v,
+                              assigned_dock, dock));
         }
     });
 

@@ -259,8 +259,8 @@ assert sum(len(v) for v in member_states.values()) == total_states
 LINE_PRIORITY = {
     "VEL": [("infantry_equipment_1", 0.42), ("support_equipment_1", 0.12),
             ("artillery_1", 0.12), ("motorized_1", 0.14), ("armor_1", 0.20)],
-    "KOR": [("infantry_equipment_1", 0.40), ("support_equipment_1", 0.10),
-            ("destroyer_1", 0.30), ("convoy_1", 0.20)],
+    "KOR": [("infantry_equipment_1", 0.52), ("support_equipment_1", 0.12),
+            ("artillery_1", 0.14), ("motorized_1", 0.22)],
     "THA": [("infantry_equipment_1", 0.60), ("support_equipment_1", 0.20),
             ("artillery_1", 0.20)],
     "SUD": [("infantry_equipment_1", 0.60), ("support_equipment_1", 0.20),
@@ -269,18 +269,49 @@ LINE_PRIORITY = {
 DEFAULT_LINES = [("infantry_equipment_1", 0.50), ("support_equipment_1", 0.18),
                  ("artillery_1", 0.16), ("motorized_1", 0.16)]
 
+# Ship and convoy lines draw on dockyards, land equipment on military factories
+# (the engine's factory-pool rule), so they are budgeted separately.
+DOCKYARD_LINES = {
+    "VEL": [("destroyer_1", 0.60), ("light_cruiser_1", 0.40)],
+    "KOR": [("destroyer_1", 0.75), ("convoy_1", 0.25)],
+}
+
 TECHS = {
     "VEL": ["infantry_weapons", "support_weapons", "field_artillery", "motorization",
             "light_armor", "production_lines",
-            "aircraft_design", "fighter_airframe", "cas_airframe"],
+            "aircraft_design", "fighter_airframe", "cas_airframe",
+            "convoy_design", "destroyer_hull", "cruiser_hull", "capital_ship_hull"],
     "KOR": ["infantry_weapons", "support_weapons", "field_artillery",
-            "basic_naval_design", "aircraft_design", "construction_engineering",
+            "convoy_design", "destroyer_hull", "cruiser_hull", "capital_ship_hull",
+            "aircraft_design", "construction_engineering",
             "fighter_airframe", "cas_airframe"],
     "THA": ["infantry_weapons", "field_artillery", "production_lines"],
     "SUD": ["infantry_weapons", "support_weapons", "field_artillery", "production_lines"],
 }
 DEFAULT_TECHS = ["infantry_weapons", "support_weapons", "field_artillery",
                  "construction_engineering", "production_lines"]
+
+# Starting navies for the two largest powers. The ships are built at scenario load
+# through form_task_force (the same helper CreateTaskForce uses) from the stockpile
+# below, so the scenario names a composition, not ship fields.
+NAVIES = {
+    "VEL": {"fleet": "Veldorian Home Fleet", "task_forces": [
+        {"name": "1st Destroyer Flotilla", "equipment": "destroyer_1",
+         "ships": 6, "mission": "patrol"},
+        {"name": "1st Cruiser Squadron", "equipment": "light_cruiser_1",
+         "ships": 3, "mission": "strike_force"},
+        {"name": "Battle Squadron", "equipment": "battleship_1",
+         "ships": 1, "mission": "strike_force"},
+    ]},
+    "KOR": {"fleet": "Korethian Home Fleet", "task_forces": [
+        {"name": "1st Destroyer Flotilla", "equipment": "destroyer_1",
+         "ships": 6, "mission": "patrol"},
+        {"name": "1st Cruiser Squadron", "equipment": "light_cruiser_1",
+         "ships": 3, "mission": "strike_force"},
+        {"name": "Battle Squadron", "equipment": "battleship_1",
+         "ships": 1, "mission": "strike_force"},
+    ]},
+}
 
 # Starting air arm: the two largest powers field a fighter wing (100 planes) and a
 # CAS wing (50 planes) based on their capital, with the aircraft already in the
@@ -334,12 +365,14 @@ def fit_factories(civ, mil, dock, slots):
     return civ, mil, dock
 
 
-def make_lines(tag, mil):
-    priority = LINE_PRIORITY.get(tag, DEFAULT_LINES)
+def make_lines(priority, factories):
+    """Spreads a factory pool across a priority list; never exceeds `factories`."""
+    if factories <= 0:
+        return []
     lines = []
-    left = mil
+    left = factories
     for key, share in priority:
-        take = min(int(round(mil * share)), left)
+        take = min(int(round(factories * share)), left)
         if take <= 0:
             continue
         lines.append({"equipment": key, "factories": take})
@@ -409,9 +442,14 @@ for tag, name, ideology in COUNTRIES:
         stock["motorized_1"] = 10 * division_count
     if "light_armor" in techs:
         stock["armor_1"] = 5 * division_count
-    if tag == "KOR":
-        stock["destroyer_1"] = 40
-        stock["convoy_1"] = 200
+    # A starting navy needs its ships in the stockpile: form_task_force draws them
+    # out at load time, so the numbers here must cover the composition above plus a
+    # reserve for replacements.
+    if tag in NAVIES:
+        stock["destroyer_1"] = stock.get("destroyer_1", 0) + 12
+        stock["light_cruiser_1"] = stock.get("light_cruiser_1", 0) + 6
+        stock["battleship_1"] = stock.get("battleship_1", 0) + 2
+        stock["convoy_1"] = stock.get("convoy_1", 0) + 200
 
     # Aircraft for the starting wings live in the stockpile; the loader draws them
     # out when it creates the wings.
@@ -434,7 +472,8 @@ for tag, name, ideology in COUNTRIES:
         "military_factories": mil,
         "dockyards": dock,
         "technologies": techs,
-        "production_lines": make_lines(tag, mil),
+        "production_lines": (make_lines(LINE_PRIORITY.get(tag, DEFAULT_LINES), mil) +
+                             make_lines(DOCKYARD_LINES.get(tag, []), dock)),
         "stockpile": stock,
         "laws": [law, economy, "trade_free"],
         "political_power": 20.0 + len(state_list) * 0.5,
@@ -444,6 +483,8 @@ for tag, name, ideology in COUNTRIES:
     }
     if wings:
         entry["wings"] = wings
+    if tag in NAVIES:
+        entry["navy"] = NAVIES[tag]
     out["countries"].append(entry)
 
 with open(OUT, "w") as f:

@@ -14,7 +14,10 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | AIR-003 | MODERATE | Air | Detection depends on range, radar and aircraft detection profiles | Any hostile wing present in the region engages; there is no detection roll and no radar effect | OPEN |
 | AIR-004 | MINOR | Air | Sorties consume fuel and pilots are manpower | Wings have neither a fuel nor a manpower field, so sorties are not fuel-gated and pilots are not tracked | OPEN |
 | AIR-005 | MINOR | Air | Reconnaissance reveals enemy dispositions (fog of war) | The mission is legal and flies but reveals nothing, because the engine has no fog-of-war state | OPEN |
-| NAV-001 | BLOCKER | Naval | Ships, task forces, detection, missions | No naval simulation at all | OPEN |
+| NAV-001 | BLOCKER | Naval | Ships, task forces, detection, missions | Implemented: ships are entities with hull/crew state, task forces and fleets carry missions, detection and engagements resolve in sea zones, losses sink ships, damaged forces retreat and repair, naval control per zone feeds supply | CLOSED (naval milestone) |
+| NAV-008 | MINOR | Naval | Raiders interdict along the whole sea route to a port | Convoy raiding is detected in the destination port's sea zone only (no sea-route path enumeration) | OPEN |
+| NAV-009 | MINOR | Naval | Convoy losses deplete shipping progressively | The overseas supply gate is binary on convoy stock being non-zero, and convoy draw is proportional to port capacity rather than delivered throughput | OPEN |
+| NAV-010 | MINOR | Naval | AI stages armies at ports before invading | Closed in the naval milestone: the AI marches divisions to the invasion port and launches once they arrive | CLOSED |
 | POL-001 | BLOCKER | Politics | Focus trees drive national progression | No focus system | OPEN |
 | POL-002 | MAJOR | Politics | Events and decisions with triggers/options | No event/decision scripting | OPEN |
 | POL-003 | MAJOR | Politics | National spirits and advisors | Not modelled | OPEN |
@@ -26,7 +29,7 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | LND-014 | MODERATE | Land | Combat tactics modify battle rolls | No tactic selection | OPEN |
 | LND-015 | MODERATE | Land | Strategic redeployment and paradrops | Not implemented | OPEN |
 | LND-016 | MODERATE | Land | Commander traits and skill growth | Commanders contribute flat statistics | OPEN |
-| LOG-006 | MODERATE | Logistics | Ports provide overseas supply and convoys sustain it | Overseas armies are unsupplied; no convoy network | OPEN |
+| LOG-006 | MODERATE | Logistics | Ports provide overseas supply and convoys sustain it | Implemented: ports are supply sources scaled by naval base level, sea route and naval control, drawing convoys from the owner's stockpile; blockade and raiding starve them | CLOSED (naval milestone; see NAV-008/NAV-009 for the remaining approximations) |
 | LOG-007 | MODERATE | Logistics | Motorisation extends hub distribution range | Motorisation level stored and settable, not simulated | OPEN |
 | LOG-008 | MINOR | Logistics | Rail damage and repair | Railway level is static after construction | OPEN |
 | MAP-008 | MINOR | Map | Rivers as graph edges with crossing penalties | Marsh is used as a crossing proxy | OPEN |

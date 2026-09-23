@@ -159,6 +159,40 @@ SimConstants SimConstants::from_json(const Json& j) {
     c.air_mission_weight_support =
         num("air_mission_weight_support", c.air_mission_weight_support);
 
+    c.naval_base_capacity_per_level = num("naval_base_capacity_per_level", c.naval_base_capacity_per_level);
+    c.naval_detection_scale = num("naval_detection_scale", c.naval_detection_scale);
+    c.naval_combat_roll_base = num("naval_combat_roll_base", c.naval_combat_roll_base);
+    c.naval_combat_scale = num("naval_combat_scale", c.naval_combat_scale);
+    c.naval_org_damage_scale = num("naval_org_damage_scale", c.naval_org_damage_scale);
+    c.naval_torpedo_large_hull_bonus = num("naval_torpedo_large_hull_bonus", c.naval_torpedo_large_hull_bonus);
+    c.naval_sub_detection_penalty = num("naval_sub_detection_penalty", c.naval_sub_detection_penalty);
+    c.naval_aa_carrier_air_factor = num("naval_aa_carrier_air_factor", c.naval_aa_carrier_air_factor);
+    c.naval_air_attacks_per_hour = num("naval_air_attacks_per_hour", c.naval_air_attacks_per_hour);
+    c.naval_screen_share_cap = num("naval_screen_share_cap", c.naval_screen_share_cap);
+    c.naval_retreat_strength_threshold = num("naval_retreat_strength_threshold", c.naval_retreat_strength_threshold);
+    c.naval_retreat_org_threshold = num("naval_retreat_org_threshold", c.naval_retreat_org_threshold);
+    c.naval_repair_per_hour = num("naval_repair_per_hour", c.naval_repair_per_hour);
+    c.naval_repair_org_per_hour = num("naval_repair_org_per_hour", c.naval_repair_org_per_hour);
+    c.naval_repair_cost_fuel = num("naval_repair_cost_fuel", c.naval_repair_cost_fuel);
+    c.naval_repair_cost_stockpile_share = num("naval_repair_cost_stockpile_share", c.naval_repair_cost_stockpile_share);
+    c.naval_fuel_use_per_hour = num("naval_fuel_use_per_hour", c.naval_fuel_use_per_hour);
+    c.naval_training_experience_per_hour = num("naval_training_experience_per_hour", c.naval_training_experience_per_hour);
+    c.naval_combat_experience_per_hour = num("naval_combat_experience_per_hour", c.naval_combat_experience_per_hour);
+    c.naval_raid_convoy_damage = num("naval_raid_convoy_damage", c.naval_raid_convoy_damage);
+    c.naval_raid_control_cut = num("naval_raid_control_cut", c.naval_raid_control_cut);
+    c.naval_escort_protection = num("naval_escort_protection", c.naval_escort_protection);
+    c.naval_max_engagement_ships = num("naval_max_engagement_ships", c.naval_max_engagement_ships);
+    c.naval_large_hull_hp = num("naval_large_hull_hp", c.naval_large_hull_hp);
+    c.naval_base_supply_per_level = num("naval_base_supply_per_level", c.naval_base_supply_per_level);
+    c.naval_supply_sea_range_penalty = num("naval_supply_sea_range_penalty", c.naval_supply_sea_range_penalty);
+    c.naval_supply_convoy_use_per_capacity = num("naval_supply_convoy_use_per_capacity", c.naval_supply_convoy_use_per_capacity);
+    c.naval_supply_raid_threshold = num("naval_supply_raid_threshold", c.naval_supply_raid_threshold);
+    c.naval_invasion_convoys_per_division = num("naval_invasion_convoys_per_division", c.naval_invasion_convoys_per_division);
+    c.naval_invasion_hours_per_sea_hop = num("naval_invasion_hours_per_sea_hop", c.naval_invasion_hours_per_sea_hop);
+    c.naval_invasion_interception_base = num("naval_invasion_interception_base", c.naval_invasion_interception_base);
+    c.naval_invasion_interception_threat_scale = num("naval_invasion_interception_threat_scale", c.naval_invasion_interception_threat_scale);
+    c.naval_invasion_escort_mitigation = num("naval_invasion_escort_mitigation", c.naval_invasion_escort_mitigation);
+
     c.construction_cost_factory = num("construction_cost_factory", c.construction_cost_factory);
     c.construction_cost_infrastructure =
         num("construction_cost_infrastructure", c.construction_cost_infrastructure);
@@ -323,6 +357,13 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             non_negative("ground_attack", &def.ground_attack);
             non_negative("agility", &def.agility);
             non_negative("range", &def.range);
+            // Naval statistics. Read through the same clamp-and-report path: a
+            // negative value is a data error and is reported with the rest.
+            non_negative("naval_attack", &def.naval_attack);
+            non_negative("torpedo_attack", &def.torpedo_attack);
+            non_negative("sub_detection", &def.sub_detection);
+            non_negative("detection", &def.detection);
+            non_negative("visibility", &def.visibility);
             def.defense = e["defense"].as_double(def.defense);
             def.breakthrough = e["breakthrough"].as_double(def.breakthrough);
             def.armor = e["armor"].as_double(def.armor);

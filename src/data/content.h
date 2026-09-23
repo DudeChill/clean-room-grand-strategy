@@ -16,6 +16,8 @@
 
 namespace hoi {
 
+struct Game;
+
 struct TechDef {
     TechId id;
     std::string key;
@@ -122,6 +124,41 @@ struct SimConstants {
     double air_mission_weight_contested = 1.0;  // air-control weight: superiority/interception
     double air_mission_weight_support = 0.5;    // air-control weight: CAS/bombing/logistics/recon
 
+    // Naval.
+    double naval_base_capacity_per_level = 8.0;      // ships a level-1 naval base hosts
+    double naval_detection_scale = 1.0;              // detection vs visibility spot chance
+    double naval_combat_roll_base = 0.5;             // randomness = base + next_double()
+    double naval_combat_scale = 0.60;                // attack power -> strength damage per hour
+    double naval_org_damage_scale = 0.30;            // organisation damage per combat power
+    double naval_torpedo_large_hull_bonus = 2.0;     // torpedo multiplier vs capital hulls
+    double naval_sub_detection_penalty = 0.35;       // surface attack cut vs undetected subs
+    double naval_aa_carrier_air_factor = 0.5;        // carrier-air damage cut per AA point
+    double naval_air_attacks_per_hour = 0.25;        // carrier sortie power per hour
+    double naval_screen_share_cap = 0.5;             // max share of hits screened
+    double naval_retreat_strength_threshold = 0.35;  // average strength to retreat
+    double naval_retreat_org_threshold = 0.20;
+    double naval_repair_per_hour = 0.01;             // strength recovered per hour in port
+    double naval_repair_org_per_hour = 0.02;
+    double naval_repair_cost_fuel = 0.5;             // fuel per strength point repaired
+    double naval_repair_cost_stockpile_share = 0.02; // share of build_cost per strength point
+    double naval_fuel_use_per_hour = 0.01;           // fuel per ship per hour at sea
+    double naval_training_experience_per_hour = 0.0004;
+    double naval_combat_experience_per_hour = 0.002;
+    double naval_raid_convoy_damage = 0.02;          // convoys sunk per raider power-hour
+    double naval_raid_control_cut = 0.5;             // control multiplier for the raided side
+    double naval_escort_protection = 0.5;            // raider damage cut per escort ratio
+    double naval_max_engagement_ships = 200;         // ships fighting per zone per hour
+    double naval_large_hull_hp = 800.0;              // HP per unit above which a hull is "large" 
+    double naval_base_supply_per_level = 0.5;        // port supply capacity per base level
+    double naval_supply_sea_range_penalty = 0.15;    // capacity decay per sea-zone hop
+    double naval_supply_convoy_use_per_capacity = 0.02;  // convoys drawn per capacity-hour
+    double naval_supply_raid_threshold = 2.0;        // raider strength that zeroes a route
+    double naval_invasion_convoys_per_division = 10.0;      // convoy units per division embarked
+    double naval_invasion_hours_per_sea_hop = 12.0;         // crossing speed, hours per sea hop
+    double naval_invasion_interception_base = 0.5;          // base interception chance scale
+    double naval_invasion_interception_threat_scale = 200.0;  // threat/(threat+scale)
+    double naval_invasion_escort_mitigation = 0.5;          // support task forces cut interception
+
     // Politics.
     double political_power_per_day = 2.0;
     double stability_drift = 0.01;
@@ -201,5 +238,10 @@ bool load_content(const std::string& data_root, Content* out, std::string* err);
 // freshly constructed world. Country/province/state data is data-driven.
 bool load_scenario(const std::string& scenario_path, Content& content, World* world,
                    std::string* err);
+
+// Second scenario pass that needs the finished Game (task forces and other content
+// that must be created through the same helpers the commands use). Called by
+// Game::create right after load_scenario.
+bool load_scenario_forces(const std::string& scenario_path, Game& g, std::string* err);
 
 }  // namespace hoi

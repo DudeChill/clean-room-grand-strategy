@@ -134,6 +134,19 @@ function provinceColor(p) {
       return `rgb(${Math.round(v * 0.5)},${v},${Math.round(v * 0.6)})`;
     }
     case 'control': {
+      if (p.sea) {
+        // Sea zones show naval control instead of land control.
+        const shares = App.navalControl.get(p.region);
+        const me = snap.player ? snap.player.id : -1;
+        let best = -1, bestShare = 0;
+        if (shares) {
+          for (const [country, share] of shares) {
+            if (country === me) { best = country; bestShare = Math.max(bestShare, share + 0.5); continue; }
+            if (share > bestShare) { best = country; bestShare = share; }
+          }
+        }
+        return best >= 0 ? countryColor(best) : '#22354a';
+      }
       const c = snap.controller[p.id];
       return c >= 0 ? countryColor(c) : '#2c333c';
     }
@@ -440,7 +453,7 @@ document.addEventListener('keydown', (e) => {
     renderLeft();
   }
   const tabKeys = { m: 'military', p: 'production', c: 'construction', r: 'research',
-                    d: 'diplomacy', l: 'log', a: 'air' };
+                    d: 'diplomacy', l: 'log', a: 'air', n: 'navy' };
   const tab = tabKeys[e.key.toLowerCase()];
   if (tab && !e.ctrlKey && !e.metaKey) {
     App.tab = tab;
@@ -1012,6 +1025,111 @@ function airPanel() {
   }
 }
 
+function navyPanel() {
+  const p = App.snap.player;
+  const el = document.getElementById('panel-navy');
+  const fleets = (App.snap.fleets || []).filter((f) => f.country === p.id);
+  const regions = (App.snap.naval_regions || []);
+  const ships = (App.snap.equipment_defs || []).filter((e) => e.category === 'ship');
+  const stock = p.stockpile || {};
+
+  // Usable ports: coastal provinces the player controls with a naval base.
+  const ports = [];
+  for (const prov of App.map.provinces) {
+    if (prov.sea || !prov.coastal) continue;
+    if (App.snap.controller[prov.id] !== p.id) continue;
+    ports.push(prov);
+  }
+
+  let html = '<div class="section"><b>Form a task force</b><div class="row-actions">' +
+    `<select id="tf-equipment">${ships.map((s) =>
+      `<option value="${s.key}">${s.name} (stock ${Math.round(stock[s.key] || 0)})</option>`).join('')}</select>` +
+    `<select id="tf-port">${ports.map((b) => `<option value="${b.id}">${b.name}</option>`).join('')}</select>` +
+    '<input id="tf-size" type="number" min="1" max="40" value="6" style="width:60px" />' +
+    '<button id="create-tf">Form</button></div>' +
+    '<div class="small dim">ships come from the stockpile; a task force joins your first fleet</div></div>';
+
+  html += '<h3>Fleets</h3>';
+  const missions = ['none', 'patrol', 'strike_force', 'convoy_escort', 'convoy_raid',
+                    'invasion_support', 'training'];
+  for (const f of fleets) {
+    html += `<div class="section"><b>${f.name}</b>`;
+    for (const tf of f.task_forces) {
+      const options = missions.map((m, i) =>
+        `<option value="${i}"${i === tf.mission_id ? ' selected' : ''}>${m}</option>`).join('');
+      const regionOptions = regions.map((r) =>
+        `<option value="${r.id}"${r.id === tf.region ? ' selected' : ''}>${r.name}</option>`).join('');
+      html += `<div class="small" style="margin-top:4px">` +
+        `<b>${tf.name}</b> ${tf.at_sea ? 'at sea' : 'in port'} ${tf.port_name}` +
+        ` · ${tf.stats.ships} ships · guns ${tf.stats.naval_attack.toFixed(0)}` +
+        ` · torpedoes ${tf.stats.torpedo_attack.toFixed(0)} · armour ${tf.stats.armour.toFixed(0)}` +
+        ` · hull ${tf.stats.hull.toFixed(0)}<br>` +
+        `<select data-tf-mission="${tf.id}">${options}</select> ` +
+        `<select data-tf-region="${tf.id}">${regionOptions}</select>` +
+        `<div class="dim">` + tf.ships.map((s) =>
+          `${s.name} ${s.equipment} ${(s.strength * 100).toFixed(0)}%`).join(' · ') + `</div></div>`;
+    }
+    if (f.task_forces.length === 0) html += '<div class="small dim">no task forces</div>';
+    html += '</div>';
+  }
+  if (fleets.length === 0) html += '<div class="small dim">no fleets — form a task force to create one</div>';
+
+  html += '<h3>Naval control</h3><table><tr><th>Sea zone</th><th>Control</th></tr>';
+  let any = 0;
+  for (const r of regions) {
+    if (!r.control || r.control.length === 0) continue;
+    ++any;
+    html += `<tr><td>${r.name}</td><td>${r.control.map((c) =>
+      `${c.tag} ${(c.share * 100).toFixed(0)}%`).join(' · ')}</td></tr>`;
+  }
+  if (any === 0) html += '<tr><td colspan="2" class="dim">no naval activity</td></tr>';
+  html += '</table>';
+
+  html += '<h3>Invasion</h3>';
+  const sel = App.selection >= 0 ? provinceById(App.selection) : null;
+  const armies = p.armies || [];
+  html += `<div class="small">target: ${sel && sel.coastal && !sel.sea ? sel.name + ' (selected)' : 'select a hostile coastal province on the map'}</div>`;
+  html += '<div class="row-actions">' +
+    `<select id="inv-army">${armies.map((a) =>
+      `<option value="${a.id}">${a.name} (${a.divisions.length} div)</option>`).join('')}</select>` +
+    `<select id="inv-port">${ports.map((b) => `<option value="${b.id}">${b.name}</option>`).join('')}</select>` +
+    `<button id="launch-invasion"${sel && sel.coastal && !sel.sea ? '' : ' disabled'}>Launch</button></div>`;
+  const inv = App.snap.invasions || [];
+  for (const i of inv) {
+    if (i.country !== p.id) continue;
+    html += `<div class="small">crossing to ${i.target_name} — ${(i.progress * 100).toFixed(0)}%` +
+      `${i.landed ? ' <span class="good">landed</span>' : ''}</div>`;
+  }
+  el.innerHTML = html;
+
+  el.querySelector('#create-tf').addEventListener('click', async () => {
+    const equipment = el.querySelector('#tf-equipment').value;
+    const province = Number(el.querySelector('#tf-port').value);
+    const value = Number(el.querySelector('#tf-size').value);
+    const name = el.querySelector('#tf-equipment').selectedOptions[0].text.split(' ')[0] + ' force';
+    if (await sendCommand({ type: 'create_task_force', equipment, province, value, name })) refresh();
+  });
+  for (const sel2 of el.querySelectorAll('select[data-tf-mission]')) {
+    sel2.addEventListener('change', async () => {
+      const taskForce = Number(sel2.dataset.tfMission);
+      const regionSel = el.querySelector(`select[data-tf-region="${taskForce}"]`);
+      await sendCommand({ type: 'set_naval_mission', task_force: taskForce,
+                          region: Number(regionSel.value), value: Number(sel2.value) });
+      refresh();
+    });
+  }
+  const launch = el.querySelector('#launch-invasion');
+  if (launch) {
+    launch.addEventListener('click', async () => {
+      const army = Number(el.querySelector('#inv-army').value);
+      const origin = Number(el.querySelector('#inv-port').value);
+      if (!sel) return;
+      if (await sendCommand({ type: 'launch_naval_invasion', army, province: origin,
+                              province_b: sel.id })) refresh();
+    });
+  }
+}
+
 function renderPanels() {
   if (!App.snap || !App.snap.player) return;
   if (App.tab === 'production') productionPanel();
@@ -1019,6 +1137,7 @@ function renderPanels() {
   if (App.tab === 'research') researchPanel();
   if (App.tab === 'military') militaryPanel();
   if (App.tab === 'air') airPanel();
+  if (App.tab === 'navy') navyPanel();
   if (App.tab === 'diplomacy') diplomacyPanel();
   if (App.tab === 'log') logPanel();
 }
@@ -1032,6 +1151,12 @@ async function refresh() {
   if (!snap || !snap.tick) return;
   const before = App.snap ? App.snap.tick : -1;
   App.snap = snap;
+  App.navalControl = new Map();
+  for (const r of (snap.naval_regions || [])) {
+    const m = new Map();
+    for (const entry of (r.control || [])) m.set(entry.country, entry.share);
+    App.navalControl.set(r.id, m);
+  }
   App.airControl = new Map();
   for (const r of (snap.air_regions || [])) {
     const m = new Map();

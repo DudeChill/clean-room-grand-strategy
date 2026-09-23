@@ -74,7 +74,13 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | AIR-007 | Air detection model | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | AIR-008 | Air fuel and pilot manpower | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | AIR-009 | Reconnaissance / fog of war | NOT_IMPLEMENTED | LOW | - | - | - | - |
-| NAV-xxx | Naval warfare (all items) | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| NAV-001 | Ships, task forces, fleets, sea zones | SPECIFIED | MODERATE | yes | yes | yes | unit + golden |
+| NAV-002 | Detection, positioning, screening, engagements | SPECIFIED | MODERATE | yes | yes | - | unit |
+| NAV-003 | Missions: patrol, strike force, escort, raid, support, training | SPECIFIED | MODERATE | yes | yes | yes | unit |
+| NAV-004 | Naval invasion workflow (load, cross, land, supply) | SPECIFIED | MODERATE | yes | yes | yes | unit + golden |
+| NAV-005 | Ports as supply sources, convoys, blockade | SPECIFIED | LOW | yes | yes | yes | unit |
+| NAV-006 | Repair and port facilities | SPECIFIED | LOW | yes | yes | yes | unit |
+| NAV-007 | Carrier air power | SPECIFIED | LOW | part | yes | yes | unit |
 | POL-001 | Focus trees | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | POL-002 | Events | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | POL-003 | Decisions | NOT_IMPLEMENTED | LOW | - | - | - | - |

@@ -26,6 +26,7 @@
 #include "sim/commands.h"
 #include "sim/industry.h"
 #include "sim/map.h"
+#include "sim/navy.h"
 #include "sim/politics.h"
 #include "sim/research.h"
 #include "sim/supply.h"
@@ -215,6 +216,9 @@ bool apply_client_command(Game& g, const Json& payload, std::string* err) {
     cmd.war = WarId(id_field("war", INVALID_ID));
     cmd.wing = AirWingId(id_field("wing", INVALID_ID));
     cmd.region = RegionId(id_field("region", INVALID_ID));
+    cmd.fleet_id = FleetId(id_field("fleet", INVALID_ID));
+    cmd.ship_id = ShipId(id_field("ship", INVALID_ID));
+    cmd.task_force = TaskForceId(id_field("task_force", INVALID_ID));
     if (payload.has("equipment")) {
         const Json& e = payload.at("equipment");
         if (e.is_string()) {
@@ -512,6 +516,98 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         wings.push_back(j);
     });
     root.set("wings", wings);
+
+    Json naval_regions = Json::array();
+    w.regions.for_each([&](RegionId rid, const Region& r) {
+        if (!r.is_sea) return;
+        Json j = Json::object();
+        j.set("id", Json(static_cast<uint32_t>(rid.v)));
+        j.set("name", Json(r.name));
+        Json control = Json::array();
+        for (const auto& entry : r.naval_control) {
+            const Country* c = w.country(entry.first);
+            Json e = Json::object();
+            e.set("tag", Json(c ? c->tag : std::string("?")));
+            e.set("country", Json(static_cast<uint32_t>(entry.first.v)));
+            e.set("share", Json(entry.second));
+            control.push_back(e);
+        }
+        j.set("control", control);
+        naval_regions.push_back(j);
+    });
+    root.set("naval_regions", naval_regions);
+
+    Json fleets = Json::array();
+    w.fleets.for_each([&](FleetId fid, const Fleet& f) {
+        Json j = Json::object();
+        j.set("id", Json(static_cast<uint32_t>(fid.v)));
+        j.set("country", Json(static_cast<uint32_t>(f.country.v)));
+        j.set("name", Json(f.name));
+        Json forces = Json::array();
+        for (TaskForceId tfid : f.task_forces) {
+            const TaskForce* tf = w.task_force(tfid);
+            if (!tf) continue;
+            Json t = Json::object();
+            t.set("id", Json(static_cast<uint32_t>(tfid.v)));
+            t.set("name", Json(tf->name));
+            t.set("mission", Json(std::string(naval_mission_name(tf->mission))));
+            t.set("mission_id", Json(static_cast<int>(tf->mission)));
+            t.set("at_sea", Json(tf->at_sea));
+            const Region* sr = tf->sea_region.valid() ? w.regions.try_get(tf->sea_region) : nullptr;
+            t.set("region", Json(static_cast<uint32_t>(tf->sea_region.valid() ? tf->sea_region.v : 0)));
+            t.set("region_name", Json(sr ? sr->name : std::string("")));
+            const Province* pp = w.province(tf->port);
+            t.set("port", Json(static_cast<uint32_t>(tf->port.valid() ? tf->port.v : 0)));
+            t.set("port_name", Json(pp ? pp->name : std::string("")));
+            t.set("detection", Json(tf->detection));
+            const TaskForceStats stats = task_force_stats(g, tfid);
+            Json s = Json::object();
+            s.set("ships", Json(stats.ships));
+            s.set("naval_attack", Json(stats.naval_attack));
+            s.set("torpedo_attack", Json(stats.torpedo_attack));
+            s.set("armour", Json(stats.armour));
+            s.set("hull", Json(stats.hull));
+            s.set("detection", Json(stats.detection));
+            s.set("sub_detection", Json(stats.sub_detection));
+            t.set("stats", s);
+            Json ships = Json::array();
+            for (ShipId sid : tf->ships) {
+                const Ship* sh = w.ship(sid);
+                if (!sh) continue;
+                const EquipmentDef* sd = g.content.equipment_def(sh->equipment);
+                Json sj = Json::object();
+                sj.set("id", Json(static_cast<uint32_t>(sid.v)));
+                sj.set("name", Json(sh->name));
+                sj.set("equipment", Json(sd ? sd->key : std::string("?")));
+                sj.set("strength", Json(sh->strength));
+                sj.set("organisation", Json(sh->organisation));
+                sj.set("experience", Json(sh->experience));
+                sj.set("fuel", Json(sh->fuel));
+                sj.set("at_sea", Json(sh->at_sea));
+                ships.push_back(sj);
+            }
+            t.set("ships", ships);
+            forces.push_back(t);
+        }
+        j.set("task_forces", forces);
+        fleets.push_back(j);
+    });
+    root.set("fleets", fleets);
+
+    Json invasions = Json::array();
+    for (const NavalInvasion& inv : w.invasions) {
+        Json j = Json::object();
+        j.set("army", Json(static_cast<uint32_t>(inv.army.v)));
+        j.set("country", Json(static_cast<uint32_t>(inv.country.v)));
+        j.set("progress", Json(inv.progress));
+        j.set("landed", Json(inv.landed));
+        const Province* t = w.province(inv.target);
+        j.set("target_name", Json(t ? t->name : std::string("")));
+        const Province* o = w.province(inv.origin);
+        j.set("origin_name", Json(o ? o->name : std::string("")));
+        invasions.push_back(j);
+    }
+    root.set("invasions", invasions);
 
     Json events = Json::array();
     const size_t event_start = g.events.size() > 200 ? g.events.size() - 200 : 0;

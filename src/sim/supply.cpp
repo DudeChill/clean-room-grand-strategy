@@ -1,9 +1,19 @@
 // Logistics: a real supply network (spec sections 40-41, ARCHITECTURE 5.6).
 //
-// Supply is a flow over the province graph: sources (capital, supply hubs) push
+// Supply is a flow over the province graph: sources (capital, supply hubs, ports) push
 // capacity outwards, capacity decays with graph distance, and a province's supply
 // level is delivered capacity over local demand. Encirclement needs no special
 // case: a province with no controlled path back to a source simply gets zero.
+//
+// Ports and overseas supply (LOG-006): a coastal province with a naval base is a
+// source like a hub, scaled by the naval-base level. A port the land network reaches
+// is a *home* port; any other usable port is *overseas* and is fed by a sea route to
+// the nearest home port in friendly-controlled sea zones (one extra capacity decay
+// per sea-zone hop). Enemy naval control in a port's zone scales its capacity down
+// (max(0, 1 - enemy share)), a hostile convoy-raiding force above
+// naval_supply_raid_threshold at the port zeroes it, and a country with no convoy_1
+// in stock loses its whole overseas network while its home network keeps flowing. The
+// sea route draws convoy_1 from the stockpile every tick it operates.
 //
 // Performance model (measured on the shipped scenario: 2275 provinces, 332 hubs,
 // 10 countries, ~580 source searches per tick without the measures below):
@@ -15,6 +25,9 @@
 //     best source is the nearest, ties to the lowest province id);
 //   * every search is bounded by a hop cap and a delivered-capacity floor;
 //   * distance/parent/settled/heap buffers are reused between sources and countries.
+// A country with ports additionally caches two networks (one without the overseas
+// ports, one with them) and each tick reads whichever the convoy stock allows, so
+// running out of convoys needs no recompute.
 // Province levels and division supply/fuel are still refreshed EVERY tick from the
 // cached network plus the current demand and fuel stock, so encirclement reacts
 // within one tick even when the network itself was not recomputed.
@@ -22,6 +35,14 @@
 // Measured on the shipped scenario (`game --days 5 --quiet`): supply 43.4 -> 1.2
 // ms/tick and whole-tick p95 56.7 -> 7.2 ms. A recompute costs ~6 ms and lands at
 // most once every kSupplyRecomputeHours; the other ticks cost ~0.1 ms.
+//
+// Ports add a little work: every country in the shipped scenario now has a level-1/2
+// naval base, so each rebuild computes an extra port-source network, and the naval
+// control the routes depend on enters the signature (a control change on a tick
+// forces a recompute). Measured on the same scenario: 1.58 -> 1.76 ms/tick for the
+// supply phase, whole-tick p95 13.1 -> 13.5 ms. The port path adds no O(ships^2)
+// work: ports are scanned once per rebuild, raiders are bucketed by sea zone, and a
+// country with no usable port takes the original single-network path.
 
 #include "sim/supply.h"
 
@@ -38,6 +59,7 @@
 #include "game/game.h"
 #include "sim/diplomacy.h"
 #include "sim/map.h"
+#include "sim/navy.h"
 
 namespace hoi {
 namespace {
@@ -134,8 +156,10 @@ ProvinceId capital_province(const World& w, const Country& c, const Side& side) 
     return fallback;
 }
 
-std::vector<SupplySource> collect_sources(const World& w, CountryId country, const Side& side,
-                                          const SimConstants& k) {
+// The land network's sources: the controlled capital plus every controlled supply
+// hub. Ports are added separately by collect_port_sources.
+std::vector<SupplySource> collect_land_sources(const World& w, CountryId country, const Side& side,
+                                               const SimConstants& k) {
     std::vector<SupplySource> out;
     const Country* c = w.country(country);
     if (c == nullptr || !c->alive) return out;
@@ -274,10 +298,26 @@ void ensure_reachable(const World& w, const Side& side, SupplyScratch* scratch) 
 
 struct CountrySolution {
     uint32_t country = INVALID_ID;
+    // Full network: capital + land hubs + every usable port, overseas ports included.
     std::vector<double> delivered;
     std::vector<double> distance;
     std::vector<ProvinceId> source;
     std::vector<ProvinceId> bottleneck;
+
+    // Ports and convoys. `has_ports` is set when the country has any usable port, in
+    // which case the base network below is populated. `has_overseas` means at least
+    // one port is fed by a sea route, so the network needs convoys to keep delivering.
+    bool has_ports = false;
+    bool has_overseas = false;
+    // Sum of the overseas ports' capacities: the throughput the sea routes draw
+    // convoys against.
+    double overseas_capacity = 0.0;
+    // Network without the overseas ports (capital + land hubs + home ports), read when
+    // the country has no convoys so overseas supply stops while the home network flows.
+    std::vector<double> base_delivered;
+    std::vector<double> base_distance;
+    std::vector<ProvinceId> base_source;
+    std::vector<ProvinceId> base_bottleneck;
 };
 
 // The memo of the last computed network. Pure cache: it holds no gameplay state and
@@ -289,6 +329,9 @@ struct NetworkCache {
     uint32_t province_slots = 0;
     std::vector<CountrySolution> countries;  // ascending country id
     std::vector<double> demand;              // scratch: last demand vector
+    // Per country: whether overseas supply is on this tick (convoys in stock). Filled
+    // every tick, not part of the cached signature.
+    std::vector<uint8_t> overseas_active;
     SupplyScratch scratch;
 };
 
@@ -325,18 +368,54 @@ uint64_t supply_signature(const World& w, const SimConstants& k) {
         h = fnv_mix(h, id.v);
         h = fnv_mix(h, p.controller.v);
         h = fnv_mix(h, p.state.v);
+        h = fnv_mix(h, p.region.v);
         h = fnv_mix(h, p.supply_hub ? 1u : 0u);
         h = fnv_mix(h, static_cast<uint32_t>(p.railway_level));
         h = fnv_mix(h, static_cast<uint32_t>(p.infrastructure));
+        h = fnv_mix(h, static_cast<uint32_t>(p.naval_base));
+        h = fnv_mix(h, p.coastal ? 1u : 0u);
         h = fnv_mix(h, p.is_sea ? 1u : 0u);
         h = fnv_mix(h, p.is_capital ? 1u : 0u);
         for (ProvinceId a : p.adj) h = fnv_mix(h, a.v);
+        h = fnv_mix(h, 0xACACACACu);
+        for (ProvinceId a : p.sea_adj) h = fnv_mix(h, a.v);
         h = fnv_mix(h, 0xADADADADu);
     });
     h = fnv_mix(h, w.states.capacity());
     w.states.for_each([&](StateId id, const State& st) {
         h = fnv_mix(h, id.v);
         h = fnv_mix(h, st.impassable ? 1u : 0u);
+    });
+    // Sea zones and naval control (ports are sources whose capacity depends on both).
+    h = fnv_mix_double(h, k.naval_base_supply_per_level);
+    h = fnv_mix_double(h, k.naval_supply_sea_range_penalty);
+    h = fnv_mix(h, w.regions.capacity());
+    w.regions.for_each([&](RegionId id, const Region& r) {
+        h = fnv_mix(h, id.v);
+        h = fnv_mix(h, r.is_sea ? 1u : 0u);
+        for (const std::pair<CountryId, double>& e : r.naval_control) {
+            h = fnv_mix(h, e.first.v);
+            h = fnv_mix_double(h, e.second);
+        }
+        h = fnv_mix(h, 0xAEAEAEAEu);
+    });
+    // Raiding task forces in a zone zero a port's route.
+    h = fnv_mix_double(h, k.naval_supply_raid_threshold);
+    h = fnv_mix(h, w.task_forces.capacity());
+    w.task_forces.for_each([&](TaskForceId id, const TaskForce& tf) {
+        h = fnv_mix(h, id.v);
+        h = fnv_mix(h, tf.country.v);
+        h = fnv_mix(h, tf.sea_region.v);
+        h = fnv_mix(h, static_cast<uint32_t>(tf.mission));
+        for (ShipId sid : tf.ships) h = fnv_mix(h, sid.v);
+        h = fnv_mix(h, 0xAFAFAFAFu);
+    });
+    h = fnv_mix(h, w.ships.capacity());
+    w.ships.for_each([&](ShipId id, const Ship& sh) {
+        h = fnv_mix(h, id.v);
+        h = fnv_mix(h, sh.country.v);
+        h = fnv_mix(h, sh.task_force.v);
+        h = fnv_mix_double(h, sh.strength);
     });
     h = fnv_mix(h, w.countries.capacity());
     w.countries.for_each([&](CountryId id, const Country& c) {
@@ -513,6 +592,186 @@ void compute_country_supply(const World& w, const SimConstants& k, const Side& s
     }
 }
 
+// ------------------------------------------------------------ ports / convoys --
+
+// A usable port before its sea-route factors are applied.
+struct RawPort {
+    ProvinceId province;
+    RegionId zone;       // adjacent sea zone
+    double base = 0.0;   // capacity before naval control / route / raid factors
+    bool reachable = false;  // land network reaches it -> home port
+};
+
+struct PortSource {
+    ProvinceId province;
+    double capacity = 0.0;
+    bool overseas = false;
+};
+
+// Capacity a usable port contributes before sea-route factors: like a hub (rail and
+// infrastructure) scaled by the naval-base level.
+double port_capacity(const Province& p, const SimConstants& k) {
+    return source_capacity(p, k) *
+           (1.0 + k.naval_base_supply_per_level * static_cast<double>(p.naval_base));
+}
+
+// Friendly control share in a sea zone, read from the derived table phase_naval writes
+// (the same pattern air reads Region::air_control by).
+double friendly_control_share(const Region& region, const Side& side) {
+    double sum = 0.0;
+    for (const std::pair<CountryId, double>& e : region.naval_control) {
+        if (side_has(side, e.first)) sum += clamp01(e.second);
+    }
+    return clamp01(sum);
+}
+
+// Strongest hostile control share in a sea zone, over countries at war with `country`.
+double hostile_control_share(const World& w, const Region& region, CountryId country,
+                             const Side& side) {
+    double worst = 0.0;
+    for (const std::pair<CountryId, double>& e : region.naval_control) {
+        if (!e.first.valid() || side_has(side, e.first)) continue;
+        if (!countries_at_war(w, country, e.first)) continue;
+        worst = std::max(worst, clamp01(e.second));
+    }
+    return clamp01(worst);
+}
+
+// Hostile convoy-raiding strength bucketed by sea zone: the summed remaining
+// strength of ships in ConvoyRaid task forces. One pass over the task-force store,
+// so a port's zone lookup is O(1) and nothing is O(ships * ports).
+void collect_raider_strength(const World& w, CountryId country, const Side& side,
+                             std::vector<double>* out) {
+    out->assign(w.regions.capacity(), 0.0);
+    w.task_forces.for_each([&](TaskForceId, const TaskForce& tf) {
+        if (tf.mission != NavalMission::ConvoyRaid) return;
+        if (!tf.sea_region.valid() || tf.sea_region.v >= out->size()) return;
+        if (side_has(side, tf.country)) return;
+        if (!countries_at_war(w, country, tf.country)) return;
+        double strength = 0.0;
+        for (ShipId sid : tf.ships) {
+            const Ship* ship = w.ship(sid);
+            if (ship != nullptr) strength += clamp01(ship->strength);
+        }
+        (*out)[tf.sea_region.v] += strength;
+    });
+}
+
+// Usable ports for `country`: coastal, with a naval base, controlled by the side, with
+// friendly naval control in their zone (a port whose zone has no friendly control at
+// all delivers nothing). Ascending province id.
+void scan_usable_ports(const Game& g, const Side& side, std::vector<RawPort>* out) {
+    const World& w = g.world;
+    const SimConstants& k = g.content.constants;
+    w.provinces.for_each([&](ProvinceId id, const Province& p) {
+        if (p.is_sea || !p.coastal || p.naval_base <= 0) return;
+        if (!side_has(side, p.controller)) return;
+        const State* st = w.state(p.state);
+        if (st != nullptr && st->impassable) return;
+
+        const RegionId zone = adjacent_sea_region(g, id);
+        if (!zone.valid()) return;  // landlocked despite the coastal flag
+        const Region* region = w.regions.try_get(zone);
+        if (region == nullptr) return;
+        if (!(friendly_control_share(*region, side) > 0.0)) return;
+
+        RawPort port;
+        port.province = id;
+        port.zone = zone;
+        port.base = port_capacity(p, k);
+        out->push_back(port);
+    });
+}
+
+// Provinces the land network can reach from `sources` over friendly, passable land.
+// Used only to tell a home port (fed over land) from an overseas one; a plain BFS is
+// enough and much cheaper than a second Dijkstra per ported country.
+void land_reachable(const World& w, const Side& side, const std::vector<SupplySource>& sources,
+                    std::vector<uint8_t>* out) {
+    const uint32_t slots = static_cast<uint32_t>(w.provinces.capacity());
+    out->assign(slots, 0);
+    std::vector<ProvinceId> queue;
+    for (const SupplySource& s : sources) {
+        if (!s.province.valid() || s.province.v >= slots) continue;
+        if (!traversable(w, s.province, side)) continue;
+        if ((*out)[s.province.v]) continue;
+        (*out)[s.province.v] = 1;
+        queue.push_back(s.province);
+    }
+    for (size_t i = 0; i < queue.size(); ++i) {
+        const Province* p = w.province(queue[i]);
+        if (p == nullptr) continue;
+        for (ProvinceId nb : p->adj) {
+            if (nb.v >= slots || (*out)[nb.v]) continue;
+            if (!traversable(w, nb, side)) continue;
+            (*out)[nb.v] = 1;
+            queue.push_back(nb);
+        }
+    }
+}
+
+// Resolve each usable port's sea-route factors. `land_reach` is the land network's
+// reach, used to tell a home port (fed over land) from an overseas one (fed over sea).
+void resolve_port_sources(const Game& g, CountryId country, const Side& side,
+                          const std::vector<uint8_t>& land_reach, const std::vector<RawPort>& raw,
+                          std::vector<PortSource>* out) {
+    const World& w = g.world;
+    const SimConstants& k = g.content.constants;
+    if (raw.empty()) return;
+
+    std::vector<uint8_t> reachable(raw.size(), 0);
+    for (size_t i = 0; i < raw.size(); ++i) {
+        const uint32_t pv = raw[i].province.v;
+        reachable[i] = pv < land_reach.size() && land_reach[pv] ? 1 : 0;
+    }
+    std::vector<double> raiders;
+    collect_raider_strength(w, country, side, &raiders);
+
+    for (size_t idx = 0; idx < raw.size(); ++idx) {
+        const RawPort& port = raw[idx];
+        const Region* region = w.regions.try_get(port.zone);
+        if (region == nullptr) continue;
+        if (raiders[port.zone.v] >= k.naval_supply_raid_threshold) continue;  // raided out
+
+        // Blockade: hostile control in the zone cuts the capacity linearly.
+        const double enemy = hostile_control_share(w, *region, country, side);
+        double capacity = port.base * std::max(0.0, 1.0 - enemy);
+
+        bool overseas = false;
+        if (!reachable[idx]) {
+            // No land path to the capital: only a sea route to a home port keeps it
+            // alive. Best route = fewest sea-zone hops; ties to the lowest port id
+            // because `raw` ascends.
+            overseas = true;
+            double best = 0.0;
+            for (size_t j = 0; j < raw.size(); ++j) {
+                if (!reachable[j]) continue;
+                const int hops = sea_region_distance(g, raw[j].zone, port.zone);
+                if (hops < 0) continue;
+                const double factor =
+                    1.0 / (1.0 + k.naval_supply_sea_range_penalty * static_cast<double>(hops));
+                if (factor > best) best = factor;
+            }
+            capacity *= best;
+        }
+        if (!(capacity > 0.0)) continue;
+
+        PortSource src;
+        src.province = port.province;
+        src.capacity = capacity;
+        src.overseas = overseas;
+        out->push_back(src);
+    }
+}
+
+// True when the country holds convoy_1 in its stockpile. A country with no convoys
+// cannot sustain an overseas network.
+bool country_has_convoys(const Content& content, const Country& c) {
+    const EquipmentId convoy = content.equipment_id("convoy_1");
+    if (!convoy.valid() || convoy.v >= c.equipment_stockpile.size()) return false;
+    return c.equipment_stockpile[convoy.v] > 0.0;
+}
+
 // Capacity at one step of a route, read from the winning group's own distance tree.
 double route_step_capacity(const SupplyScratch& scratch, ProvinceId province, ProvinceId step,
                            double penalty) {
@@ -567,7 +826,18 @@ const CountrySolution* find_solution(const NetworkCache& cache, CountryId c) {
     return nullptr;
 }
 
+// Whether the full network is the one to read this tick: false only for a country
+// with overseas ports and no convoys in stock, which reads the base network instead.
+bool overseas_network_active(const NetworkCache& cache, const CountrySolution& sol) {
+    if (!sol.has_ports) return true;
+    return sol.country < cache.overseas_active.size() && cache.overseas_active[sol.country] != 0;
+}
+
 // Full network rebuild: countries ascending, one grouped search set per country.
+// A country with no usable port takes exactly the pre-naval path (one search set,
+// buffers reused). A country with ports classifies them as home (land-fed) or
+// overseas (sea-fed) and caches both the base network and the full network, so a
+// convoy shortage switches between them without a recompute.
 void rebuild_network(const Game& g, uint32_t slots, NetworkCache* cache) {
     const World& w = g.world;
     const SimConstants& k = g.content.constants;
@@ -579,9 +849,73 @@ void rebuild_network(const Game& g, uint32_t slots, NetworkCache* cache) {
         CountrySolution& sol = cache->countries[index];
         ++index;
         sol.country = cid.v;
+
         const Side side = build_side(w, cid);
-        const std::vector<SupplySource> sources = collect_sources(w, cid, side, k);
-        compute_country_supply(w, k, side, sources, slots, &cache->scratch, &sol);
+        const std::vector<SupplySource> land = collect_land_sources(w, cid, side, k);
+
+        std::vector<RawPort> raw;
+        scan_usable_ports(g, side, &raw);
+        if (raw.empty()) {
+            sol.has_ports = false;
+            sol.has_overseas = false;
+            sol.overseas_capacity = 0.0;
+            sol.base_delivered.clear();
+            sol.base_distance.clear();
+            sol.base_source.clear();
+            sol.base_bottleneck.clear();
+            compute_country_supply(w, k, side, land, slots, &cache->scratch, &sol);
+            return;
+        }
+
+        // The land-only reach decides which ports are home ports.
+        std::vector<uint8_t> land_reach;
+        land_reachable(w, side, land, &land_reach);
+
+        std::vector<PortSource> ports;
+        resolve_port_sources(g, cid, side, land_reach, raw, &ports);
+
+        std::vector<SupplySource> base = land;
+        std::vector<SupplySource> full = land;
+        double overseas_capacity = 0.0;
+        bool has_overseas = false;
+        for (const PortSource& p : ports) {
+            SupplySource s;
+            s.province = p.province;
+            s.country = cid;
+            s.capacity = p.capacity;
+            s.hub = p.province;
+            if (p.overseas) {
+                full.push_back(s);
+                has_overseas = true;
+                overseas_capacity += p.capacity;
+            } else {
+                base.push_back(s);
+            }
+        }
+        auto by_province = [](const SupplySource& a, const SupplySource& b) {
+            return a.province < b.province;
+        };
+        std::sort(base.begin(), base.end(), by_province);
+        std::sort(full.begin(), full.end(), by_province);
+
+        CountrySolution base_sol;
+        compute_country_supply(w, k, side, base, slots, &cache->scratch, &base_sol);
+
+        sol.has_ports = true;
+        sol.has_overseas = has_overseas;
+        sol.overseas_capacity = overseas_capacity;
+        sol.base_delivered = std::move(base_sol.delivered);
+        sol.base_distance = std::move(base_sol.distance);
+        sol.base_source = std::move(base_sol.source);
+        sol.base_bottleneck = std::move(base_sol.bottleneck);
+        if (has_overseas) {
+            compute_country_supply(w, k, side, full, slots, &cache->scratch, &sol);
+        } else {
+            sol.delivered = sol.base_delivered;
+            sol.distance = sol.base_distance;
+            sol.source = sol.base_source;
+            sol.bottleneck = sol.base_bottleneck;
+        }
     });
     cache->countries.resize(index);
 }
@@ -590,12 +924,12 @@ void rebuild_network(const Game& g, uint32_t slots, NetworkCache* cache) {
 
 std::vector<SupplySource> supply_sources(const World& w, CountryId country) {
     // This entry point has no Content access, so it reports capacities under the
-    // documented default constants (the ARCHITECTURE 5.6 numbers). phase_supply uses
-    // the tuned SimConstants from content; only an override of the two rail/
-    // infrastructure bonuses can make the two differ.
+    // documented default constants (the ARCHITECTURE 5.6 numbers) and only the land
+    // network (capital + hubs): ports need the Game for their sea routes and are
+    // reported by phase_supply's network. phase_supply uses the tuned SimConstants.
     const SimConstants k;
     const Side side = build_side(w, country);
-    return collect_sources(w, country, side, k);
+    return collect_land_sources(w, country, side, k);
 }
 
 void phase_supply(Game& g) {
@@ -629,18 +963,44 @@ void phase_supply(Game& g) {
         demand[d.location.v] += division_supply_demand(g, d);
     });
 
+    // Pass 0: overseas supply needs convoys. A country with no convoy_1 in stock reads
+    // the base network (home network still flows, overseas stops); a country with
+    // stock and overseas routes draws convoy_1 from the stockpile this tick.
+    std::vector<uint8_t>& active = cache.overseas_active;
+    active.assign(w.countries.capacity(), 0);
+    const EquipmentId convoy = g.content.equipment_id("convoy_1");
+    w.countries.for_each([&](CountryId cid, Country& c) {
+        if (!c.alive) return;
+        const CountrySolution* sol = find_solution(cache, cid);
+        if (sol == nullptr || !sol->has_overseas) return;
+        if (!convoy.valid() || convoy.v >= c.equipment_stockpile.size()) return;
+        double& stock = c.equipment_stockpile[convoy.v];
+        if (!(stock > 0.0)) {
+            stock = 0.0;
+            return;
+        }
+        active[cid.v] = 1;
+        const double use = sol->overseas_capacity * k.naval_supply_convoy_use_per_capacity;
+        stock -= std::min(stock, use);
+        if (stock < 0.0) stock = 0.0;
+    });
+
     // Pass 1: province supply levels, countries ascending (so an ally's network is
     // already written when a division standing in allied territory reads it).
     w.countries.for_each([&](CountryId cid, Country& c) {
         if (!c.alive) return;
         const CountrySolution* sol = find_solution(cache, cid);
         if (sol == nullptr) return;
+        const bool full = overseas_network_active(cache, *sol);
+        const std::vector<double>& delivered = full ? sol->delivered : sol->base_delivered;
+        const std::vector<ProvinceId>& source = full ? sol->source : sol->base_source;
+        const std::vector<ProvinceId>& bottleneck = full ? sol->bottleneck : sol->base_bottleneck;
         w.provinces.for_each([&](ProvinceId pid, Province& p) {
             if (p.is_sea || p.controller != cid) return;
             const double dem = demand[pid.v] > kBaselineDemand ? demand[pid.v] : kBaselineDemand;
-            p.supply_level = clamp01(safe_div(sol->delivered[pid.v], dem));
-            p.supply_source = sol->source[pid.v];
-            p.supply_bottleneck = sol->bottleneck[pid.v];
+            p.supply_level = clamp01(safe_div(delivered[pid.v], dem));
+            p.supply_source = source[pid.v];
+            p.supply_bottleneck = bottleneck[pid.v];
         });
     });
 
@@ -658,9 +1018,14 @@ void phase_supply(Game& g) {
             const CountrySolution* holder =
                 p != nullptr ? find_solution(cache, p->controller) : nullptr;
             if (p != nullptr && !p->is_sea && side_has(side, p->controller) && holder != nullptr) {
+                const bool full = overseas_network_active(cache, *holder);
+                const std::vector<double>& delivered =
+                    full ? holder->delivered : holder->base_delivered;
+                const std::vector<double>& distance =
+                    full ? holder->distance : holder->base_distance;
                 const double dem = demand[p->id.v] > kBaselineDemand ? demand[p->id.v] : kBaselineDemand;
-                level = clamp01(safe_div(holder->delivered[p->id.v], dem));
-                const double dist = holder->distance[p->id.v];
+                level = clamp01(safe_div(delivered[p->id.v], dem));
+                const double dist = distance[p->id.v];
                 if (std::isfinite(dist) && dist > k.supply_hub_radius) {
                     level /= (1.0 + k.supply_range_penalty * (dist - k.supply_hub_radius));
                 }
@@ -696,15 +1061,42 @@ double explain_supply_route(const Game& g, CountryId country, ProvinceId provinc
     const SimConstants& k = g.content.constants;
     const uint32_t n = static_cast<uint32_t>(w.provinces.capacity());
     const Side side = build_side(w, country);
-    const std::vector<SupplySource> sources = collect_sources(w, country, side, k);
-    if (sources.empty()) return 0.0;
+    const std::vector<SupplySource> land = collect_land_sources(w, country, side, k);
 
     // This is the debugger path (console/UI), so it recomputes the network it needs
     // rather than reading the phase cache, whose refresh interval could make the
-    // answer differ from what the player sees on screen.
+    // answer differ from what the player sees on screen. Ports are added the same way
+    // the phase adds them, gated by the country's current convoy stock.
     SupplyScratch scratch;
-    CountrySolution sol;
     ensure_edge_costs(w, k, &scratch);
+    CountrySolution sol;
+
+    std::vector<SupplySource> sources = land;
+    std::vector<RawPort> raw;
+    scan_usable_ports(g, side, &raw);
+    if (!raw.empty()) {
+        std::vector<uint8_t> land_reach;
+        land_reachable(w, side, land, &land_reach);
+        std::vector<PortSource> ports;
+        resolve_port_sources(g, country, side, land_reach, raw, &ports);
+        const Country* c = w.country(country);
+        const bool convoy_ok = c != nullptr && country_has_convoys(g.content, *c);
+        for (const PortSource& p : ports) {
+            if (p.overseas && !convoy_ok) continue;  // no convoys: overseas routes off
+            SupplySource s;
+            s.province = p.province;
+            s.country = country;
+            s.capacity = p.capacity;
+            s.hub = p.province;
+            sources.push_back(s);
+        }
+        std::sort(sources.begin(), sources.end(),
+                  [](const SupplySource& a, const SupplySource& b) {
+                      return a.province < b.province;
+                  });
+    }
+    if (sources.empty()) return 0.0;
+
     compute_country_supply(w, k, side, sources, n, &scratch, &sol);
     if (province.v >= sol.delivered.size() || !sol.source[province.v].valid()) return 0.0;
 

@@ -12,13 +12,14 @@
 //   Map        geography: province store (adjacency, sea_adj, resources, grid
 //              coordinates, the supply cache fields supply_level/supply_source/
 //              supply_bottleneck), state store (factories, occupation counters),
-//              region store (weather, per-country air control)
+//              region store (weather, per-country air and naval control)
 //   Countries  country identity and ownership bookkeeping (id, tag, name, alive,
 //              ideology, overlord, puppets, capital), equipment_stockpile,
 //              law_levels, the four Modifier sets, the per-resource
 //              produced/consumed/imported/exported aggregates, starting_factories,
 //              the general roster (Country::generals), the air wing roster
-//              (Country::wings) and the character store
+//              (Country::wings), the fleet roster (Country::fleets) and the
+//              character store
 //   Economy    the content snapshot - equipment, division templates, technologies,
 //              laws, buildings and SimConstants, i.e. every table the simulation
 //              reads - plus per country: production lines, construction queue,
@@ -28,7 +29,10 @@
 //              a file without help from data/; the derived key -> id maps are rebuilt
 //              on load instead of being stored twice
 //   Military   per country: division/army rosters and the training list; then the
-//              army store, the division store and the air wing store
+//              army store, the division store, the air wing store, and the naval
+//              area: the ship store, the task force store, the fleet store and the
+//              naval invasion list (Country::fleets lives in the Countries section
+//              with the other id rosters)
 //   Battles    the battle store, including both sides, the debug breakdown lines
 //              and the last-tick markers
 //   Diplomacy  the war store, factions, the ordered relation map, and per country
@@ -403,6 +407,13 @@ void write_region(ByteWriter& w, const Region& r) {
         w.u32(e.first.v);
         w.f64(e.second);
     }
+    // Naval control is the sea counterpart, written by the naval phase and read by
+    // missions, the AI and the UI the same way: same vector-of-pairs shape.
+    w.u32(static_cast<uint32_t>(r.naval_control.size()));
+    for (const std::pair<CountryId, double>& e : r.naval_control) {
+        w.u32(e.first.v);
+        w.f64(e.second);
+    }
 }
 
 bool read_region(ByteReader& r, Region* g) {
@@ -423,6 +434,15 @@ bool read_region(ByteReader& r, Region* g) {
         double share = 0.0;
         if (!r.u32(&country) || !r.f64(&share)) return false;
         g->air_control.emplace_back(CountryId(country), share);
+    }
+    if (!read_count(r, 12, &n)) return false;  // country id + share
+    g->naval_control.clear();
+    g->naval_control.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t country = INVALID_ID;
+        double share = 0.0;
+        if (!r.u32(&country) || !r.f64(&share)) return false;
+        g->naval_control.emplace_back(CountryId(country), share);
     }
     return true;
 }
@@ -470,6 +490,11 @@ void write_equipment(ByteWriter& w, const EquipmentDef& e) {
     w.f64(e.ground_attack);
     w.f64(e.agility);
     w.f64(e.range);
+    w.f64(e.naval_attack);
+    w.f64(e.torpedo_attack);
+    w.f64(e.sub_detection);
+    w.f64(e.detection);
+    w.f64(e.visibility);
     w.f64(e.defense);
     w.f64(e.breakthrough);
     w.f64(e.armor);
@@ -498,6 +523,8 @@ bool read_equipment(ByteReader& r, EquipmentDef* e) {
     if (!r.f64(&e->soft_attack) || !r.f64(&e->hard_attack) || !r.f64(&e->air_attack)) return false;
     if (!r.f64(&e->air_defence) || !r.f64(&e->ground_attack) || !r.f64(&e->agility)) return false;
     if (!r.f64(&e->range)) return false;
+    if (!r.f64(&e->naval_attack) || !r.f64(&e->torpedo_attack) || !r.f64(&e->sub_detection)) return false;
+    if (!r.f64(&e->detection) || !r.f64(&e->visibility)) return false;
     if (!r.f64(&e->defense) || !r.f64(&e->breakthrough) || !r.f64(&e->armor)) return false;
     if (!r.f64(&e->piercing) || !r.f64(&e->hardness) || !r.f64(&e->reliability)) return false;
     if (!r.f64(&e->speed) || !r.f64(&e->max_strength) || !r.f64(&e->organization)) return false;
@@ -597,7 +624,23 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
         k.air_cas_organisation_damage, k.air_cas_strength_damage, k.air_bombing_power_unit,
         k.air_logistics_power_unit, k.air_support_min_modifier, k.air_support_max_modifier,
         k.air_mission_weight_contested, k.air_mission_weight_support,
+        k.naval_base_capacity_per_level, k.naval_detection_scale, k.naval_combat_roll_base,
+        k.naval_combat_scale, k.naval_org_damage_scale, k.naval_torpedo_large_hull_bonus,
+        k.naval_sub_detection_penalty, k.naval_aa_carrier_air_factor, k.naval_air_attacks_per_hour,
+        k.naval_screen_share_cap, k.naval_retreat_strength_threshold, k.naval_retreat_org_threshold,
+        k.naval_repair_per_hour, k.naval_repair_org_per_hour, k.naval_repair_cost_fuel,
+        k.naval_repair_cost_stockpile_share, k.naval_fuel_use_per_hour,
+        k.naval_training_experience_per_hour, k.naval_combat_experience_per_hour,
+        k.naval_raid_convoy_damage, k.naval_raid_control_cut, k.naval_escort_protection,
+        k.naval_max_engagement_ships, k.naval_large_hull_hp, k.naval_base_supply_per_level,
+        k.naval_supply_sea_range_penalty, k.naval_supply_convoy_use_per_capacity,
+        k.naval_supply_raid_threshold,
+        k.naval_invasion_convoys_per_division, k.naval_invasion_hours_per_sea_hop,
+        k.naval_invasion_interception_base, k.naval_invasion_interception_threat_scale,
+        k.naval_invasion_escort_mitigation,
         k.political_power_per_day, k.stability_drift, k.war_support_drift, k.weather_change_chance};
+    static_assert(sizeof(values) / sizeof(values[0]) == 111,
+                  "SimConstants changed: update write_constants/read_constants and the test drift guard");
     w.u32(static_cast<uint32_t>(sizeof(values) / sizeof(values[0])));
     for (double v : values) w.f64(v);
 }
@@ -605,8 +648,8 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
 bool read_constants(ByteReader& r, SimConstants* k) {
     uint32_t n = 0;
     if (!read_count(r, 8, &n)) return false;
-    if (n != 78) return false;  // a different count means a different SimConstants layout
-    double v[78] = {0.0};
+    if (n != 111) return false;  // a different count means a different SimConstants layout
+    double v[111] = {0.0};
     for (uint32_t i = 0; i < n; ++i) {
         if (!r.f64(&v[i])) return false;
     }
@@ -684,10 +727,43 @@ bool read_constants(ByteReader& r, SimConstants* k) {
     k->air_support_max_modifier = v[71];
     k->air_mission_weight_contested = v[72];
     k->air_mission_weight_support = v[73];
-    k->political_power_per_day = v[74];
-    k->stability_drift = v[75];
-    k->war_support_drift = v[76];
-    k->weather_change_chance = v[77];
+    k->naval_base_capacity_per_level = v[74];
+    k->naval_detection_scale = v[75];
+    k->naval_combat_roll_base = v[76];
+    k->naval_combat_scale = v[77];
+    k->naval_org_damage_scale = v[78];
+    k->naval_torpedo_large_hull_bonus = v[79];
+    k->naval_sub_detection_penalty = v[80];
+    k->naval_aa_carrier_air_factor = v[81];
+    k->naval_air_attacks_per_hour = v[82];
+    k->naval_screen_share_cap = v[83];
+    k->naval_retreat_strength_threshold = v[84];
+    k->naval_retreat_org_threshold = v[85];
+    k->naval_repair_per_hour = v[86];
+    k->naval_repair_org_per_hour = v[87];
+    k->naval_repair_cost_fuel = v[88];
+    k->naval_repair_cost_stockpile_share = v[89];
+    k->naval_fuel_use_per_hour = v[90];
+    k->naval_training_experience_per_hour = v[91];
+    k->naval_combat_experience_per_hour = v[92];
+    k->naval_raid_convoy_damage = v[93];
+    k->naval_raid_control_cut = v[94];
+    k->naval_escort_protection = v[95];
+    k->naval_max_engagement_ships = v[96];
+    k->naval_large_hull_hp = v[97];
+    k->naval_base_supply_per_level = v[98];
+    k->naval_supply_sea_range_penalty = v[99];
+    k->naval_supply_convoy_use_per_capacity = v[100];
+    k->naval_supply_raid_threshold = v[101];
+    k->naval_invasion_convoys_per_division = v[102];
+    k->naval_invasion_hours_per_sea_hop = v[103];
+    k->naval_invasion_interception_base = v[104];
+    k->naval_invasion_interception_threat_scale = v[105];
+    k->naval_invasion_escort_mitigation = v[106];
+    k->political_power_per_day = v[107];
+    k->stability_drift = v[108];
+    k->war_support_drift = v[109];
+    k->weather_change_chance = v[110];
     return true;
 }
 
@@ -1026,6 +1102,135 @@ bool read_air_wing(ByteReader& r, AirWing* a) {
     return r.u64(&a->last_sortie);
 }
 
+// The naval entities live in the Military section's "naval" area, next to the land
+// and air stores: they are military state keyed by country, and the Country::fleets
+// roster in the Countries section names the fleets written here. Ships, task forces
+// and fleets are stores (their id is their slot, so the store payload carries the
+// alive flags and free list); invasions are a plain vector with no identity.
+void write_ship(ByteWriter& w, const Ship& s) {
+    write_id(w, s.id);
+    write_id(w, s.country);
+    write_id(w, s.equipment);
+    w.str(s.name);
+    write_id(w, s.fleet);
+    write_id(w, s.task_force);
+    w.f64(s.strength);
+    w.f64(s.organisation);
+    w.f64(s.experience);
+    w.f64(s.fuel);
+    write_id(w, s.port);
+    write_id(w, s.sea_region);
+    w.boolean(s.at_sea);
+}
+
+bool read_ship(ByteReader& r, Ship* s) {
+    uint32_t id = INVALID_ID;
+    uint32_t country = INVALID_ID;
+    uint32_t equipment = INVALID_ID;
+    if (!r.u32(&id)) return false;
+    s->id = ShipId(id);
+    if (!r.u32(&country) || !r.u32(&equipment)) return false;
+    s->country = CountryId(country);
+    s->equipment = EquipmentId(equipment);
+    if (!r.str(&s->name)) return false;
+    uint32_t fleet = INVALID_ID;
+    uint32_t task_force = INVALID_ID;
+    if (!r.u32(&fleet) || !r.u32(&task_force)) return false;
+    s->fleet = FleetId(fleet);
+    s->task_force = TaskForceId(task_force);
+    if (!r.f64(&s->strength) || !r.f64(&s->organisation) || !r.f64(&s->experience)) return false;
+    if (!r.f64(&s->fuel)) return false;
+    uint32_t port = INVALID_ID;
+    uint32_t sea_region = INVALID_ID;
+    if (!r.u32(&port) || !r.u32(&sea_region)) return false;
+    s->port = ProvinceId(port);
+    s->sea_region = RegionId(sea_region);
+    return r.boolean(&s->at_sea);
+}
+
+void write_task_force(ByteWriter& w, const TaskForce& t) {
+    write_id(w, t.id);
+    write_id(w, t.country);
+    write_id(w, t.fleet);
+    w.str(t.name);
+    write_ids(w, t.ships);
+    write_id(w, t.port);
+    write_id(w, t.sea_region);
+    write_enum(w, t.mission);
+    w.boolean(t.at_sea);
+    w.f64(t.detection);
+    w.u64(t.last_engagement);
+}
+
+bool read_task_force(ByteReader& r, TaskForce* t) {
+    uint32_t id = INVALID_ID;
+    uint32_t country = INVALID_ID;
+    uint32_t fleet = INVALID_ID;
+    if (!r.u32(&id)) return false;
+    t->id = TaskForceId(id);
+    if (!r.u32(&country) || !r.u32(&fleet)) return false;
+    t->country = CountryId(country);
+    t->fleet = FleetId(fleet);
+    if (!r.str(&t->name)) return false;
+    if (!read_ids(r, &t->ships)) return false;
+    uint32_t port = INVALID_ID;
+    uint32_t sea_region = INVALID_ID;
+    if (!r.u32(&port) || !r.u32(&sea_region)) return false;
+    t->port = ProvinceId(port);
+    t->sea_region = RegionId(sea_region);
+    if (!read_enum(r, &t->mission, static_cast<int>(NavalMission::Count))) return false;
+    if (!r.boolean(&t->at_sea)) return false;
+    if (!r.f64(&t->detection)) return false;
+    return r.u64(&t->last_engagement);
+}
+
+void write_fleet(ByteWriter& w, const Fleet& f) {
+    write_id(w, f.id);
+    write_id(w, f.country);
+    w.str(f.name);
+    write_ids(w, f.task_forces);
+}
+
+bool read_fleet(ByteReader& r, Fleet* f) {
+    uint32_t id = INVALID_ID;
+    uint32_t country = INVALID_ID;
+    if (!r.u32(&id)) return false;
+    f->id = FleetId(id);
+    if (!r.u32(&country)) return false;
+    f->country = CountryId(country);
+    if (!r.str(&f->name)) return false;
+    return read_ids(r, &f->task_forces);
+}
+
+void write_invasion(ByteWriter& w, const NavalInvasion& i) {
+    write_id(w, i.army);
+    write_id(w, i.country);
+    write_id(w, i.origin);
+    write_id(w, i.target);
+    write_id(w, i.sea_region);
+    w.f64(i.progress);
+    w.u64(i.started);
+    w.boolean(i.landed);
+}
+
+bool read_invasion(ByteReader& r, NavalInvasion* i) {
+    uint32_t army = INVALID_ID;
+    uint32_t country = INVALID_ID;
+    uint32_t origin = INVALID_ID;
+    uint32_t target = INVALID_ID;
+    uint32_t sea_region = INVALID_ID;
+    if (!r.u32(&army) || !r.u32(&country)) return false;
+    i->army = ArmyId(army);
+    i->country = CountryId(country);
+    if (!r.u32(&origin) || !r.u32(&target) || !r.u32(&sea_region)) return false;
+    i->origin = ProvinceId(origin);
+    i->target = ProvinceId(target);
+    i->sea_region = RegionId(sea_region);
+    if (!r.f64(&i->progress)) return false;
+    if (!r.u64(&i->started)) return false;
+    return r.boolean(&i->landed);
+}
+
 void write_army(ByteWriter& w, const Army& a) {
     write_id(w, a.id);
     write_id(w, a.country);
@@ -1269,6 +1474,7 @@ void write_country_core(ByteWriter& w, const Country& c) {
     write_modifiers(w, c.national_modifiers);
     write_ids(w, c.generals);
     write_ids(w, c.wings);
+    write_ids(w, c.fleets);
     w.i32(c.starting_factories);
     write_resources(w, c.resources_produced);
     write_resources(w, c.resources_consumed);
@@ -1298,6 +1504,7 @@ bool read_country_core(ByteReader& r, Country* c) {
     if (!read_modifiers(r, &c->national_modifiers)) return false;
     if (!read_ids(r, &c->generals)) return false;
     if (!read_ids(r, &c->wings)) return false;
+    if (!read_ids(r, &c->fleets)) return false;
     if (!r.i32(&c->starting_factories)) return false;
     if (!read_resources(r, c->resources_produced)) return false;
     if (!read_resources(r, c->resources_consumed)) return false;
@@ -1731,6 +1938,12 @@ void serialize_subsystem(const Game& g, Subsystem s, ByteWriter* out) {
             write_store(w, g.world.armies, write_army);
             write_store(w, g.world.divisions, write_division);
             write_store(w, g.world.air_wings, write_air_wing);
+            // Naval area: ships, task forces, fleets and the invasion list.
+            write_store(w, g.world.ships, write_ship);
+            write_store(w, g.world.task_forces, write_task_force);
+            write_store(w, g.world.fleets, write_fleet);
+            w.u32(static_cast<uint32_t>(g.world.invasions.size()));
+            for (const NavalInvasion& inv : g.world.invasions) write_invasion(w, inv);
             break;
         }
 
@@ -1823,7 +2036,17 @@ bool deserialize_subsystem(Game& g, Subsystem s, ByteReader* in) {
             }
             if (!read_store(r, g.world.armies, read_army)) return false;
             if (!read_store(r, g.world.divisions, read_division)) return false;
-            return read_store(r, g.world.air_wings, read_air_wing);
+            if (!read_store(r, g.world.air_wings, read_air_wing)) return false;
+            if (!read_store(r, g.world.ships, read_ship)) return false;
+            if (!read_store(r, g.world.task_forces, read_task_force)) return false;
+            if (!read_store(r, g.world.fleets, read_fleet)) return false;
+            if (!read_count(r, 37, &n)) return false;  // invasion: 5 ids + double + tick + bool
+            g.world.invasions.clear();
+            g.world.invasions.resize(n);
+            for (uint32_t i = 0; i < n; ++i) {
+                if (!read_invasion(r, &g.world.invasions[i])) return false;
+            }
+            return true;
         }
 
         case Subsystem::Battles:

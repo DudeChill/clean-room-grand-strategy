@@ -76,6 +76,12 @@ struct EquipmentDef {
     double ground_attack = 0.0;  // damage dealt to land divisions (CAS, bombers)
     double agility = 0.0;
     double range = 0.0;  // strategic-region hops a wing can operate from its base
+    // Naval statistics (zero for non-ship categories).
+    double naval_attack = 0.0;    // guns: surface damage
+    double torpedo_attack = 0.0;  // torpedoes: damage against large hulls
+    double sub_detection = 0.0;   // anti-submarine capability
+    double detection = 0.0;       // how well this ship spots others
+    double visibility = 1.0;      // how easily it is spotted (higher = easier)
     double defense = 0.0;
     double breakthrough = 0.0;
     double armor = 0.0;

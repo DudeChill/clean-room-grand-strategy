@@ -17,13 +17,13 @@ Honest, evidence-based status lives in `docs/PARITY_MATRIX.md`. There is no
 percentage-complete figure anywhere in this repository: only per-feature states
 (`NOT_IMPLEMENTED` … `VALIDATED`) with the evidence that justifies each one.
 
-Current milestone: **0.6 Air warfare reached** (land warfare, economy, logistics,
-air) — naval warfare is the next blocker.
+Current milestone: **0.6 Air and Naval warfare reached** (land, economy, logistics,
+air, naval) — focus trees are the last remaining blocker.
 
 Measured on the shipped scenario (2,275 provinces, 332 states, 10 countries, air
-wings and ~80 divisions at start, all AI-controlled): `world audit: OK`, ~5.9 ms per
-simulated hour in a full year of AI war (484 divisions, 23 wars), and identical world
-hashes across repeated runs with the same seed. Re-run it yourself:
+wings, fleets and ~80 divisions at start, all AI-controlled): `world audit: OK`,
+~8.0 ms per simulated hour in a full year of AI war (336 divisions, 29 wars), and
+identical world hashes across repeated runs with the same seed. Re-run it yourself:
 
 ```sh
 build/game --days 3 --audit --summary --hashes
@@ -72,6 +72,10 @@ What you can do in the client:
   interception, CAS, strategic bombing, logistics strike or reconnaissance over a
   strategic region, watch air control per region, and see the air term in the battle
   damage breakdown.
+* **Navy**: form task forces from ships in your stockpile at a port, give them a
+  mission (patrol, strike force, convoy escort, convoy raiding, invasion support,
+  training), watch naval control per sea zone, and launch naval invasions from a port
+  onto a hostile coast.
 * **Diplomacy**: declare war, join a faction, enact laws; watch wars, factions and
   country strength.
 * **Details**: selecting a province shows the live battle breakdown (per division

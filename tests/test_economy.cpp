@@ -501,6 +501,57 @@ HOI_TEST(production_lines_release_factories_the_country_no_longer_controls) {
     CHECK(check_invariants(trickle.g).empty());
 }
 
+HOI_TEST(release_rule_respects_factory_pools) {
+    // Pools are independent: losing the dockyards retires the ship lines and leaves
+    // the military lines (and their factories) alone.
+    Fixture navy;
+    const CountryId nc = navy.add_country("DDD");
+    const EquipmentId nrifle = navy.equipment("rifle", "infantry_rifle", 4.0, 1.0);
+    const EquipmentId destroyer = navy.equipment("destroyer", "destroyer", 500.0, 20.0,
+                                                 EquipmentCategory::Ship);
+    const StateId nst = navy.add_state(nc, 20);
+    navy.add_province(nst, nc, nc, 0, 1000.0, 0.0);
+    navy.state(nst)->military_factories = 2;
+    navy.state(nst)->dockyards = 2;
+    const size_t rifle_line = navy.add_line(nc, nrifle, 2, 1.0, 1.0, false);
+    const size_t ship_line = navy.add_line(nc, destroyer, 2, 1.0, 1.0, false);
+    CHECK(check_invariants(navy.g).empty());
+
+    // A ship line is paid for out of dockyards, so its two factories yield dockyard
+    // IC (2.5 per factory per day) rather than military IC (4.5).
+    CHECK_NEAR(line_hourly_output(navy.g, *navy.country(nc), navy.line(nc, ship_line)),
+               2.0 * navy.g.content.constants.ic_per_dockyard / 24.0, 1e-12);
+
+    navy.state(nst)->dockyards = 0;  // the yards are lost, the army industry is not
+    navy.advance_industry(1);
+    CHECK_EQ(navy.line(nc, rifle_line).factories, 2);
+    CHECK_EQ(navy.line(nc, ship_line).factories, 0);
+    CHECK(navy.line(nc, ship_line).equipment.valid() == false);
+    CHECK_EQ(navy.g.events.size(), size_t{1});
+    CHECK_EQ(navy.g.events.front().kind, std::string("production"));
+    CHECK(check_invariants(navy.g).empty());
+
+    // The mirror case: losing the military factories retires the rifle line and
+    // leaves the ship line staffed.
+    Fixture navy2;
+    const CountryId n2c = navy2.add_country("EEE");
+    const EquipmentId n2rifle = navy2.equipment("rifle", "infantry_rifle", 4.0, 1.0);
+    const EquipmentId n2ship = navy2.equipment("destroyer", "destroyer", 500.0, 20.0,
+                                               EquipmentCategory::Ship);
+    const StateId n2st = navy2.add_state(n2c, 20);
+    navy2.add_province(n2st, n2c, n2c, 0, 1000.0, 0.0);
+    navy2.state(n2st)->military_factories = 1;
+    navy2.state(n2st)->dockyards = 1;
+    navy2.add_line(n2c, n2rifle, 1, 1.0, 1.0, false);
+    const size_t n2ship_line = navy2.add_line(n2c, n2ship, 1, 1.0, 1.0, false);
+    navy2.state(n2st)->military_factories = 0;
+    navy2.advance_industry(1);
+    CHECK_EQ(navy2.line(n2c, 0).factories, 0);
+    CHECK(navy2.line(n2c, 0).equipment.valid() == false);
+    CHECK_EQ(navy2.line(n2c, n2ship_line).factories, 1);
+    CHECK(check_invariants(navy2.g).empty());
+}
+
 // A switch driven through the command path must reach industry's retention rule
 // exactly once (the pending-switch queue in `ProductionLine::previous`).
 HOI_TEST(production_line_switch_through_command_applies_retention_once) {

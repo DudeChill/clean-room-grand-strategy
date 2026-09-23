@@ -79,7 +79,11 @@
         "production_lines",
         "aircraft_design",
         "fighter_airframe",
-        "cas_airframe"
+        "cas_airframe",
+        "convoy_design",
+        "destroyer_hull",
+        "cruiser_hull",
+        "capital_ship_hull"
       ],
       "production_lines": [
         {
@@ -101,6 +105,14 @@
         {
           "equipment": "armor_1",
           "factories": 3
+        },
+        {
+          "equipment": "destroyer_1",
+          "factories": 3
+        },
+        {
+          "equipment": "light_cruiser_1",
+          "factories": 2
         }
       ],
       "stockpile": {
@@ -109,6 +121,10 @@
         "artillery_1": 96,
         "motorized_1": 160,
         "armor_1": 80,
+        "destroyer_1": 12,
+        "light_cruiser_1": 6,
+        "battleship_1": 2,
+        "convoy_1": 200,
         "fighter_1": 100,
         "cas_1": 50
       },
@@ -213,7 +229,30 @@
           "province": "p2016",
           "planes": 50
         }
-      ]
+      ],
+      "navy": {
+        "fleet": "Veldorian Home Fleet",
+        "task_forces": [
+          {
+            "name": "1st Destroyer Flotilla",
+            "equipment": "destroyer_1",
+            "ships": 6,
+            "mission": "patrol"
+          },
+          {
+            "name": "1st Cruiser Squadron",
+            "equipment": "light_cruiser_1",
+            "ships": 3,
+            "mission": "strike_force"
+          },
+          {
+            "name": "Battle Squadron",
+            "equipment": "battleship_1",
+            "ships": 1,
+            "mission": "strike_force"
+          }
+        ]
+      }
     },
     {
       "tag": "KOR",
@@ -286,7 +325,10 @@
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "basic_naval_design",
+        "convoy_design",
+        "destroyer_hull",
+        "cruiser_hull",
+        "capital_ship_hull",
         "aircraft_design",
         "construction_engineering",
         "fighter_airframe",
@@ -295,11 +337,19 @@
       "production_lines": [
         {
           "equipment": "infantry_equipment_1",
-          "factories": 4
+          "factories": 5
         },
         {
           "equipment": "support_equipment_1",
           "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 1
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 2
         },
         {
           "equipment": "destroyer_1",
@@ -314,7 +364,9 @@
         "infantry_equipment_1": 640,
         "support_equipment_1": 192,
         "artillery_1": 96,
-        "destroyer_1": 40,
+        "destroyer_1": 12,
+        "light_cruiser_1": 6,
+        "battleship_1": 2,
         "convoy_1": 200,
         "fighter_1": 100,
         "cas_1": 50
@@ -405,7 +457,30 @@
           "province": "p122",
           "planes": 50
         }
-      ]
+      ],
+      "navy": {
+        "fleet": "Korethian Home Fleet",
+        "task_forces": [
+          {
+            "name": "1st Destroyer Flotilla",
+            "equipment": "destroyer_1",
+            "ships": 6,
+            "mission": "patrol"
+          },
+          {
+            "name": "1st Cruiser Squadron",
+            "equipment": "light_cruiser_1",
+            "ships": 3,
+            "mission": "strike_force"
+          },
+          {
+            "name": "Battle Squadron",
+            "equipment": "battleship_1",
+            "ships": 1,
+            "mission": "strike_force"
+          }
+        ]
+      }
     },
     {
       "tag": "THA",

@@ -37,6 +37,7 @@ player input / AI  ->  Command  ->  validation  ->  simulation phases
 | 5 | territory | `sim/territory.cpp` | control transfer, occupation, capitulation effects |
 | 6 | supply | `sim/supply.cpp` | supply network flow -> per-province and per-division supply |
 | 6b | air | `sim/air.cpp` | sorties, air combat, missions, losses, air control per region |
+| 6c | naval | `sim/navy.cpp`, `sim/invasion.cpp` | detection, engagements, missions, invasions, naval control |
 | 7 | industry | `sim/industry.cpp` | resources, production lines, construction, stockpile |
 | 8 | research | `sim/research.cpp` | research progress, tech effects |
 | 9 | politics | `sim/politics.cpp` | PP, laws, stability, war support, manpower |
@@ -212,6 +213,29 @@ air_support(province)     = CAS term (attackers only) + superiority term (both s
 become equipment demand in the same tick's industry step. Land combat reads the
 previous hour's air control (combat runs before air in the tick order) — that is
 intentional and documented at the call site.
+
+### 5.10 Naval
+
+```
+detection(tf)      = sum over ships of detection * (1 - enemy_visibility) * weather
+engagement         = both sides detect each other in the same sea zone, one documented
+                     RNG_COMBAT draw per pair
+positioning(side)  = screening (destroyers) + capital weight + carrier aircraft,
+                     modified by detection quality
+damage             = guns vs armour, torpedoes vs large hulls, carrier aircraft using
+                     the air model's attack values
+sinking            = strength 0 -> ship destroyed, crew lost
+retreat            = average task-force strength below a threshold -> return to port
+repair             = in port, strength recovers over time
+naval_control(region, c) = sum over c's task forces there of ship weight * mission
+                     weight, divided by the same total for all countries present
+```
+
+Ports also act as supply sources (see 5.6): a port contributes capacity scaled by its
+naval base level and its sea route, reduced by enemy naval control in that zone, and
+draws convoys from the owner's stockpile while it operates. Convoy raiding therefore
+starves an overseas theatre through the ordinary supply graph rather than through a
+special case.
 
 ## 6. Data formats
 

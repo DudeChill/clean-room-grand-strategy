@@ -44,6 +44,7 @@
 #include "sim/diplomacy.h"
 #include "sim/industry.h"
 #include "sim/map.h"
+#include "sim/navy.h"
 #include "sim/research.h"
 #include "sim/supply.h"
 #include "sim/units.h"
@@ -154,6 +155,29 @@ constexpr int kAirReservePlanes = 60;     // aircraft kept in the stockpile
 constexpr double kAirContestedThreshold = 1.0;  // enemy planes that make a region contested
 constexpr double kAirModelAirWeight = 1.0;   // air-to-air value of a model's stats
 constexpr double kAirModelGroundWeight = 0.5;  // ground-attack value of a model's stats
+
+// Naval (planned from the military layer, which owns the posture and front line the
+// naval plan depends on - exactly like the air layer above). Ships and convoys are
+// production planning too, but they draw on dockyards rather than military
+// factories, so the production layer keeps a separate dockyard budget for them.
+constexpr int kNavalMinTaskForceShips = 4;     // smallest task force worth forming
+constexpr int kNavalShipsPerTaskForce = 20;    // preferred task force size
+constexpr int kNavalMaxTaskForces = 8;         // task forces a country forms
+constexpr int kNavalEscortsPerForce = 8;       // escort hulls wanted per planned force
+constexpr int kNavalCapitalsPerForce = 2;      // capital hulls wanted per planned force
+constexpr double kNavalConvoyBaseline = 100.0;  // convoy stock kept for sea supply
+constexpr double kNavalConvoyWarMultiplier = 2.0;  // wartime sea-supply demand
+constexpr double kNavalInvasionControlThreshold = 0.5;  // control share needed to land
+constexpr int kNavalRangeHops = 3;             // sea zones a task force may work from port
+constexpr double kNavalDamagedStrength = 0.6;  // average strength that sends a force home
+constexpr int kNavalStageMovesPerRun = 4;      // divisions ordered to a port per run
+constexpr double kNavalContestedControl = 0.01;  // enemy share that makes a zone contested
+constexpr double kNavalModelEscortSubWeight = 2.0;   // escort: anti-submarine weight
+constexpr double kNavalModelEscortDetectWeight = 1.0;  // escort: spotting weight
+constexpr double kNavalModelEscortGunWeight = 0.25;  // escort: light guns
+constexpr double kNavalModelCapitalGunWeight = 1.0;  // capital: main battery
+constexpr double kNavalModelCapitalTorpWeight = 0.5;  // capital: torpedoes
+constexpr double kNavalModelCapitalArmorWeight = 0.5;  // capital: protection
 
 // Diplomacy.
 constexpr double kDipFactionThreat = 35.0;
@@ -1036,10 +1060,289 @@ double production_category_weight(EquipmentCategory c) {
     }
 }
 
-// Military factories build land and air equipment; ships and convoys come out of
-// dockyards, which this layer does not assign.
-bool factory_producible(EquipmentCategory c) {
-    return c != EquipmentCategory::Ship && c != EquipmentCategory::Convoy;
+// ------------------------------------------------------------------ navy ------
+//
+// Ship and convoy lines draw on dockyards; everything else on military factories
+// (`equipment_factory_pool`). The production layer therefore plans two pools, and
+// the naval layer below works from the same picture of what the country owns.
+
+enum class NavalRole : uint8_t { Escort, Capital };
+
+// Value of a hull for a role: escorts live on detection and anti-submarine work,
+// capitals on guns and protection.
+double naval_model_score(const EquipmentDef& d, NavalRole role) {
+    if (role == NavalRole::Escort) {
+        return d.sub_detection * kNavalModelEscortSubWeight +
+               d.detection * kNavalModelEscortDetectWeight + d.naval_attack * kNavalModelEscortGunWeight;
+    }
+    return d.naval_attack * kNavalModelCapitalGunWeight +
+           d.torpedo_attack * kNavalModelCapitalTorpWeight + d.armor * kNavalModelCapitalArmorWeight;
+}
+
+// Best ship model the country may actually build for a role (unlocked, not an
+// archetype). Ties keep the lower index.
+EquipmentId best_naval_model(const Game& g, CountryId country, NavalRole role) {
+    EquipmentId best;
+    double best_score = 0.0;
+    for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+        const EquipmentDef& d = g.content.equipment[i];
+        if (d.is_archetype || d.category != EquipmentCategory::Ship) continue;
+        if (!equipment_unlocked(g, country, EquipmentId(i))) continue;
+        const double s = naval_model_score(d, role);
+        if (!best.valid() || s > best_score) {
+            best = EquipmentId(i);
+            best_score = s;
+        }
+    }
+    return best;
+}
+
+// Newest unlocked convoy model (the transport hull convoys are built from).
+EquipmentId best_convoy_model(const Game& g, CountryId country) {
+    EquipmentId best;
+    int best_year = -1;
+    for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+        const EquipmentDef& d = g.content.equipment[i];
+        if (d.is_archetype || d.category != EquipmentCategory::Convoy) continue;
+        if (!equipment_unlocked(g, country, EquipmentId(i))) continue;
+        if (!best.valid() || d.year > best_year) {
+            best = EquipmentId(i);
+            best_year = d.year;
+        }
+    }
+    return best;
+}
+
+int ships_of_model(const World& w, CountryId country, EquipmentId equipment) {
+    int n = 0;
+    w.ships.for_each([&](ShipId, const Ship& s) {
+        if (s.country == country && s.equipment == equipment) ++n;
+    });
+    return n;
+}
+
+// Total Convoy-category stockpile, in convoy units. Convoys cover overseas supply
+// and are what a naval invasion embarks divisions on.
+double convoy_stock(const Country& c, const Content& content) {
+    double n = 0.0;
+    for (size_t i = 0; i < c.equipment_stockpile.size(); ++i) {
+        const EquipmentDef* def = content.equipment_def(EquipmentId(static_cast<uint32_t>(i)));
+        if (def && def->category == EquipmentCategory::Convoy) n += c.equipment_stockpile[i];
+    }
+    return n;
+}
+
+int usable_port_count(const Game& g, CountryId country) {
+    int n = 0;
+    g.world.provinces.for_each([&](ProvinceId pid, const Province& p) {
+        if (p.is_sea || !p.coastal) return;
+        if (is_usable_port(g, country, pid)) ++n;
+    });
+    return n;
+}
+
+// Ships the country bases at a port, so a new task force can be sized against the
+// base's free capacity.
+int ships_in_port(const World& w, CountryId country, ProvinceId port) {
+    int n = 0;
+    w.ships.for_each([&](ShipId, const Ship& s) {
+        if (s.country == country && s.port == port) ++n;
+    });
+    return n;
+}
+
+// Naval control of everyone hostile to `country` in a sea zone.
+double hostile_naval_control(const Game& g, CountryId country, RegionId region) {
+    double sum = 0.0;
+    g.world.countries.for_each([&](CountryId id, const Country& other) {
+        if (!other.alive || id == country) return;
+        if (!hostile_pair(g.world, country, id)) return;
+        const double share = naval_control_share(g, id, region);
+        if (std::isfinite(share) && share > 0.0) sum += share;
+    });
+    return sum;
+}
+
+// Best in-range sea zone holding hostile shipping, or `home` when none is. A task
+// force never works further than kNavalRangeHops sea zones from its port.
+RegionId pick_enemy_zone(const Game& g, CountryId country, RegionId home) {
+    if (!home.valid()) return RegionId{};
+    RegionId best = home;
+    double best_control = 0.0;
+    g.world.regions.for_each([&](RegionId rid, const Region& r) {
+        if (!r.is_sea) return;
+        const int hops = rid == home ? 0 : sea_region_distance(g, home, rid);
+        if (hops < 0 || hops > kNavalRangeHops) return;
+        const double control = hostile_naval_control(g, country, rid);
+        if (control <= best_control || control <= kNavalContestedControl) return;
+        best = rid;
+        best_control = control;
+    });
+    return best;
+}
+
+// An army that can actually embark: it owns divisions and one of them stands in a
+// usable port of the country. `origin` is that port, so the landing starts where the
+// troops are. Deterministic (ascending army and division ids).
+struct InvasionForce {
+    ArmyId army;
+    ProvinceId origin;
+    int divisions = 0;
+};
+
+InvasionForce pick_invasion_force(const Game& g, CountryId country) {
+    InvasionForce force;
+    std::vector<ArmyId> armies;
+    const Country* c = g.world.country(country);
+    if (!c) return force;
+    armies = c->armies;
+    std::sort(armies.begin(), armies.end());
+    for (ArmyId aid : armies) {
+        const Army* a = g.world.army(aid);
+        if (!a || a->divisions.empty()) continue;
+        std::vector<DivisionId> divs = a->divisions;
+        std::sort(divs.begin(), divs.end());
+        for (DivisionId did : divs) {
+            const Division* d = g.world.division(did);
+            if (!d || !d->location.valid()) continue;
+            if (!is_usable_port(g, country, d->location)) continue;
+            force.army = aid;
+            force.origin = d->location;
+            force.divisions = static_cast<int>(a->divisions.size());
+            return force;
+        }
+    }
+    return force;
+}
+
+// First (lowest-id) hostile coastal province reachable by sea from `origin`'s zone,
+// within task-force range. Writes the crossing zone and its distance; invalid when
+// there is no such coast.
+ProvinceId hostile_coast_from(const Game& g, CountryId country, ProvinceId origin,
+                              RegionId* out_crossing, int* out_hops) {
+    const RegionId home = adjacent_sea_region(g, origin);
+    if (!home.valid()) return ProvinceId{};
+    ProvinceId target;
+    g.world.provinces.for_each([&](ProvinceId pid, const Province& p) {
+        if (target.valid() || p.is_sea || !p.coastal) return;
+        if (!hostile_pair(g.world, country, p.controller)) return;
+        const RegionId zone = adjacent_sea_region(g, pid);
+        if (!zone.valid()) return;
+        const int hops = zone == home ? 0 : sea_region_distance(g, home, zone);
+        if (hops < 0 || hops > kNavalRangeHops) return;
+        target = pid;
+        if (out_crossing) *out_crossing = zone;
+        if (out_hops) *out_hops = hops;
+    });
+    return target;
+}
+
+// The army and port an invasion would use. `at_port` is false when the army still
+// has to march to `port`; the caller then stages it with MoveDivision orders. Two
+// global passes: an army already standing in a usable port always wins over one that
+// merely could reach a port, and both walks are in ascending id order.
+struct InvasionSetup {
+    ArmyId army;
+    ProvinceId port;
+    RegionId crossing;
+    int hops = 0;        // sea hops from the port to the target coast
+    int divisions = 0;
+    bool at_port = false;
+};
+
+InvasionSetup plan_invasion(const Game& g, CountryId country) {
+    InvasionSetup setup;
+    const World& w = g.world;
+    const Country* c = w.country(country);
+    if (!c) return setup;
+    std::vector<ArmyId> armies = c->armies;
+    std::sort(armies.begin(), armies.end());
+
+    auto army_invading = [&](ArmyId aid) {
+        for (const NavalInvasion& inv : w.invasions) {
+            if (inv.army == aid) return true;
+        }
+        return false;
+    };
+    auto living_divisions = [&](const Army& a) {
+        std::vector<DivisionId> divs;
+        for (DivisionId did : a.divisions) {
+            const Division* d = w.division(did);
+            if (d && d->location.valid()) divs.push_back(did);
+        }
+        std::sort(divs.begin(), divs.end());
+        return divs;
+    };
+
+    // Pass A: a division already in a usable port with a hostile coast across.
+    for (ArmyId aid : armies) {
+        const Army* a = w.army(aid);
+        if (!a || a->divisions.empty() || army_invading(aid)) continue;
+        const std::vector<DivisionId> divs = living_divisions(*a);
+        for (DivisionId did : divs) {
+            const Division* d = w.division(did);
+            if (!d || !is_usable_port(g, country, d->location)) continue;
+            RegionId crossing;
+            int hops = 0;
+            if (!hostile_coast_from(g, country, d->location, &crossing, &hops).valid()) continue;
+            setup.army = aid;
+            setup.port = d->location;
+            setup.crossing = crossing;
+            setup.hops = hops;
+            setup.divisions = static_cast<int>(divs.size());
+            setup.at_port = true;
+            return setup;
+        }
+    }
+
+    // Pass B: no army is at a port, so pick the first army that can march to one. The
+    // port with a hostile coast and a controlled land route from every division wins;
+    // ties keep the lowest port id, and the route length only breaks ties.
+    for (ArmyId aid : armies) {
+        const Army* a = w.army(aid);
+        if (!a || a->divisions.empty() || army_invading(aid)) continue;
+        const std::vector<DivisionId> divs = living_divisions(*a);
+        if (divs.empty()) continue;
+        ProvinceId stage_port;
+        RegionId stage_crossing;
+        int stage_hops = 0;
+        int best_route = -1;
+        w.provinces.for_each([&](ProvinceId pid, const Province& p) {
+            if (stage_port.valid() || p.is_sea || !p.coastal) return;
+            if (!is_usable_port(g, country, pid)) return;
+            RegionId crossing;
+            int hops = 0;
+            if (!hostile_coast_from(g, country, pid, &crossing, &hops).valid()) return;
+            int route = 0;
+            for (DivisionId did : divs) {
+                const Division* d = w.division(did);
+                if (!d || !d->location.valid()) return;
+                if (d->location == pid) continue;
+                PathRequest req;
+                req.country = country;
+                req.allow_hostile = false;
+                req.require_controlled = true;
+                const std::vector<ProvinceId> path = find_path(w, d->location, pid, req);
+                if (path.empty()) return;
+                route += static_cast<int>(path.size());
+            }
+            if (best_route >= 0 && route >= best_route) return;
+            best_route = route;
+            stage_port = pid;
+            stage_crossing = crossing;
+            stage_hops = hops;
+        });
+        if (stage_port.valid()) {
+            setup.army = aid;
+            setup.port = stage_port;
+            setup.crossing = stage_crossing;
+            setup.hops = stage_hops;
+            setup.divisions = static_cast<int>(divs.size());
+            setup.at_port = false;
+            return setup;
+        }
+    }
+    return setup;
 }
 
 // Combat value of an airframe. Fighters live on air attack and agility, CAS on
@@ -1081,6 +1384,156 @@ int factories_of_line(const Country& c, EquipmentId eq) {
     return 0;
 }
 
+// Assigns one factory pool's production targets: trims the target list to the line
+// budget, splits the factories with the largest-remainder method, then emits the
+// removals, reductions and raises so every intermediate state stays inside the
+// budget the command system enforces. `budget` is the controlled factory count of
+// `pool` (military factories for land/air, dockyards for ships and convoys); a
+// non-positive budget releases every line of that pool.
+void emit_production_pool(Game& g, Country& c, std::vector<ProdTarget> targets, int budget,
+                          FactoryPool pool) {
+    if (budget <= 0) {
+        // No factories of this pool left (occupied or destroyed industry): release
+        // the pool's assignments rather than keep factories the country no longer
+        // controls.
+        for (const ProductionLine& line : c.lines) {
+            if (line.factories <= 0) continue;
+            if (line_factory_pool(g.content, line) != pool) continue;
+            Command cmd = make_command(CommandType::RemoveProductionLine, c.id);
+            cmd.equipment = line.equipment;
+            if (!push_if_valid(g, std::move(cmd))) continue;
+            record_reason(g, AiLayer::Production, "release_line", 5.0,
+                          {{"factories_freed", static_cast<double>(line.factories)},
+                           {"controlled_factories", static_cast<double>(budget)}});
+        }
+        return;
+    }
+    if (targets.empty()) return;
+
+    // One line per distinct need, but never more lines than the pool has factories
+    // to fill them.
+    std::sort(targets.begin(), targets.end(), [](const ProdTarget& a, const ProdTarget& b) {
+        if (a.score != b.score) return a.score > b.score;
+        return a.equipment < b.equipment;
+    });
+    const int line_count = std::max(
+        kProdMinLines, std::min({kProdMaxLines, static_cast<int>(targets.size()), budget}));
+    targets.resize(static_cast<size_t>(line_count));
+
+    // Every chosen model gets one factory first (line_count <= budget guarantees
+    // they all fit), then the remainder is split by need with the largest-remainder
+    // method. The split is deterministic (ties fall to the lower index) and, unlike
+    // a plain floor with a one-factory minimum, never asks for more factories than
+    // the pool owns.
+    double need_sum = 0.0;
+    for (const ProdTarget& t : targets) need_sum += t.need;
+    std::vector<int> want(targets.size(), 0);
+    for (size_t i = 0; i < targets.size(); ++i) want[i] = 1;
+    const int leftover = budget - static_cast<int>(targets.size());
+    if (leftover > 0) {
+        std::vector<double> frac(targets.size(), 0.0);
+        int given = 0;
+        for (size_t i = 0; i < targets.size(); ++i) {
+            const double exact =
+                static_cast<double>(leftover) * safe_div(targets[i].need, need_sum);
+            const int base = static_cast<int>(std::floor(exact));
+            want[i] += base;
+            given += base;
+            frac[i] = exact - static_cast<double>(base);
+        }
+        for (int rem = leftover - given; rem > 0; --rem) {
+            size_t pick = 0;
+            for (size_t i = 1; i < frac.size(); ++i) {
+                if (frac[i] > frac[pick]) pick = i;
+            }
+            want[pick] += 1;
+            frac[pick] = -1.0;  // never picked twice in one pass
+        }
+    }
+
+    // Removals first, then reductions, then raises. Only this pool's lines are
+    // touched, so the two pools never spend each other's factories.
+    int assigned_live = 0;
+    for (const ProductionLine& line : c.lines) {
+        if (line.factories > 0 && line_factory_pool(g.content, line) == pool) {
+            assigned_live += line.factories;
+        }
+    }
+
+    struct Op {
+        bool remove = false;
+        EquipmentId equipment;
+        int factories = 0;
+        double score = 0.0;
+        AiReason reason;
+    };
+    std::vector<Op> ops;
+
+    for (const ProductionLine& line : c.lines) {
+        if (line.factories <= 0) continue;  // retired line: nothing left to free
+        if (line_factory_pool(g.content, line) != pool) continue;
+        bool kept = false;
+        for (const ProdTarget& t : targets) {
+            if (t.equipment == line.equipment) kept = true;
+        }
+        if (kept) continue;
+        Op op;
+        op.remove = true;
+        op.equipment = line.equipment;
+        op.score = 10.0;
+        const EquipmentDef* def = g.content.equipment_def(line.equipment);
+        op.reason.what = "drop_line_" + (def ? def->key : std::string("unknown"));
+        op.reason.score = op.score;
+        op.reason.factors = {{"factories_freed", static_cast<double>(line.factories)}};
+        ops.push_back(std::move(op));
+    }
+
+    for (size_t i = 0; i < targets.size(); ++i) {
+        const int current = factories_of_line(c, targets[i].equipment);
+        if (current == want[i]) continue;
+        Op op;
+        op.remove = false;
+        op.equipment = targets[i].equipment;
+        op.factories = want[i];
+        op.score = targets[i].score;
+        const EquipmentDef* def = g.content.equipment_def(targets[i].equipment);
+        op.reason.what = std::string(current == 0 ? "new_line_" : "rebalance_line_") +
+                         (def ? def->key : std::string("unknown"));
+        op.reason.score = op.score;
+        op.reason.factors = {{"need", targets[i].need},
+                             {"factories_before", static_cast<double>(current)},
+                             {"factories_after", static_cast<double>(want[i])}};
+        ops.push_back(std::move(op));
+    }
+
+    std::sort(ops.begin(), ops.end(), [&](const Op& a, const Op& b) {
+        const int a_delta = a.remove ? -1 : (a.factories - factories_of_line(c, a.equipment));
+        const int b_delta = b.remove ? -1 : (b.factories - factories_of_line(c, b.equipment));
+        if (a_delta != b_delta) return a_delta < b_delta;
+        return a.equipment < b.equipment;
+    });
+
+    for (const Op& op : ops) {
+        if (op.remove) {
+            Command cmd = make_command(CommandType::RemoveProductionLine, c.id);
+            cmd.equipment = op.equipment;
+            if (!push_if_valid(g, std::move(cmd))) continue;
+            assigned_live -= factories_of_line(c, op.equipment);
+            record_reason(g, AiLayer::Production, op.reason);
+            continue;
+        }
+        const int current = factories_of_line(c, op.equipment);
+        const int next = assigned_live - current + op.factories;
+        if (next > budget) continue;  // keep the batch inside the pool's budget
+        Command cmd = make_command(CommandType::SetProductionLine, c.id);
+        cmd.equipment = op.equipment;
+        cmd.value = op.factories;
+        if (!push_if_valid(g, std::move(cmd))) continue;
+        assigned_live = next;
+        record_reason(g, AiLayer::Production, op.reason);
+    }
+}
+
 }  // namespace
 
 void ai_production_layer(Game& g, Country& c) {
@@ -1088,10 +1541,10 @@ void ai_production_layer(Game& g, Country& c) {
     if (!c.alive) return;
     int civ = 0, mil = 0, dock = 0;
     count_factories(w, c.id, &civ, &mil, &dock);
-    if (mil <= 0) {
-        // No military factories left (occupied or destroyed industry): every line has
-        // to be released, otherwise the country keeps factories assigned that it no
-        // longer controls.
+    if (mil <= 0 && dock <= 0) {
+        // No factories of either pool left (occupied or destroyed industry): every
+        // line has to be released, otherwise the country keeps factories assigned
+        // that it no longer controls.
         for (const ProductionLine& line : c.lines) {
             if (line.factories <= 0) continue;
             Command cmd = make_command(CommandType::RemoveProductionLine, c.id);
@@ -1099,7 +1552,7 @@ void ai_production_layer(Game& g, Country& c) {
             if (!push_if_valid(g, std::move(cmd))) continue;
             record_reason(g, AiLayer::Production, "release_line", 5.0,
                           {{"factories_freed", static_cast<double>(line.factories)},
-                           {"controlled_factories", static_cast<double>(mil)}});
+                           {"controlled_factories", 0.0}});
         }
         return;
     }
@@ -1150,6 +1603,57 @@ void ai_production_layer(Game& g, Country& c) {
         }
     }
 
+    // Naval demand. Division templates never mention ships or convoys and
+    // compute_equipment_demand only walks divisions, so without an explicit term no
+    // hull could ever reach a dockyard line. The desired task force composition sets
+    // the escort and capital need; convoys cover overseas supply, and only a planned
+    // invasion asks for the extra lift its divisions will need.
+    {
+        bool has_port = false;
+        w.provinces.for_each([&](ProvinceId pid, const Province& p) {
+            if (has_port || p.is_sea || !p.coastal) return;
+            if (is_usable_port(g, c.id, pid)) has_port = true;
+        });
+        if (has_port) {
+            int task_forces = 0;
+            w.task_forces.for_each([&](TaskForceId, const TaskForce& tf) {
+                if (tf.country == c.id) ++task_forces;
+            });
+            int planned =
+                clamp(std::max(usable_port_count(g, c.id), task_forces + 1), 1, kNavalMaxTaskForces);
+            if (at_war_state(c)) planned = std::min(kNavalMaxTaskForces, planned + 1);
+
+            auto hull_need = [&](NavalRole role, int per_force) {
+                const EquipmentId model = best_naval_model(g, c.id, role);
+                if (!model.valid() || model.v >= need.size()) return;
+                const double have =
+                    model.v < c.equipment_stockpile.size() ? c.equipment_stockpile[model.v] : 0.0;
+                const double want = static_cast<double>(planned) * static_cast<double>(per_force);
+                const double missing =
+                    want - static_cast<double>(ships_of_model(w, c.id, model)) - have;
+                if (missing > 0.0) need[model.v] += missing;
+            };
+            hull_need(NavalRole::Escort, kNavalEscortsPerForce);
+            hull_need(NavalRole::Capital, kNavalCapitalsPerForce);
+
+            const EquipmentId convoy = best_convoy_model(g, c.id);
+            if (convoy.valid() && convoy.v < need.size()) {
+                const double have =
+                    convoy.v < c.equipment_stockpile.size() ? c.equipment_stockpile[convoy.v] : 0.0;
+                double want =
+                    kNavalConvoyBaseline * (at_war_state(c) ? kNavalConvoyWarMultiplier : 1.0);
+                const InvasionForce force = pick_invasion_force(g, c.id);
+                if (at_war_state(c) && force.army.valid() &&
+                    hostile_coast_from(g, c.id, force.origin, nullptr, nullptr).valid()) {
+                    want += g.content.constants.naval_invasion_convoys_per_division *
+                            static_cast<double>(force.divisions);
+                }
+                const double missing = want - have;
+                if (missing > 0.0) need[convoy.v] += missing;
+            }
+        }
+    }
+
     // ---- pick the models worth a line, upgrading to the best known model ----
     const int year = g.world.date.year;
     const std::vector<char> template_mask =
@@ -1158,7 +1662,7 @@ void ai_production_layer(Game& g, Country& c) {
     for (size_t i = 0; i < g.content.equipment.size(); ++i) {
         if (need[i] <= 0.0) continue;
         const EquipmentDef& def = g.content.equipment[i];
-        if (def.is_archetype || !factory_producible(def.category)) continue;
+        if (def.is_archetype) continue;
 
         // Upgrade within the archetype when the new model is measurably better and
         // the efficiency thrown away by switching is smaller than the gain. The
@@ -1169,7 +1673,10 @@ void ai_production_layer(Game& g, Country& c) {
         size_t best_index = i;
         for (size_t j = 0; j < g.content.equipment.size(); ++j) {
             const EquipmentDef& other = g.content.equipment[j];
-            if (other.is_archetype || other.archetype != def.archetype) continue;
+            if (other.is_archetype || other.category != def.category ||
+                other.archetype != def.archetype) {
+                continue;
+            }
             if (other.year > year) continue;
             if (equipment_stat_score(other) > equipment_stat_score(*best)) {
                 best = &other;
@@ -1203,9 +1710,22 @@ void ai_production_layer(Game& g, Country& c) {
         targets.push_back(t);
     }
 
+    // Split the plan across the two factory pools: ships and convoys draw on
+    // dockyards, land and air equipment on military factories. Each pool is planned
+    // and budgeted independently so neither can spend the other's factories.
+    std::vector<ProdTarget> military_targets;
+    std::vector<ProdTarget> dockyard_targets;
+    for (const ProdTarget& t : targets) {
+        if (equipment_factory_pool(g.content, t.equipment) == FactoryPool::Dockyard) {
+            dockyard_targets.push_back(t);
+        } else {
+            military_targets.push_back(t);
+        }
+    }
+
     // No demand at all (fresh country, empty templates): still keep one line on the
     // best unlocked infantry model so the country is not caught without a rifle.
-    if (targets.empty()) {
+    if (military_targets.empty()) {
         EquipmentId fallback;
         double fallback_score = -1.0;
         for (size_t i = 0; i < g.content.equipment.size(); ++i) {
@@ -1217,136 +1737,11 @@ void ai_production_layer(Game& g, Country& c) {
                 fallback = EquipmentId(i);
             }
         }
-        if (!fallback.valid()) return;
-        targets.push_back(ProdTarget{fallback, 1.0, 1.0});
+        if (fallback.valid()) military_targets.push_back(ProdTarget{fallback, 1.0, 1.0});
     }
 
-    std::sort(targets.begin(), targets.end(), [](const ProdTarget& a, const ProdTarget& b) {
-        if (a.score != b.score) return a.score > b.score;
-        return a.equipment < b.equipment;
-    });
-
-    // One line per distinct need, but never more lines than the country has
-    // military factories to fill them.
-    const int line_count =
-        std::max(kProdMinLines, std::min({kProdMaxLines, static_cast<int>(targets.size()), mil}));
-    targets.resize(static_cast<size_t>(line_count));
-
-    // ---- factories proportional to need -------------------------------------
-    // Every chosen model gets one factory first (line_count <= mil guarantees they
-    // all fit), then the remainder is split by need with the largest-remainder
-    // method. The split is deterministic (ties fall to the lower index) and, unlike
-    // a plain floor with a one-factory minimum, never asks for more factories than
-    // the country owns - which would silently drop the highest-need line when the
-    // batch was applied.
-    double need_sum = 0.0;
-    for (const ProdTarget& t : targets) need_sum += t.need;
-    std::vector<int> want(targets.size(), 0);
-    for (size_t i = 0; i < targets.size(); ++i) want[i] = 1;
-    const int leftover = mil - static_cast<int>(targets.size());
-    if (leftover > 0) {
-        std::vector<double> frac(targets.size(), 0.0);
-        int given = 0;
-        for (size_t i = 0; i < targets.size(); ++i) {
-            const double exact =
-                static_cast<double>(leftover) * safe_div(targets[i].need, need_sum);
-            const int base = static_cast<int>(std::floor(exact));
-            want[i] += base;
-            given += base;
-            frac[i] = exact - static_cast<double>(base);
-        }
-        for (int rem = leftover - given; rem > 0; --rem) {
-            size_t pick = 0;
-            for (size_t i = 1; i < frac.size(); ++i) {
-                if (frac[i] > frac[pick]) pick = i;
-            }
-            want[pick] += 1;
-            frac[pick] = -1.0;  // never picked twice in one pass
-        }
-    }
-
-    // ---- turn the plan into commands ---------------------------------------
-    // Removals first, then reductions, then raises: every intermediate state stays
-    // inside the factory budget the command system checks.
-    const int assigned_before = [&] {
-        int total = 0;
-        for (const ProductionLine& line : c.lines) total += line.factories;
-        return total;
-    }();
-    int assigned_live = assigned_before;
-
-    struct Op {
-        bool remove = false;
-        EquipmentId equipment;
-        int factories = 0;
-        double score = 0.0;
-        AiReason reason;
-    };
-    std::vector<Op> ops;
-
-    for (const ProductionLine& line : c.lines) {
-        if (line.factories <= 0) continue;  // retired line: nothing left to free
-        bool kept = false;
-        for (const ProdTarget& t : targets) {
-            if (t.equipment == line.equipment) kept = true;
-        }
-        if (!kept) {
-            Op op;
-            op.remove = true;
-            op.equipment = line.equipment;
-            op.score = 10.0;
-            const EquipmentDef* def = g.content.equipment_def(line.equipment);
-            op.reason.what = "drop_line_" + (def ? def->key : std::string("unknown"));
-            op.reason.score = op.score;
-            op.reason.factors = {{"factories_freed", static_cast<double>(line.factories)}};
-            ops.push_back(std::move(op));
-        }
-    }
-
-    for (size_t i = 0; i < targets.size(); ++i) {
-        const int current = factories_of_line(c, targets[i].equipment);
-        if (current == want[i]) continue;
-        Op op;
-        op.remove = false;
-        op.equipment = targets[i].equipment;
-        op.factories = want[i];
-        op.score = targets[i].score;
-        const EquipmentDef* def = g.content.equipment_def(targets[i].equipment);
-        op.reason.what = std::string(current == 0 ? "new_line_" : "rebalance_line_") +
-                         (def ? def->key : std::string("unknown"));
-        op.reason.score = op.score;
-        op.reason.factors = {{"need", targets[i].need},
-                             {"factories_before", static_cast<double>(current)},
-                             {"factories_after", static_cast<double>(want[i])}};
-        ops.push_back(std::move(op));
-    }
-
-    std::sort(ops.begin(), ops.end(), [&](const Op& a, const Op& b) {
-        const int a_delta = a.remove ? -1 : (a.factories - factories_of_line(c, a.equipment));
-        const int b_delta = b.remove ? -1 : (b.factories - factories_of_line(c, b.equipment));
-        if (a_delta != b_delta) return a_delta < b_delta;
-        return a.equipment < b.equipment;
-    });
-
-    for (const Op& op : ops) {
-        if (op.remove) {
-            Command cmd = make_command(CommandType::RemoveProductionLine, c.id);
-            cmd.equipment = op.equipment;
-            if (!push_if_valid(g, std::move(cmd))) continue;
-            assigned_live -= factories_of_line(c, op.equipment);
-            record_reason(g, AiLayer::Production, op.reason);
-            continue;
-        }
-        const int current = factories_of_line(c, op.equipment);
-        const int next = assigned_live - current + op.factories;
-        if (next > mil) continue;  // keep the batch inside the factory budget
-        Command cmd = make_command(CommandType::SetProductionLine, c.id);
-        cmd.equipment = op.equipment;
-        cmd.value = op.factories;
-        if (!push_if_valid(g, std::move(cmd))) continue;
-        assigned_live = next;
-        record_reason(g, AiLayer::Production, op.reason);
-    }
+    emit_production_pool(g, c, std::move(military_targets), mil, FactoryPool::Military);
+    emit_production_pool(g, c, std::move(dockyard_targets), dock, FactoryPool::Dockyard);
 }
 
 // ============================================================== military =====
@@ -1603,6 +1998,246 @@ void ai_air_layer(Game& g, Country& c) {
                    {"stockpile", stock},
                    {"free_capacity", static_cast<double>(free)},
                    {"war", war ? 1.0 : 0.0}});
+}
+
+// Naval plan, run from the military layer exactly like the air layer above: it
+// needs the posture the army sets and it acts through the same command queue. Every
+// naval decision - fleet creation, task force formation, mission assignment and the
+// invasion decision - leaves an AiReason with its numeric factors in the military
+// layer's log.
+//
+// Ships are entities only once a task force exists, so the path that puts hulls in a
+// port is: the production layer opens a dockyard line for the model, industry builds
+// it into Country::equipment_stockpile, and this layer issues CreateTaskForce, whose
+// `form_task_force` draws those stockpiled hulls into a task force based at a usable
+// port. That is the only path by which an AI ship reaches the world.
+void ai_naval_layer(Game& g, Country& c) {
+    const World& w = g.world;
+    if (!c.alive) return;
+
+    const bool war = at_war_state(c);
+    const uint8_t posture = posture_of(g.ai, c.id);
+
+    int own_ships = 0;
+    w.ships.for_each([&](ShipId, const Ship& s) {
+        if (s.country == c.id) ++own_ships;
+    });
+
+    // (a) administrative fleet. `form_task_force` can create one itself, but a
+    // country that means to operate hulls still wants a roster for them.
+    const bool fleet_ready =
+        !c.fleets.empty() || pending_commands(g, CommandType::CreateFleet, c.id) > 0;
+    if (!fleet_ready && (usable_port_count(g, c.id) > 0 || own_ships > 0)) {
+        Command cmd = make_command(CommandType::CreateFleet, c.id);
+        cmd.text = c.tag + " Fleet";
+        if (push_if_valid(g, std::move(cmd))) {
+            record_reason(g, AiLayer::Military, "create_fleet", own_ships > 0 ? 25.0 : 30.0,
+                          {{"ships", static_cast<double>(own_ships)},
+                           {"ports", static_cast<double>(usable_port_count(g, c.id))}});
+        }
+    }
+
+    // (b) form a task force from the hull stockpile. The model with more hulls
+    // waiting wins, so escort and capital production both reach the water.
+    int task_forces = 0;
+    w.task_forces.for_each([&](TaskForceId, const TaskForce& tf) {
+        if (tf.country == c.id) ++task_forces;
+    });
+    const int pending_tf = pending_commands(g, CommandType::CreateTaskForce, c.id);
+    if (task_forces + pending_tf < kNavalMaxTaskForces) {
+        const EquipmentId escort = best_naval_model(g, c.id, NavalRole::Escort);
+        const EquipmentId capital = best_naval_model(g, c.id, NavalRole::Capital);
+        auto stock_of = [&](EquipmentId m) {
+            return m.valid() && m.v < c.equipment_stockpile.size() ? c.equipment_stockpile[m.v] : 0.0;
+        };
+        EquipmentId model = escort;
+        if (capital.valid() && capital != escort && stock_of(capital) > stock_of(escort)) {
+            model = capital;
+        }
+        const double stock = stock_of(model);
+        if (model.valid() && stock >= static_cast<double>(kNavalMinTaskForceShips)) {
+            // The usable port with the most free berths takes the new force, so it
+            // always fits inside the base capacity the command system checks.
+            ProvinceId build_port;
+            int free_berths = 0;
+            w.provinces.for_each([&](ProvinceId pid, const Province& p) {
+                if (p.is_sea || !p.coastal) return;
+                if (!is_usable_port(g, c.id, pid)) return;
+                const int cap = naval_base_capacity(g, pid) - ships_in_port(w, c.id, pid);
+                if (cap <= free_berths) return;  // strictly better wins; ties keep the lower id
+                build_port = pid;
+                free_berths = cap;
+            });
+            if (build_port.valid() && free_berths >= kNavalMinTaskForceShips) {
+                const int size = clamp(
+                    std::min({kNavalShipsPerTaskForce, free_berths, static_cast<int>(stock)}),
+                    kNavalMinTaskForceShips, 40);
+                if (size >= kNavalMinTaskForceShips) {
+                    Command cmd = make_command(CommandType::CreateTaskForce, c.id);
+                    cmd.province = build_port;
+                    cmd.equipment = model;
+                    cmd.value = size;
+                    cmd.text = c.tag + " TF " + std::to_string(task_forces + pending_tf + 1);
+                    if (push_if_valid(g, std::move(cmd))) {
+                        record_reason(g, AiLayer::Military, "form_task_force", 35.0,
+                                      {{"stockpile", stock},
+                                       {"free_capacity", static_cast<double>(free_berths)},
+                                       {"task_forces", static_cast<double>(task_forces)},
+                                       {"war", war ? 1.0 : 0.0}});
+                    }
+                }
+            }
+        }
+    }
+
+    // (c) a hull the country owns but that no task force has taken in joins one, so
+    // the fleet roster always accounts for the ships on the map.
+    bool assigned_one = false;
+    w.ships.for_each([&](ShipId sid, const Ship& s) {
+        if (assigned_one || s.country != c.id || s.task_force.valid()) return;
+        TaskForceId host;
+        w.task_forces.for_each([&](TaskForceId tfd, const TaskForce& tf) {
+            if (host.valid() || tf.country != c.id) return;
+            if (static_cast<int>(tf.ships.size()) >= kNavalShipsPerTaskForce) return;
+            host = tfd;
+        });
+        if (!host.valid()) return;
+        Command cmd = make_command(CommandType::AssignShipToTaskForce, c.id);
+        cmd.ship_id = sid;
+        cmd.task_force = host;
+        if (!push_if_valid(g, std::move(cmd))) return;
+        assigned_one = true;
+        record_reason(g, AiLayer::Military, "assign_ship", 12.0,
+                      {{"ships", static_cast<double>(own_ships)}});
+    });
+
+    // (d) missions. A damaged force stands down and goes home; a landing of our own
+    // is supported first; otherwise posture and the sea-supply dependency pick
+    // between patrol, escort duty, the strike force and the raiders.
+    RegionId invasion_zone;
+    bool landing = false;
+    for (const NavalInvasion& inv : w.invasions) {
+        if (inv.country != c.id || inv.landed) continue;
+        invasion_zone = inv.sea_region;
+        landing = true;
+        break;
+    }
+    bool has_port = false;
+    w.provinces.for_each([&](ProvinceId pid, const Province& p) {
+        if (has_port || p.is_sea || !p.coastal) return;
+        if (is_usable_port(g, c.id, pid)) has_port = true;
+    });
+    const bool sea_supply = has_port && (war || [&] {
+        const ProvinceId cap = capital_province(w, c.id);
+        const Province* cp = w.province(cap);
+        const RegionId home_region = cp ? cp->region : RegionId{};
+        bool overseas = false;
+        w.provinces.for_each([&](ProvinceId, const Province& p) {
+            if (overseas || p.is_sea || p.controller != c.id) return;
+            if (p.region != home_region) overseas = true;
+        });
+        return overseas;
+    }());
+
+    w.task_forces.for_each([&](TaskForceId tfd, const TaskForce& tf) {
+        if (tf.country != c.id) return;
+        const RegionId home = adjacent_sea_region(g, tf.port);
+        if (!home.valid()) return;
+
+        int hulls = 0;
+        double strength_sum = 0.0;
+        for (ShipId sid : tf.ships) {
+            const Ship* s = w.ship(sid);
+            if (!s) continue;
+            strength_sum += clamp01(s->strength);
+            ++hulls;
+        }
+        const double strength = hulls > 0 ? clamp01(strength_sum / static_cast<double>(hulls)) : 1.0;
+
+        const TaskForceStats stats = task_force_stats(g, tfd);
+        const bool raider =
+            stats.torpedo_attack > stats.naval_attack && stats.torpedo_attack > 0.0;
+
+        NavalMission desired = NavalMission::None;
+        const char* reason_name = "return_to_port";
+        RegionId target = home;
+        if (strength < kNavalDamagedStrength) {
+            desired = NavalMission::None;  // the naval phase sends a stood-down force home
+            reason_name = "return_to_port";
+        } else if (landing && invasion_zone.valid()) {
+            desired = NavalMission::InvasionSupport;
+            reason_name = "invasion_support";
+            target = invasion_zone;
+        } else if (!war) {
+            desired = sea_supply ? NavalMission::ConvoyEscort : NavalMission::Patrol;
+            reason_name = sea_supply ? "convoy_escort" : "patrol";
+        } else {
+            const RegionId enemy_zone = pick_enemy_zone(g, c.id, home);
+            const bool contested = enemy_zone != home ||
+                                   hostile_naval_control(g, c.id, home) > kNavalContestedControl;
+            if (posture == 2 && contested) {
+                desired = raider ? NavalMission::ConvoyRaid : NavalMission::StrikeForce;
+                reason_name = raider ? "convoy_raid" : "strike_force";
+                target = enemy_zone;
+            } else if (posture == 2) {
+                desired = NavalMission::StrikeForce;
+                reason_name = "strike_force";
+            } else {
+                desired = sea_supply ? NavalMission::ConvoyEscort : NavalMission::Patrol;
+                reason_name = sea_supply ? "convoy_escort" : "patrol";
+            }
+        }
+        if (!target.valid()) return;
+        if (tf.mission == desired && tf.sea_region == target) return;
+
+        Command cmd = make_command(CommandType::SetNavalMission, c.id);
+        cmd.task_force = tfd;
+        cmd.region = target;
+        cmd.value = static_cast<int32_t>(desired);
+        if (!push_if_valid(g, std::move(cmd))) return;
+        record_reason(g, AiLayer::Military, reason_name, 20.0 + strength * 20.0,
+                      {{"ships", static_cast<double>(hulls)},
+                       {"avg_strength", strength},
+                       {"enemy_control", hostile_naval_control(g, c.id, home)},
+                       {"posture", static_cast<double>(posture)},
+                       {"war", war ? 1.0 : 0.0}});
+    });
+
+    // (e) invasion. Only start one when the country has transports, naval control in
+    // the crossing zone, and a hostile coast its troops can embark for; record the
+    // decision with every factor.
+    if (has_port && war && !landing) {
+        const InvasionForce force = pick_invasion_force(g, c.id);
+        if (force.army.valid()) {
+            RegionId crossing;
+            int hops = 0;
+            const ProvinceId target = hostile_coast_from(g, c.id, force.origin, &crossing, &hops);
+            if (target.valid() && crossing.valid()) {
+                const double control = naval_control_share(g, c.id, crossing);
+                const double enemy = hostile_naval_control(g, c.id, crossing);
+                const double convoys = convoy_stock(c, g.content);
+                const double needed = g.content.constants.naval_invasion_convoys_per_division *
+                                      static_cast<double>(force.divisions);
+                if (control >= kNavalInvasionControlThreshold && control > enemy &&
+                    convoys >= needed) {
+                    Command cmd = make_command(CommandType::LaunchNavalInvasion, c.id);
+                    cmd.army = force.army;
+                    cmd.province = force.origin;
+                    cmd.province_b = target;
+                    if (push_if_valid(g, std::move(cmd))) {
+                        record_reason(g, AiLayer::Military, "launch_invasion",
+                                      50.0 + control * 50.0,
+                                      {{"naval_control", control},
+                                       {"enemy_control", enemy},
+                                       {"convoys", convoys},
+                                       {"convoys_needed", needed},
+                                       {"divisions", static_cast<double>(force.divisions)},
+                                       {"sea_hops", static_cast<double>(hops)}});
+                    }
+                }
+            }
+        }
+    }
 }
 
 void ai_military_layer(Game& g, Country& c) {
@@ -1978,6 +2613,12 @@ void ai_military_layer(Game& g, Country& c) {
     // Air planning rides the military layer: it needs the same front line and the
     // posture just decided above, and it acts through the same command queue.
     ai_air_layer(g, c);
+
+    // ---- (f) navy --------------------------------------------------------
+    // Naval planning rides the military layer for the same reason as the air layer:
+    // the posture and the front line it reads are decided here, and both push their
+    // orders through the same queue.
+    ai_naval_layer(g, c);
 }
 
 // ============================================================= diplomacy =====

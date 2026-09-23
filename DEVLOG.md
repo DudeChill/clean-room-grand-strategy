@@ -3,6 +3,62 @@
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /
 NEW DISCREPANCIES / PERFORMANCE / TEST RESULTS / NEXT PRIORITY.
 
+## 2026-09-23 — v0.3.0 naval warfare (NAV-001 and LOG-006 closed)
+
+IMPLEMENTED
+* Ships as entities (hull strength, crew organisation, experience, fuel, home port,
+  sea zone), task forces with missions and sea zones, fleets as administration.
+* Detection and engagement between hostile task forces in one sea zone, with
+  positioning (destroyer screening of capitals, capital weight, carrier aircraft),
+  guns against armour, torpedoes against large hulls, submarines penalised without
+  sub detection, and simultaneous damage.
+* Sinking through the real entity lifecycle, retreat to port when damaged or out of
+  fuel, repair and refit in port at a fuel and spare-parts cost, sortie when fit.
+* Missions: patrol, strike force, convoy escort, convoy raiding, invasion support,
+  training, and stand-down.
+* Naval control per sea zone derived from the ships present; convoy raiding cuts the
+  victim's control and sinks convoy stock.
+* Naval invasions: divisions gather at a port over the land graph, load, cross with
+  real interception losses, land, and take control when the coast is undefended;
+  every abort path resets the army and its divisions coherently.
+* Ports as supply sources (LOG-006 closed): capacity scales with naval base level and
+  sea route distance, is cut by enemy control of the zone, is zeroed by raider
+  strength above a threshold, and draws convoys from the owner's stockpile — so
+  raiding starves an overseas theatre through the ordinary supply graph.
+* Naval content: destroyer, light and heavy cruiser, battleship, carrier, submarine,
+  transport and convoy models with a 1936 naval technology tree, derived ports, and
+  starting fleets for the two largest powers.
+* AI naval layer: naval production demand per pool, fleet and task force formation
+  sized to port capacity, mission assignment by posture and damage, invasion staging
+  and launch gated on transports and naval control, with scored reasons.
+* Client: Navy tab (fleets, task forces, missions, ship condition, naval control,
+  invasion launch) and naval control colouring for sea zones.
+
+FIXED
+* IND-012 closed: ship and convoy lines now draw on dockyards, everything else on
+  military factories, through one shared rule (`equipment_factory_pool`) used by
+  command validation, the industry phase and the auditor.
+* Scenario production lines now clamp per pool, so a naval power's ship lines can
+  never exceed its dockyards.
+
+PERFORMANCE
+* Naval phase: 0.006 ms/tick in the shipped scenario, 0.023 ms/tick for a synthetic
+  400-ship, 30-zone world. One year of AI war (336 divisions, 29 wars) costs 8.0 ms
+  per simulated hour, of which the AI layers are the largest single cost (1.9 ms).
+
+TEST RESULTS
+* `hoi_tests`: 169 passed, 0 failed (19 naval, 7 invasion).
+* `scripts/verify.sh`: 8 checks passed, 0 failed.
+* 365-day observer run with fleets, air wings and invasions: `world audit: OK`.
+
+NEW DISCREPANCIES
+* NAV-008 (raiders counted only in the destination port's zone), NAV-009 (binary
+  convoy gate, draw keyed to capacity rather than delivered throughput).
+
+NEXT PRIORITY
+* Focus trees (POL-001, the last BLOCKER), then events and decisions (POL-002), then
+  trade and convoys as an economic system (ECON-001).
+
 ## 2026-09-23 — v0.2.0 air warfare (AIR-001 closed)
 
 IMPLEMENTED

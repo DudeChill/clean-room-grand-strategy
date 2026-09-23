@@ -21,6 +21,7 @@
 #include "save/save.h"
 #include "sim/ai/ai.h"
 #include "sim/commands.h"
+#include "sim/navy.h"
 #include "sim/world.h"
 #include "test.h"
 
@@ -398,6 +399,11 @@ struct PlanStats {
     int research = 0;
     int military = 0;
     int applied = 0;
+    int fleets = 0;
+    int task_forces = 0;
+    int naval_missions = 0;
+    int ship_assignments = 0;
+    int invasions = 0;
     std::vector<uint64_t> signature;  // every queued command + the final world hash
 };
 
@@ -425,6 +431,11 @@ void run_ai_days(Fixture& f, int ticks, PlanStats* stats) {
                 cmd.type == CommandType::SetDivisionOrder) {
                 ++stats->military;
             }
+            if (cmd.type == CommandType::CreateFleet) ++stats->fleets;
+            if (cmd.type == CommandType::CreateTaskForce) ++stats->task_forces;
+            if (cmd.type == CommandType::SetNavalMission) ++stats->naval_missions;
+            if (cmd.type == CommandType::AssignShipToTaskForce) ++stats->ship_assignments;
+            if (cmd.type == CommandType::LaunchNavalInvasion) ++stats->invasions;
             ++stats->applied;
             stats->signature.push_back(command_fingerprint(cmd));
         }
@@ -948,4 +959,299 @@ HOI_TEST(ai_rebases_or_disbands_a_wing_whose_base_is_lost) {
         CHECK_EQ(count_commands(f.g.queue, CommandType::DisbandAirWing), 1);
         CHECK_EQ(count_commands(f.g.queue, CommandType::DeployAirWing), 0);
     }
+}
+
+// ============================================================= navy ==========
+
+namespace {
+
+struct NavalParts {
+    EquipmentId destroyer;
+    EquipmentId cruiser;
+    EquipmentId convoy;
+    RegionId sea_region;
+    ProvinceId sea_zone;
+    ProvinceId port_a;
+    ProvinceId coast_b;
+};
+
+// Gives country A a navy: unlocked destroyer/cruiser/convoy models, hulls and
+// convoys in the stockpile, dockyards to build more, and a sea zone joining an A
+// port to a hostile B coast.
+NavalParts add_naval_capability(Fixture& f) {
+    Content& ct = f.g.content;
+    World& w = f.g.world;
+    NavalParts np;
+
+    np.destroyer = add_equipment(ct, "destroyer_1", "destroyer", EquipmentCategory::Ship, 1936,
+                                 4.0, 0.0, 0.0, false);
+    ct.equipment[np.destroyer.v].naval_attack = 12.0;
+    ct.equipment[np.destroyer.v].torpedo_attack = 6.0;
+    ct.equipment[np.destroyer.v].sub_detection = 8.0;
+    ct.equipment[np.destroyer.v].detection = 10.0;
+    ct.equipment[np.destroyer.v].visibility = 0.6;
+    ct.equipment[np.destroyer.v].max_strength = 1.0;
+
+    np.cruiser = add_equipment(ct, "cruiser_1", "cruiser", EquipmentCategory::Ship, 1936, 9.0,
+                               0.0, 0.0, false);
+    ct.equipment[np.cruiser.v].naval_attack = 30.0;
+    ct.equipment[np.cruiser.v].armor = 20.0;
+    ct.equipment[np.cruiser.v].detection = 8.0;
+    ct.equipment[np.cruiser.v].visibility = 0.7;
+    ct.equipment[np.cruiser.v].max_strength = 1.0;
+
+    np.convoy = add_equipment(ct, "convoy_1", "convoy", EquipmentCategory::Convoy, 1936, 1.0, 0.0,
+                              0.0, false);
+    ct.equipment[np.convoy.v].max_strength = 1.0;
+
+    add_tech(ct, "basic_destroyer", "navy", 1936, {"destroyer_1"}, ModifierKind::Count, 0.0);
+    add_tech(ct, "basic_cruiser", "navy", 1936, {"cruiser_1"}, ModifierKind::Count, 0.0);
+    add_tech(ct, "basic_convoy", "navy", 1936, {"convoy_1"}, ModifierKind::Count, 0.0);
+    add_building(ct, BuildingKind::Dockyard, "dockyard", 10800.0, 10);
+
+    Region sreg;
+    sreg.name = "Northern Sea";
+    sreg.is_sea = true;
+    np.sea_region = w.regions.create(std::move(sreg));
+    w.regions[np.sea_region].id = np.sea_region;
+
+    Province sz;
+    sz.name = "North Sea Zone";
+    sz.region = np.sea_region;
+    sz.is_sea = true;
+    np.sea_zone = w.provinces.create(std::move(sz));
+    w.province(np.sea_zone)->id = np.sea_zone;
+
+    const RegionId land_region = w.province(f.cap_a)->region;
+    np.port_a = add_province(w, "Auroria Port", f.state_a, land_region, f.a, 5, false);
+    w.province(np.port_a)->coastal = true;
+    w.province(np.port_a)->naval_base = 3;
+    w.province(np.port_a)->sea_adj.push_back(np.sea_zone);
+    w.state(f.state_a)->provinces.push_back(np.port_a);
+
+    np.coast_b = add_province(w, "Borealis Coast", f.state_b, land_region, f.b, 4, false);
+    w.province(np.coast_b)->coastal = true;
+    w.province(np.coast_b)->sea_adj.push_back(np.sea_zone);
+    w.state(f.state_b)->provinces.push_back(np.coast_b);
+
+    w.state(f.state_a)->dockyards = 4;
+    Country* a = w.country(f.a);
+    a->research.completed.push_back(ct.tech_id("basic_destroyer"));
+    a->research.completed.push_back(ct.tech_id("basic_cruiser"));
+    a->research.completed.push_back(ct.tech_id("basic_convoy"));
+    a->equipment_stockpile.resize(ct.equipment.size(), 0.0);
+    a->equipment_stockpile[np.destroyer.v] = 10.0;
+    a->equipment_stockpile[np.convoy.v] = 50.0;
+    return np;
+}
+
+// Puts a real task force of `count` ships on the map, so a test can hand the country
+// naval control without relying on the naval phase to move it into the zone.
+TaskForceId seed_task_force(Game& g, CountryId country, ProvinceId port, RegionId zone,
+                            EquipmentId model, int count, bool register_fleet = true) {
+    World& w = g.world;
+    Country* c = w.country(country);
+    Fleet fleet;
+    fleet.country = country;
+    fleet.name = "Seeded Fleet";
+    const FleetId fid = w.fleets.create(std::move(fleet));
+    w.fleet(fid)->id = fid;
+    if (register_fleet) c->fleets.push_back(fid);
+
+    TaskForce tf;
+    tf.country = country;
+    tf.fleet = fid;
+    tf.name = "Seeded TF";
+    tf.port = port;
+    tf.sea_region = zone;
+    tf.at_sea = true;
+    tf.mission = NavalMission::Patrol;
+    const TaskForceId tid = w.task_forces.create(std::move(tf));
+    w.task_force(tid)->id = tid;
+    w.fleet(fid)->task_forces.push_back(tid);
+
+    for (int i = 0; i < count; ++i) {
+        Ship s;
+        s.country = country;
+        s.equipment = model;
+        s.fleet = fid;
+        s.task_force = tid;
+        s.port = port;
+        s.sea_region = zone;
+        s.at_sea = true;
+        s.strength = 1.0;
+        s.organisation = 1.0;
+        const ShipId sid = w.ships.create(std::move(s));
+        w.ship(sid)->id = sid;
+        w.task_force(tid)->ships.push_back(sid);
+    }
+    return tid;
+}
+
+// Gives country A an army whose division stands in its port, ready to embark.
+ArmyId add_landing_army(Fixture& f, ProvinceId port) {
+    World& w = f.g.world;
+    Country* a = w.country(f.a);
+    add_division(w, *a, f.tpl_a, port, 1.0);
+    const DivisionId did = a->divisions.back();
+    Army army;
+    army.country = f.a;
+    army.name = "Landing Army";
+    const ArmyId aid = w.armies.create(std::move(army));
+    w.army(aid)->id = aid;
+    w.army(aid)->divisions.push_back(did);
+    w.division(did)->army = aid;
+    a->armies.push_back(aid);
+    return aid;
+}
+
+}  // namespace
+
+// A coastal country with hulls in the stockpile forms a fleet and a task force at
+// its port within thirty days, and gives that force a valid mission - all through
+// commands the command system accepts.
+HOI_TEST(ai_forms_a_naval_task_force_and_assigns_missions) {
+    Fixture f;
+    build_world(f);
+    add_naval_capability(f);
+
+    PlanStats stats;
+    run_ai_days(f, 30 * TICKS_PER_DAY, &stats);
+
+    CHECK_GT(stats.fleets, 0);
+    CHECK_GT(stats.task_forces, 0);
+    CHECK_GT(stats.naval_missions, 0);
+
+    const Country* a = f.g.world.country(f.a);
+    CHECK_GT(a->fleets.size(), 0u);
+
+    int ships = 0;
+    bool mission_set = false;
+    f.g.world.task_forces.for_each([&](TaskForceId, const TaskForce& tf) {
+        if (tf.country != f.a) return;
+        ships += static_cast<int>(tf.ships.size());
+        if (tf.mission != NavalMission::None) mission_set = true;
+    });
+    CHECK_GT(ships, 0);
+    CHECK(mission_set);
+}
+
+// Hulls and convoys are production planning: the production layer opens dockyard
+// lines for the models the navy needs, inside the dockyard budget, and never spends
+// military factories on them.
+HOI_TEST(ai_opens_dockyard_lines_for_ships_and_convoys) {
+    Fixture f;
+    build_world(f);
+    add_naval_capability(f);
+
+    f.g.queue.clear();
+    ai_production_layer(f.g, *f.g.world.country(f.a));
+
+    int ship_factories = 0;
+    int convoy_factories = 0;
+    int military_factories = 0;
+    bool ship_line = false;
+    bool convoy_line = false;
+    for (const Command& c : f.g.queue.pending) {
+        if (c.type != CommandType::SetProductionLine) continue;
+        CHECK_EQ(validate_command(f.g, c), CommandResult::Applied);
+        const EquipmentDef* def = f.g.content.equipment_def(c.equipment);
+        if (def && def->category == EquipmentCategory::Ship) {
+            ship_factories += c.value;
+            ship_line = true;
+        } else if (def && def->category == EquipmentCategory::Convoy) {
+            convoy_factories += c.value;
+            convoy_line = true;
+        } else {
+            military_factories += c.value;
+        }
+    }
+
+    CHECK(ship_line);
+    CHECK(convoy_line);
+    // The dockyard split never exceeds the controlled dockyards.
+    const int dockyards = f.g.world.state(f.state_a)->dockyards;
+    CHECK(ship_factories + convoy_factories <= dockyards);
+    CHECK_GT(ship_factories + convoy_factories, 0);
+    // Ships never eat the four military factories the fixture owns.
+    CHECK(military_factories <= 4);
+}
+
+// At war, with transports, a landing army at a usable port and naval superiority in
+// the crossing zone, the AI eventually launches an invasion through the command
+// system.
+HOI_TEST(ai_launches_an_invasion_with_naval_superiority) {
+    Fixture f;
+    build_world(f);
+    const NavalParts np = add_naval_capability(f);
+
+    add_landing_army(f, np.port_a);
+    // Eight destroyers holding the crossing zone: naval superiority over B's coast.
+    seed_task_force(f.g, f.a, np.port_a, np.sea_region, np.destroyer, 8);
+
+    PlanStats stats;
+    run_ai_days(f, 30 * TICKS_PER_DAY, &stats);
+
+    CHECK_GT(stats.invasions, 0);
+    CHECK_GT(f.g.world.invasions.size(), 0u);
+}
+
+// A country without naval superiority must not gamble on a landing: it holds its
+// ships at home and issues no invasion.
+HOI_TEST(ai_does_not_invade_without_superiority) {
+    Fixture f;
+    build_world(f);
+    const NavalParts np = add_naval_capability(f);
+
+    add_landing_army(f, np.port_a);
+    // No hulls in the crossing zone: no naval control, so no invasion may start.
+    f.g.world.country(f.a)->equipment_stockpile[np.destroyer.v] = 0.0;
+
+    PlanStats stats;
+    run_ai_days(f, 30 * TICKS_PER_DAY, &stats);
+
+    CHECK_EQ(stats.invasions, 0);
+    CHECK_EQ(f.g.world.invasions.size(), 0u);
+}
+
+// Same scenario, same seed: the naval plan and the world it leaves behind are
+// identical on two runs.
+HOI_TEST(ai_naval_plan_is_deterministic) {
+    Fixture first;
+    build_world(first);
+    const NavalParts np1 = add_naval_capability(first);
+    add_landing_army(first, np1.port_a);
+    PlanStats a;
+    run_ai_days(first, 30 * TICKS_PER_DAY, &a);
+
+    Fixture second;
+    build_world(second);
+    const NavalParts np2 = add_naval_capability(second);
+    add_landing_army(second, np2.port_a);
+    PlanStats b;
+    run_ai_days(second, 30 * TICKS_PER_DAY, &b);
+
+    CHECK_EQ(a.signature.size(), b.signature.size());
+    CHECK(a.signature == b.signature);
+    CHECK_EQ(world_hash(first.g), world_hash(second.g));
+}
+
+// Ninety simulated days of the naval layer: the fleet, task force and mission chain
+// runs, and the whole mix of naval commands is issued through the command system.
+HOI_TEST(ai_naval_commands_run_for_ninety_days) {
+    Fixture f;
+    build_world(f);
+    const NavalParts np = add_naval_capability(f);
+    add_landing_army(f, np.port_a);
+    // The force is seeded without registering a fleet, so the AI must create one.
+    seed_task_force(f.g, f.a, np.port_a, np.sea_region, np.destroyer, 8, false);
+
+    PlanStats stats;
+    run_ai_days(f, 90 * TICKS_PER_DAY, &stats);
+
+    CHECK_GT(stats.fleets, 0);
+    CHECK_GT(stats.task_forces, 0);
+    CHECK_GT(stats.naval_missions, 0);
+    CHECK_GT(stats.invasions, 0);
+    CHECK_GT(stats.applied, 0);
 }
