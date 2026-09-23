@@ -1,0 +1,488 @@
+{
+  "name": "1936",
+  "map": "maps/world.json",
+  "start_date": "1936-01-01",
+  "seed": 12345,
+  "countries": [
+    {
+      "tag": "VEL",
+      "name": "Veldoria",
+      "ideology": "democratic",
+      "capital_state": "s297",
+      "states": [
+        "s312",
+        "s27",
+        "s297"
+      ],
+      "civilian_factories": 22,
+      "military_factories": 12,
+      "dockyards": 2,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "motorization",
+        "light_armor",
+        "production_lines",
+        "construction_engineering"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 9000,
+        "support_equipment_1": 3000,
+        "motorized_1": 2400,
+        "armor_1": 1800
+      },
+      "laws": [
+        "conscription_limited",
+        "economy_civilian",
+        "trade_free"
+      ],
+      "political_power": 35.0,
+      "stability": 0.62,
+      "war_support": 0.35,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p2113",
+          "count": 6
+        },
+        {
+          "template": "motorized_division",
+          "province": "p2113",
+          "count": 2
+        },
+        {
+          "template": "armored_division",
+          "province": "p2113",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "tag": "KOR",
+      "name": "Korethia",
+      "ideology": "fascist",
+      "capital_state": "s5",
+      "states": [
+        "s5",
+        "s321"
+      ],
+      "civilian_factories": 14,
+      "military_factories": 7,
+      "dockyards": 6,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "basic_naval_design",
+        "construction_engineering",
+        "aircraft_design"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 5200,
+        "support_equipment_1": 1500,
+        "motorized_1": 900,
+        "destroyer_1": 40,
+        "convoy_1": 200
+      },
+      "laws": [
+        "conscription_extensive",
+        "economy_partial_mobilization",
+        "trade_free"
+      ],
+      "political_power": 40.0,
+      "stability": 0.55,
+      "war_support": 0.55,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p122",
+          "count": 4
+        },
+        {
+          "template": "garrison_division",
+          "province": "p122",
+          "count": 2
+        },
+        {
+          "template": "motorized_division",
+          "province": "p122",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "tag": "THA",
+      "name": "Thalmark",
+      "ideology": "neutrality",
+      "capital_state": "s47",
+      "states": [
+        "s47"
+      ],
+      "civilian_factories": 4,
+      "military_factories": 2,
+      "dockyards": 0,
+      "technologies": [
+        "infantry_weapons",
+        "field_artillery",
+        "production_lines"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 2200,
+        "support_equipment_1": 400,
+        "artillery_1": 200
+      },
+      "laws": [
+        "conscription_volunteer",
+        "economy_undisturbed",
+        "trade_free"
+      ],
+      "political_power": 25.0,
+      "stability": 0.5,
+      "war_support": 0.25,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p336",
+          "count": 3
+        },
+        {
+          "template": "garrison_division",
+          "province": "p336",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "tag": "SUD",
+      "name": "Sundara",
+      "ideology": "neutrality",
+      "capital_state": "s221",
+      "states": [
+        "s221"
+      ],
+      "civilian_factories": 6,
+      "military_factories": 3,
+      "dockyards": 0,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "production_lines"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 3000,
+        "support_equipment_1": 600,
+        "artillery_1": 300
+      },
+      "laws": [
+        "conscription_limited",
+        "economy_civilian",
+        "trade_free"
+      ],
+      "political_power": 30.0,
+      "stability": 0.48,
+      "war_support": 0.3,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p1539",
+          "count": 4
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1539",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "tag": "AVA",
+      "name": "Avalonia",
+      "ideology": "democratic",
+      "capital_state": "s65",
+      "states": [
+        "s49",
+        "s65"
+      ],
+      "civilian_factories": 8,
+      "military_factories": 4,
+      "dockyards": 2,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "motorization",
+        "construction_engineering"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 3600,
+        "support_equipment_1": 800,
+        "motorized_1": 600,
+        "artillery_1": 250
+      },
+      "laws": [
+        "conscription_limited",
+        "economy_partial_mobilization",
+        "trade_free"
+      ],
+      "political_power": 20.0,
+      "stability": 0.52,
+      "war_support": 0.3,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p364",
+          "count": 4
+        },
+        {
+          "template": "motorized_division",
+          "province": "p364",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "tag": "MER",
+      "name": "Mervath",
+      "ideology": "fascist",
+      "capital_state": "s248",
+      "states": [
+        "s241",
+        "s248"
+      ],
+      "civilian_factories": 9,
+      "military_factories": 5,
+      "dockyards": 0,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "production_lines",
+        "construction_engineering"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 3800,
+        "support_equipment_1": 800,
+        "motorized_1": 600,
+        "artillery_1": 250
+      },
+      "laws": [
+        "conscription_volunteer",
+        "economy_civilian",
+        "trade_free"
+      ],
+      "political_power": 21.0,
+      "stability": 0.52,
+      "war_support": 0.32,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p1663",
+          "count": 5
+        },
+        {
+          "template": "armored_division",
+          "province": "p1663",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "tag": "OST",
+      "name": "Ostmark",
+      "ideology": "neutrality",
+      "capital_state": "s36",
+      "states": [
+        "s36",
+        "s24"
+      ],
+      "civilian_factories": 10,
+      "military_factories": 6,
+      "dockyards": 2,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "motorization",
+        "construction_engineering"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 4000,
+        "support_equipment_1": 800,
+        "motorized_1": 600,
+        "artillery_1": 250
+      },
+      "laws": [
+        "conscription_limited",
+        "economy_partial_mobilization",
+        "trade_free"
+      ],
+      "political_power": 22.0,
+      "stability": 0.52,
+      "war_support": 0.33999999999999997,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p392",
+          "count": 3
+        },
+        {
+          "template": "garrison_division",
+          "province": "p392",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "tag": "CAL",
+      "name": "Caldon",
+      "ideology": "democratic",
+      "capital_state": "s275",
+      "states": [
+        "s275",
+        "s295"
+      ],
+      "civilian_factories": 11,
+      "military_factories": 4,
+      "dockyards": 0,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "production_lines",
+        "construction_engineering"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 4200,
+        "support_equipment_1": 800,
+        "motorized_1": 600,
+        "artillery_1": 250
+      },
+      "laws": [
+        "conscription_volunteer",
+        "economy_civilian",
+        "trade_free"
+      ],
+      "political_power": 23.0,
+      "stability": 0.52,
+      "war_support": 0.36,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p1858",
+          "count": 4
+        },
+        {
+          "template": "mountain_division",
+          "province": "p1858",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "tag": "NOR",
+      "name": "Norvane",
+      "ideology": "communist",
+      "capital_state": "s239",
+      "states": [
+        "s247",
+        "s239"
+      ],
+      "civilian_factories": 12,
+      "military_factories": 5,
+      "dockyards": 2,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "motorization",
+        "construction_engineering"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 4400,
+        "support_equipment_1": 800,
+        "motorized_1": 600,
+        "artillery_1": 250
+      },
+      "laws": [
+        "conscription_limited",
+        "economy_partial_mobilization",
+        "trade_free"
+      ],
+      "political_power": 24.0,
+      "stability": 0.52,
+      "war_support": 0.38,
+      "divisions": [
+        {
+          "template": "infantry_division",
+          "province": "p1647",
+          "count": 6
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1647",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "tag": "TIR",
+      "name": "Tirolith",
+      "ideology": "neutrality",
+      "capital_state": "s294",
+      "states": [
+        "s309",
+        "s294"
+      ],
+      "civilian_factories": 13,
+      "military_factories": 6,
+      "dockyards": 0,
+      "technologies": [
+        "infantry_weapons",
+        "support_weapons",
+        "field_artillery",
+        "production_lines",
+        "construction_engineering"
+      ],
+      "stockpile": {
+        "infantry_equipment_1": 4600,
+        "support_equipment_1": 800,
+        "motorized_1": 600,
+        "artillery_1": 250
+      },
+      "laws": [
+        "conscription_volunteer",
+        "economy_civilian",
+        "trade_free"
+      ],
+      "political_power": 25.0,
+      "stability": 0.52,
+      "war_support": 0.4,
+      "divisions": [
+        {
+          "template": "garrison_division",
+          "province": "p2051",
+          "count": 4
+        },
+        {
+          "template": "infantry_division",
+          "province": "p2051",
+          "count": 2
+        }
+      ]
+    }
+  ],
+  "factions": [
+    {
+      "name": "Veldorian Compact",
+      "leader": "VEL",
+      "members": [
+        "VEL",
+        "AVA",
+        "CAL"
+      ]
+    }
+  ],
+  "wars": []
+}

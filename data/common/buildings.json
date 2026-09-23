@@ -1,0 +1,28 @@
+{
+  "buildings": [
+    {"key": "civilian_factory", "name": "Civilian Factory", "kind": "civilian_factory",
+     "base_cost": 10800.0, "per_state": true, "max_level": 12},
+    {"key": "military_factory", "name": "Military Factory", "kind": "military_factory",
+     "base_cost": 10800.0, "per_state": true, "max_level": 12},
+    {"key": "dockyard", "name": "Dockyard", "kind": "dockyard",
+     "base_cost": 10800.0, "per_state": true, "max_level": 12},
+    {"key": "infrastructure", "name": "Infrastructure", "kind": "infrastructure",
+     "base_cost": 3000.0, "per_state": false, "max_level": 10},
+    {"key": "railway", "name": "Railway", "kind": "railway",
+     "base_cost": 4000.0, "per_state": false, "max_level": 5},
+    {"key": "supply_hub", "name": "Supply Hub", "kind": "supply_hub",
+     "base_cost": 6000.0, "per_state": false, "max_level": 1},
+    {"key": "air_base", "name": "Air Base", "kind": "air_base",
+     "base_cost": 2400.0, "per_state": false, "max_level": 10},
+    {"key": "naval_base", "name": "Naval Base", "kind": "naval_base",
+     "base_cost": 3000.0, "per_state": false, "max_level": 10},
+    {"key": "radar", "name": "Radar Station", "kind": "radar",
+     "base_cost": 2400.0, "per_state": false, "max_level": 5},
+    {"key": "fort", "name": "Land Fort", "kind": "fort",
+     "base_cost": 2000.0, "per_state": false, "max_level": 10},
+    {"key": "anti_air", "name": "Anti-Air Battery", "kind": "anti_air",
+     "base_cost": 2000.0, "per_state": false, "max_level": 5},
+    {"key": "synthetic_refinery", "name": "Synthetic Refinery", "kind": "synthetic_refinery",
+     "base_cost": 8000.0, "per_state": true, "max_level": 5}
+  ]
+}

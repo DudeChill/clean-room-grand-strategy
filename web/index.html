@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Clean Room Grand Strategy</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">CLEAN ROOM GRAND STRATEGY</span>
+  <span id="date" class="date">1936-01-01 00:00</span>
+  <span class="speeds">
+    <button id="speed-pause" class="speed" title="Pause / resume (space)">II</button>
+    <button class="speed" data-speed="1">1</button>
+    <button class="speed" data-speed="2">2</button>
+    <button class="speed" data-speed="3">3</button>
+    <button class="speed" data-speed="4">4</button>
+    <button class="speed" data-speed="5">5</button>
+  </span>
+  <span id="country-badge" class="badge">—</span>
+  <span id="stats" class="stats"></span>
+  <span class="spacer"></span>
+  <button id="recenter" class="tool">Recenter</button>
+  <button id="save" class="tool">Save</button>
+  <span id="toast" class="toast"></span>
+</div>
+
+<div id="main">
+  <aside id="left">
+    <h3>Alerts</h3>
+    <div id="alerts" class="alerts"></div>
+    <h3>Selection</h3>
+    <div id="selection" class="selection">Click a province.</div>
+    <h3>Divisions in province</h3>
+    <div id="province-divisions" class="list small"></div>
+  </aside>
+
+  <div id="mapwrap">
+    <canvas id="map"></canvas>
+    <div id="overlays">
+      <button class="ov active" data-overlay="political">Political</button>
+      <button class="ov" data-overlay="control">Control</button>
+      <button class="ov" data-overlay="supply">Supply</button>
+      <button class="ov" data-overlay="terrain">Terrain</button>
+      <button class="ov" data-overlay="front">Fronts</button>
+    </div>
+    <div id="tooltip" class="tooltip hidden"></div>
+  </div>
+
+  <aside id="right">
+    <nav class="tabs">
+      <button class="tab active" data-tab="production">Production</button>
+      <button class="tab" data-tab="construction">Construction</button>
+      <button class="tab" data-tab="research">Research</button>
+      <button class="tab" data-tab="military">Military</button>
+      <button class="tab" data-tab="diplomacy">Diplomacy</button>
+      <button class="tab" data-tab="log">Log</button>
+    </nav>
+    <div id="panel-production" class="panel active"></div>
+    <div id="panel-construction" class="panel"></div>
+    <div id="panel-research" class="panel"></div>
+    <div id="panel-military" class="panel"></div>
+    <div id="panel-diplomacy" class="panel"></div>
+    <div id="panel-log" class="panel"></div>
+  </aside>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

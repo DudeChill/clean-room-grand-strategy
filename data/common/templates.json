@@ -1,0 +1,35 @@
+{
+  "templates": [
+    {"key": "infantry_division", "name": "Infantry Division", "train_days": 90.0,
+     "battalions": [
+       {"equipment": "infantry_equipment_1", "count": 9},
+       {"equipment": "support_equipment_1", "count": 1, "support": true}
+     ]},
+
+    {"key": "garrison_division", "name": "Garrison Division", "train_days": 60.0,
+     "battalions": [
+       {"equipment": "infantry_equipment_1", "count": 6}
+     ]},
+
+    {"key": "mountain_division", "name": "Mountain Division", "train_days": 110.0,
+     "battalions": [
+       {"equipment": "infantry_equipment_1", "count": 8},
+       {"equipment": "artillery_1", "count": 1},
+       {"equipment": "support_equipment_1", "count": 1, "support": true}
+     ]},
+
+    {"key": "motorized_division", "name": "Motorized Division", "train_days": 100.0,
+     "battalions": [
+       {"equipment": "motorized_1", "count": 6},
+       {"equipment": "infantry_equipment_1", "count": 3},
+       {"equipment": "support_equipment_1", "count": 1, "support": true}
+     ]},
+
+    {"key": "armored_division", "name": "Armored Division", "train_days": 120.0,
+     "battalions": [
+       {"equipment": "armor_1", "count": 4},
+       {"equipment": "motorized_1", "count": 5},
+       {"equipment": "support_equipment_1", "count": 1, "support": true}
+     ]}
+  ]
+}

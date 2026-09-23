@@ -1,0 +1,17 @@
+# KNOWN DIFFERENCES
+
+Deliberate, documented deviations from the reference game's behaviour. Every entry
+needs a reason, an impact, a temporary/permanent classification and a resolution plan
+(spec section 196). Undocumented deviation is a bug.
+
+| ID | Difference | Reason | Impact | Kind | Resolution |
+|---|---|---|---|---|---|
+| KD-001 | Fictional 1936-style setting with invented countries and geography instead of the historical world map | Clean-room requirement: original content, no proprietary map or data | None mechanical; scenario data is fully replaceable | Permanent (by design) | A conversion of real-world public geographic data is a data effort, not engine work |
+| KD-002 | Map scale is roughly 1.8k land provinces rather than the reference game's ~13k | Chosen so that a full campaign runs on modest hardware while every mechanic still exercises over thousands of entities | Lower tactical granularity | Temporary | `tools/genmap --size` scales the map; the engine has no fixed-map assumptions |
+| KD-003 | Grain of the smallest simulation step is one hour for every system | Simplifies the tick order and keeps determinism auditable | Sub-hour reaction times do not exist | Permanent | Sub-hour phases (e.g. combat rounds) remain an option inside the combat phase |
+| KD-004 | Floating point (`double`) is used for continuous quantities rather than fixed point | Speculative fixed point would cost precision in AI and economy math; hashes detect drift | Bit-identical runs are guaranteed for the same build/toolchain, not across arbitrary platforms | Temporary | `docs/mechanics/` documents which values matter; fixed point is a candidate for networked combat if cross-platform determinism is required |
+| KD-005 | AI runs in the same thread and phase order as the player | Determinism and debuggability first | Slightly longer ticks when many countries plan | Permanent | AI layer intervals and staggering already bound the cost; a job system can move candidate evaluation off-thread while authoritative mutation stays in order |
+| KD-006 | Absent systems are surfaced in the UI as absent rather than replaced by an abstract number | Spec section 16: a number is not a mechanic | A player looking for air/navy/focus screens finds nothing rather than a fake | Permanent (until implemented) | Tracked as BLOCKER discrepancies AIR-001, NAV-001, POL-001 |
+| KD-007 | Consumer goods are a capacity share rather than factory assignment | Keeps factory bookkeeping in one place (industry) | Slight difference in how law changes ripple into construction | Temporary | Revisit when national spirits exist (POL-003) |
+| KD-008 | Content validation happens at load time and reports into `Content::load_errors` rather than in a separate validator tool | One place to look, already actionable with file and key | No standalone validation of a modded tree before launch | Temporary | MOD-002 adds a validator that reuses the same code path |
+| KD-009 | The client is a browser app served by the simulation process | Zero dependencies, no UI framework to vendor, and the same command API serves future multiplayer | No native window or OS integration | Permanent (by design) | Any other front end can speak the same JSON command API |

@@ -1,0 +1,39 @@
+#pragma once
+// Simulation phase functions and the authoritative tick order.
+//
+// Tick order is fixed and documented (docs/ARCHITECTURE.md). Each phase is a free
+// function taking the Game. Phases never reorder state by pointer or hash order;
+// every iteration walks entity stores in ascending id.
+
+namespace hoi {
+
+struct Game;
+
+// 1. Apply queued commands (player and AI), recording results.
+void phase_commands(Game& g);
+// 2. Diplomatic drift, war creation, peace offers, capitulation resolution.
+void phase_diplomacy(Game& g);
+// 3. Division movement across the province graph.
+void phase_movement(Game& g);
+// 4. Incremental land combat: organisation/strength damage, reinforcement, retreat.
+void phase_combat(Game& g);
+// 5. Territorial control, occupation, capitulation of cut-off capitals.
+void phase_territory(Game& g);
+// 6. Supply network flow, division supply/fuel levels.
+void phase_supply(Game& g);
+// 7. Resources, production lines, construction, consumer goods, stockpiles.
+void phase_industry(Game& g);
+// 8. Research progress and technology effect propagation.
+void phase_research(Game& g);
+// 8b. Division training: equipment/manpower consumption and readiness.
+void phase_training(Game& g);
+// 9. Political power, laws, stability/war support, manpower growth.
+void phase_politics(Game& g);
+// 10. Weather per strategic region.
+void phase_weather(Game& g);
+// 11. AI planning; issues commands into the queue for the next tick.
+void phase_ai(Game& g);
+// 12. Entity cleanup, invariant audit (debug), event log trimming.
+void phase_cleanup(Game& g);
+
+}  // namespace hoi

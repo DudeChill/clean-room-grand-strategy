@@ -1,0 +1,101 @@
+{
+  "technologies": [
+    {"key": "infantry_weapons", "name": "Infantry Weapons", "category": "infantry",
+     "year": 1936, "cost_days": 80.0,
+     "unlock_equipment": ["infantry_equipment_1"],
+     "modifiers": {"DivisionAttack": 0.02}},
+
+    {"key": "support_weapons", "name": "Support Weapons", "category": "infantry",
+     "year": 1936, "cost_days": 90.0,
+     "prerequisites": ["infantry_weapons"],
+     "unlock_equipment": ["support_equipment_1"],
+     "modifiers": {"DivisionDefense": 0.03}},
+
+    {"key": "improved_infantry_weapons", "name": "Improved Infantry Weapons",
+     "category": "infantry", "year": 1940, "cost_days": 130.0,
+     "prerequisites": ["infantry_weapons"],
+     "unlock_equipment": ["infantry_equipment_2"],
+     "modifiers": {"DivisionAttack": 0.05}},
+
+    {"key": "field_artillery", "name": "Field Artillery", "category": "artillery",
+     "year": 1936, "cost_days": 100.0,
+     "prerequisites": ["infantry_weapons"],
+     "unlock_equipment": ["artillery_1"],
+     "modifiers": {"DivisionDefense": 0.05}},
+
+    {"key": "anti_tank_guns", "name": "Anti-Tank Guns", "category": "artillery",
+     "year": 1939, "cost_days": 110.0,
+     "prerequisites": ["field_artillery"],
+     "unlock_equipment": ["anti_tank_1"],
+     "modifiers": {"DivisionDefense": 0.03}},
+
+    {"key": "anti_air_guns", "name": "Anti-Air Guns", "category": "artillery",
+     "year": 1939, "cost_days": 110.0,
+     "prerequisites": ["field_artillery"],
+     "unlock_equipment": ["anti_air_1"],
+     "modifiers": {"DivisionDefense": 0.02}},
+
+    {"key": "motorization", "name": "Motorization", "category": "land_doctrine",
+     "year": 1936, "cost_days": 90.0,
+     "unlock_equipment": ["motorized_1"],
+     "modifiers": {"DivisionOrganization": 0.02}},
+
+    {"key": "light_armor", "name": "Light Armor", "category": "armor",
+     "year": 1936, "cost_days": 120.0,
+     "prerequisites": ["motorization"],
+     "unlock_equipment": ["armor_1"],
+     "modifiers": {"DivisionBreakthrough": 0.05}},
+
+    {"key": "medium_armor", "name": "Medium Armor", "category": "armor",
+     "year": 1940, "cost_days": 160.0,
+     "prerequisites": ["light_armor"],
+     "unlock_equipment": ["armor_2"],
+     "modifiers": {"DivisionBreakthrough": 0.05}},
+
+    {"key": "mechanization", "name": "Mechanization", "category": "land_doctrine",
+     "year": 1940, "cost_days": 150.0,
+     "prerequisites": ["motorization"],
+     "unlock_equipment": ["mechanized_1"],
+     "modifiers": {"DivisionOrganization": 0.03}},
+
+    {"key": "aircraft_design", "name": "Aircraft Design", "category": "air",
+     "year": 1936, "cost_days": 100.0,
+     "unlock_equipment": ["fighter_1"],
+     "modifiers": {}},
+
+    {"key": "basic_naval_design", "name": "Basic Naval Design", "category": "naval",
+     "year": 1936, "cost_days": 100.0,
+     "unlock_equipment": ["destroyer_1", "convoy_1"],
+     "modifiers": {}},
+
+    {"key": "construction_engineering", "name": "Construction Engineering",
+     "category": "industry", "year": 1936, "cost_days": 100.0,
+     "modifiers": {"ConstructionSpeed": 0.10}},
+
+    {"key": "improved_construction", "name": "Improved Construction",
+     "category": "industry", "year": 1939, "cost_days": 140.0,
+     "prerequisites": ["construction_engineering"],
+     "modifiers": {"ConstructionSpeed": 0.10}},
+
+    {"key": "production_lines", "name": "Production Lines", "category": "industry",
+     "year": 1936, "cost_days": 110.0,
+     "modifiers": {"FactoryOutput": 0.05}},
+
+    {"key": "machine_tools", "name": "Machine Tools", "category": "industry",
+     "year": 1939, "cost_days": 150.0,
+     "prerequisites": ["production_lines"],
+     "modifiers": {"FactoryOutput": 0.05, "EquipmentCostFactor": -0.03}},
+
+    {"key": "synthetic_oil", "name": "Synthetic Oil", "category": "industry",
+     "year": 1940, "cost_days": 170.0,
+     "prerequisites": ["production_lines"],
+     "unlock_buildings": ["synthetic_refinery"],
+     "modifiers": {"FuelGain": 0.10}},
+
+    {"key": "radar_stations", "name": "Radar Stations", "category": "industry",
+     "year": 1939, "cost_days": 130.0,
+     "prerequisites": ["construction_engineering"],
+     "unlock_buildings": ["radar"],
+     "modifiers": {}}
+  ]
+}

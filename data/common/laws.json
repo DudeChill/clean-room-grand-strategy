@@ -1,0 +1,32 @@
+{
+  "laws": [
+    {"key": "conscription_volunteer", "name": "Volunteer Only", "kind": 0, "level": 0, "cost": 0.0,
+     "modifiers": {"RecruitablePopulation": -0.01}},
+    {"key": "conscription_limited", "name": "Limited Conscription", "kind": 0, "level": 1, "cost": 50.0,
+     "modifiers": {"RecruitablePopulation": 0.005}},
+    {"key": "conscription_extensive", "name": "Extensive Conscription", "kind": 0, "level": 2, "cost": 100.0,
+     "requires_law": "conscription_limited", "requires_level": 1,
+     "modifiers": {"RecruitablePopulation": 0.015, "WarSupport": -0.02}},
+    {"key": "conscription_service", "name": "Service by Requirement", "kind": 0, "level": 3, "cost": 150.0,
+     "requires_law": "conscription_extensive", "requires_level": 2,
+     "modifiers": {"RecruitablePopulation": 0.025, "WarSupport": -0.05}},
+
+    {"key": "economy_undisturbed", "name": "Undisturbed Isolation", "kind": 1, "level": 0, "cost": 0.0,
+     "modifiers": {"ConstructionSpeed": -0.10, "FactoryOutput": -0.10}},
+    {"key": "economy_civilian", "name": "Civilian Economy", "kind": 1, "level": 1, "cost": 100.0,
+     "modifiers": {}},
+    {"key": "economy_partial_mobilization", "name": "Partial Mobilization", "kind": 1, "level": 2, "cost": 150.0,
+     "requires_law": "economy_civilian", "requires_level": 1,
+     "modifiers": {"ConstructionSpeed": 0.10, "FactoryOutput": 0.10}},
+    {"key": "economy_war", "name": "Total Mobilization", "kind": 1, "level": 3, "cost": 200.0,
+     "requires_law": "economy_partial_mobilization", "requires_level": 2,
+     "modifiers": {"ConstructionSpeed": 0.20, "FactoryOutput": 0.20}},
+
+    {"key": "trade_free", "name": "Free Trade", "kind": 2, "level": 0, "cost": 0.0,
+     "modifiers": {"ResearchSpeed": 0.05}},
+    {"key": "trade_export_focus", "name": "Export Focus", "kind": 2, "level": 1, "cost": 50.0,
+     "modifiers": {"ResearchSpeed": 0.02, "FactoryOutput": 0.05}},
+    {"key": "trade_limited_exports", "name": "Limited Exports", "kind": 2, "level": 2, "cost": 75.0,
+     "modifiers": {"ResearchSpeed": -0.02, "FactoryOutput": 0.10}}
+  ]
+}
