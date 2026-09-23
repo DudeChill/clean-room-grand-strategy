@@ -90,6 +90,11 @@ class Store {
         }
         alive_[slot] = 1;
         ++size_;
+        // Payloads that carry their own id get it assigned here, so no creation site
+        // can forget it and leave a denormalised id pointing at nothing.
+        if constexpr (requires(T& t, IdT i) { t.id = i; }) {
+            items_[slot].id = IdT(slot);
+        }
         return IdT(slot);
     }
 

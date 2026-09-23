@@ -94,11 +94,13 @@ function renderSpeedButtons() {
 // ------------------------------------------------------------------ map -----
 
 function provinceAt(worldX, worldY) {
-  const cell = 1;
-  const px = Math.floor(worldX / cell);
-  const py = Math.floor(worldY / cell);
-  for (const p of App.map.provinces) if (p.x === px && p.y === py) return p;
-  return null;
+  const px = Math.floor(worldX);
+  const py = Math.floor(worldY);
+  return App.byCoord.get(`${px},${py}`) || null;
+}
+
+function provinceById(id) {
+  return App.byId.get(id) || null;
 }
 
 function screenToWorld(sx, sy) {
@@ -238,7 +240,7 @@ function draw() {
       ctx.strokeStyle = army.order === 'offensive' ? '#ff9c4a' : '#7fd4ff';
       ctx.lineWidth = Math.max(1.5, z * 0.25);
       ctx.beginPath();
-      const centers = army.line.map((pid) => App.map.provinces.find((p) => p.id === pid)).filter(Boolean);
+      const centers = army.line.map((pid) => provinceById(pid)).filter(Boolean);
       centers.forEach((p, i) => {
         const cx = (p.x + 0.5) * cell;
         const cy = (p.y + 0.5) * cell;
@@ -246,7 +248,7 @@ function draw() {
       });
       ctx.stroke();
       for (const pid of (army.target_line || [])) {
-        const p = App.map.provinces.find((q) => q.id === pid);
+        const p = provinceById(pid);
         if (!p) continue;
         ctx.strokeStyle = '#ff5f3f';
         ctx.strokeRect(p.x * cell + 1, p.y * cell + 1, cell - 2, cell - 2);
@@ -263,7 +265,7 @@ function draw() {
       byProvince.get(d.province).push(d);
     }
     for (const [pid, list] of byProvince) {
-      const p = App.map.provinces.find((q) => q.id === pid);
+      const p = provinceById(pid);
       if (!p) continue;
       const friendly = list.filter((d) => d.country === (snap.player ? snap.player.id : -1));
       const show = friendly.length ? friendly : list.slice(0, 1);
@@ -286,7 +288,7 @@ function draw() {
   // Battles.
   if (snap) {
     for (const b of snap.battles) {
-      const p = App.map.provinces.find((q) => q.id === b.province);
+      const p = provinceById(b.province);
       if (!p) continue;
       const cx = (p.x + 0.5) * cell;
       const cy = (p.y + 0.5) * cell;
@@ -299,9 +301,28 @@ function draw() {
     }
   }
 
+  // Player-owned provinces get a bright border so their country is findable.
+  if (snap && snap.player && z >= 3) {
+    const me = snap.player.id;
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = Math.max(1, z * 0.12);
+    for (const p of App.map.provinces) {
+      if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1 || p.sea) continue;
+      if (snap.controller[p.id] !== me) continue;
+      const edge = (dx, dy) => {
+        const q = App.byCoord.get(`${p.x + dx},${p.y + dy}`);
+        return !q || snap.controller[q.id] !== me;
+      };
+      if (edge(1, 0)) ctx.strokeRect(p.x * cell + cell - 1, p.y * cell, 1, cell);
+      if (edge(-1, 0)) ctx.strokeRect(p.x * cell, p.y * cell, 1, cell);
+      if (edge(0, 1)) ctx.strokeRect(p.x * cell, p.y * cell + cell - 1, cell, 1);
+      if (edge(0, -1)) ctx.strokeRect(p.x * cell, p.y * cell, cell, 1);
+    }
+  }
+
   // Selection marker.
   if (App.selection >= 0) {
-    const p = App.map.provinces.find((q) => q.id === App.selection);
+    const p = provinceById(App.selection);
     if (p) {
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = Math.max(1.5, z * 0.2);
@@ -396,19 +417,50 @@ for (const b of document.querySelectorAll('button.speed[data-speed]')) {
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); setTime(!App.meta.paused); }
   if (e.key >= '1' && e.key <= '5') setTime(false, Number(e.key));
+  if (e.key === 'Escape') {
+    App.selectedDivision = -1;
+    App.selection = -1;
+    renderLeft();
+  }
+  const tabKeys = { m: 'military', p: 'production', c: 'construction', r: 'research',
+                    d: 'diplomacy', l: 'log' };
+  const tab = tabKeys[e.key.toLowerCase()];
+  if (tab && !e.ctrlKey && !e.metaKey) {
+    App.tab = tab;
+    for (const t of document.querySelectorAll('button.tab')) {
+      t.classList.toggle('active', t.dataset.tab === tab);
+    }
+    for (const p of document.querySelectorAll('.panel')) {
+      p.classList.toggle('active', p.id === `panel-${tab}`);
+    }
+    renderPanels();
+  }
+  // Arrow-key camera panning at one province per press, ten with Shift.
+  const step = e.shiftKey ? 10 : 2;
+  if (e.key === 'ArrowLeft') App.cam.x = Math.max(0, App.cam.x - step);
+  if (e.key === 'ArrowRight') App.cam.x += step;
+  if (e.key === 'ArrowUp') App.cam.y = Math.max(0, App.cam.y - step);
+  if (e.key === 'ArrowDown') App.cam.y += step;
 });
 document.getElementById('recenter').addEventListener('click', () => {
   const cap = App.snap && App.snap.player && App.snap.player.capital;
-  const prov = App.map.provinces.find((p) => p.id === App.selection) ||
-               (cap ? App.map.provinces.find((p) => p.id === cap) : null);
-  if (prov) {
-    App.cam.x = prov.x - 20;
-    App.cam.y = prov.y - 12;
-  }
+  const prov = provinceById(App.selection) ||
+               (cap ? provinceById(cap) : null);
+  if (prov) centerOn(prov.x + 0.5, prov.y + 0.5);
 });
 document.getElementById('save').addEventListener('click', async () => {
   const res = await api('/api/save', { method: 'POST' });
   toast(res.ok ? `saved to ${res.path}` : `save failed: ${res.error}`);
+});
+document.getElementById('load').addEventListener('click', async () => {
+  const res = await api('/api/load', { method: 'POST' });
+  if (res.ok) {
+    toast(`loaded at tick ${res.tick}`);
+    await refresh();
+    renderPanels();
+  } else {
+    toast(`load failed: ${res.error}`);
+  }
 });
 for (const b of document.querySelectorAll('button.ov')) {
   b.addEventListener('click', () => {
@@ -440,6 +492,61 @@ function renderTop() {
     `  Fuel ${Math.round(p.fuel || 0)}`;
 }
 
+async function renderProvinceDetails(pid) {
+  const battleEl = document.getElementById('battle-detail');
+  const supplyEl = document.getElementById('supply-detail');
+  battleEl.textContent = 'loading…';
+  supplyEl.textContent = 'loading…';
+
+  const supply = await api(`/api/supply?province=${pid}`);
+  if (supply && !supply.error) {
+    let html = `<b>${supply.country || '—'}</b> · level ${(supply.supply_level * 100).toFixed(0)}%` +
+      ` · delivered ${supply.delivered.toFixed(1)}/hr` +
+      (supply.bottleneck ? ` · bottleneck ${supply.bottleneck}` : '') + '<br>';
+    html += supply.route.map((s) =>
+      `<span class="dim">→</span> ${s.name} <span class="dim">${s.capacity.toFixed(1)}</span>`).join('<br>');
+    if (supply.divisions.length) {
+      html += '<br>' + supply.divisions.map((d) =>
+        `${d.name}: supply ${(d.supply * 100).toFixed(0)}% fuel ${(d.fuel * 100).toFixed(0)}%`).join('<br>');
+    }
+    supplyEl.innerHTML = html;
+  } else {
+    supplyEl.textContent = 'no supply information';
+  }
+
+  const snapBattle = (App.snap.battles || []).find((b) => b.province === pid);
+  if (!snapBattle) {
+    battleEl.textContent = 'no battle here';
+    return;
+  }
+  const battle = await api(`/api/battle?id=${snapBattle.id}`);
+  if (!battle || battle.error) {
+    battleEl.textContent = 'battle detail unavailable';
+    return;
+  }
+  const side = (label, s) =>
+    `<b>${label}</b> soft ${s.soft_attack.toFixed(0)} hard ${s.hard_attack.toFixed(0)} ` +
+    `def ${s.defense.toFixed(0)} brk ${s.breakthrough.toFixed(0)}<br>` +
+    s.divisions.map((d) =>
+      `<span class="dim">${d.tag}</span> ${d.name}: org ${d.org.toFixed(0)}/${d.max_org.toFixed(0)}` +
+      ` str ${(d.strength * 100).toFixed(0)}% sup ${(d.supply * 100).toFixed(0)}%` +
+      ` ent ${(d.entrenchment * 100).toFixed(0)}% plan ${(d.planning * 100).toFixed(0)}%`).join('<br>');
+  let html = `${battle.terrain}${battle.river_crossing ? ' · river' : ''}` +
+    `${battle.encirclement ? ' · <span class="bad">encircled</span>' : ''}` +
+    ` · progress ${(battle.progress * 100).toFixed(0)}%<br>` +
+    side('Attackers', battle.attacker) + '<br>' + side('Defenders', battle.defender);
+  if (battle.debug.length) {
+    const d = battle.debug[0];
+    html += '<br><span class="dim">last tick</span> base ' + d.base_attack.toFixed(1) +
+      ` × terrain ${d.terrain.toFixed(2)} × supply ${d.supply.toFixed(2)}` +
+      ` + planning ${d.planning.toFixed(2)} + commander ${d.commander.toFixed(2)}` +
+      ` + exp ${d.experience.toFixed(2)} → ${d.final_attack.toFixed(1)} vs ` +
+      `defense ${d.enemy_defense.toFixed(1)} = damage ${d.damage.toFixed(2)}` +
+      ` (org ${d.org_damage.toFixed(2)}, str ${d.strength_damage.toFixed(3)})`;
+  }
+  battleEl.innerHTML = html;
+}
+
 function renderLeft() {
   const alerts = (App.snap && App.snap.player && App.snap.player.alerts) || [];
   const el = document.getElementById('alerts');
@@ -468,7 +575,7 @@ function renderLeft() {
     sel.textContent = 'Click a province.';
     return;
   }
-  const p = App.map.provinces.find((q) => q.id === App.selection);
+  const p = provinceById(App.selection);
   if (!p) return;
   const owner = App.snap.owner[p.id];
   const ctl = App.snap.controller[p.id];
@@ -484,14 +591,35 @@ function renderLeft() {
     row.className = 'row' + (d.id === App.selectedDivision ? ' selected' : '');
     row.innerHTML = `<span>${d.name} <span class="dim">${tagOf(d.country)}</span></span>` +
       `<span class="num">${d.org.toFixed(0)}/${d.max_org.toFixed(0)} · ${(d.strength * 100).toFixed(0)}%</span>`;
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (ev) => {
+      // Plain click selects the division for a move order; shift-click assigns it to
+      // the player's first army (fast way to get units under a commander).
+      if (ev.shiftKey && d.country === App.snap.player.id) {
+        const armies = App.snap.player.armies || [];
+        if (armies.length > 0) {
+          sendCommand({ type: 'assign_division_to_army', army: armies[0].id, division_ids: [d.id] })
+            .then(() => refresh());
+        } else {
+          toast('create an army first (Military tab)');
+        }
+        return;
+      }
       App.selectedDivision = App.selectedDivision === d.id ? -1 : d.id;
-      toast(App.selectedDivision >= 0 ? 'select a target province on the map' : '');
+      toast(App.selectedDivision >= 0 ? 'division selected — click a target province' : '');
       renderLeft();
     });
     pd.appendChild(row);
   }
   if (list.length === 0) pd.innerHTML = '<div class="small">none</div>';
+  pd.insertAdjacentHTML('beforeend',
+    '<div class="small dim">click = select for orders · shift-click = assign to first army</div>');
+
+  const now = Date.now();
+  if (App.detailProvince !== App.selection || now - (App.detailAt || 0) > 1500) {
+    App.detailProvince = App.selection;
+    App.detailAt = now;
+    renderProvinceDetails(App.selection);
+  }
 }
 
 function productionPanel() {
@@ -537,13 +665,11 @@ function constructionPanel() {
   const p = App.snap.player;
   const el = document.getElementById('panel-construction');
   const kinds = ['civilian_factory', 'military_factory', 'dockyard', 'infrastructure', 'railway',
-                 'supply_hub', 'air_base', 'naval_base', 'radar', 'fort', 'anti_air'];
-  const stateOptions = App.snap.countries.getOwnedStates ? '' : '';
-  const mine = [];
-  for (const s of App.map.states) mine.push(s);
+                 'supply_hub', 'air_base', 'naval_base', 'radar', 'fort', 'synthetic_refinery'];
+  const mine = (App.snap.player.states || []).slice().sort((a, b) => a.name.localeCompare(b.name));
   let html = `<div class="section"><div class="row-actions">
     <select id="build-kind">${kinds.map((k) => `<option>${k}</option>`).join('')}</select>
-    <select id="build-state">${mine.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select>
+    <select id="build-state">${mine.map((s) => `<option value="${s.id}">${s.name} (civ ${s.civ}, mil ${s.mil}, slots ${s.slots})</option>`).join('')}</select>
     <button id="start-build">Queue</button></div></div>`;
   html += '<table><tr><th>Project</th><th class="num">Progress</th><th></th></tr>';
   for (const c of p.construction) {
@@ -560,7 +686,7 @@ function constructionPanel() {
     const state = Number(el.querySelector('#build-state').value);
     const kinds2 = { civilian_factory: 0, military_factory: 1, dockyard: 2, infrastructure: 3,
                      railway: 4, supply_hub: 5, air_base: 6, naval_base: 7, radar: 8, fort: 9,
-                     anti_air: 10 };
+                     synthetic_refinery: 11 };
     const payload = { type: 'start_construction', kind: kinds2[kindName], state, province: stateProvince(state) };
     if (await sendCommand(payload)) refresh();
   });
@@ -569,8 +695,7 @@ function constructionPanel() {
       const [kind, state, province] = b.dataset.cancel.split(':').map(Number);
       const kinds2 = { civilian_factory: 0, military_factory: 1, dockyard: 2, infrastructure: 3,
                        railway: 4, supply_hub: 5, air_base: 6, naval_base: 7, radar: 8, fort: 9,
-                       anti_air: 10 };
-      const name = Object.keys(kinds2).find((k) => kinds2[k] === kind);
+                       synthetic_refinery: 11 };
       if (await sendCommand({ type: 'cancel_construction', kind, state, province })) refresh();
     });
   }
@@ -632,8 +757,8 @@ function militaryPanel() {
   html += '<h3>Training</h3><div class="list">';
   if (p.training.length === 0) html += '<div class="small">none</div>';
   for (const t of p.training) {
-    html += `<div class="row"><span>${t.template} #${t.division}</span>` +
-      `<span class="num">${t.ready ? '<span class="good">ready</span>' : t.days_left.toFixed(1) + 'd'}` +
+    html += `<div class="row" data-train="${t.division}"><span>${t.template} #${t.division}</span>` +
+      `<span class="num">${t.ready ? '<span class="good">ready — click, then click a province</span>' : t.days_left.toFixed(1) + 'd'}` +
       ` · ${(t.strength * 100).toFixed(0)}%</span></div>`;
   }
   html += '</div>';
@@ -659,7 +784,7 @@ function militaryPanel() {
   html += '<h3>Divisions</h3><div class="list">';
   for (const d of App.snap.divisions) {
     if (d.country !== p.id) continue;
-    const prov = App.map.provinces.find((q) => q.id === d.province);
+    const prov = provinceById(d.province);
     html += `<div class="row${d.id === App.selectedDivision ? ' selected' : ''}" data-div="${d.id}">` +
       `<span>${d.name} <span class="dim">${d.training ? 'training' : (prov ? prov.name : '—')}</span></span>` +
       `<span class="num">${d.org.toFixed(0)}/${d.max_org.toFixed(0)} · ${(d.strength * 100).toFixed(0)}%` +
@@ -693,6 +818,13 @@ function militaryPanel() {
     b.addEventListener('click', async () => {
       const army = Number(b.dataset.armyMotor);
       if (await sendCommand({ type: 'motorize_supply', army, motorization: 3 })) refresh();
+    });
+  }
+  for (const row of el.querySelectorAll('div[data-train]')) {
+    row.addEventListener('click', () => {
+      App.selectedDivision = Number(row.dataset.train);
+      toast('division selected — click a province to deploy it');
+      renderLeft();
     });
   }
   for (const row of el.querySelectorAll('div[data-div]')) {
@@ -729,11 +861,22 @@ function diplomacyPanel() {
     const atWar = App.snap.wars.some((w) =>
       (w.attackers.includes(p.id) && w.defenders.includes(c.id)) ||
       (w.defenders.includes(p.id) && w.attackers.includes(c.id)));
-    html += `<tr><td>${c.tag}</td><td>${c.name}</td><td class="num">—</td>` +
+    html += `<tr><td>${c.tag}</td><td>${c.name}</td><td class="num">${c.states}</td>` +
       `<td class="num">${c.civ + c.mil}</td><td class="num">${c.divisions}</td>` +
       `<td>${c.id === p.id ? '<span class="dim">you</span>' :
         (atWar ? '<span class="bad">war</span>' :
          `<button data-war="${c.id}">Declare war</button>`)}</td></tr>`;
+  }
+  html += '</table>';
+  html += '<h3>Factions</h3><table>';
+  const factions = App.snap.factions || [];
+  if (factions.length === 0) html += '<tr><td class="dim">none</td></tr>';
+  const me = App.snap.countries.find((c) => c.id === p.id);
+  for (const f of factions) {
+    const inIt = f.members.includes(p.tag);
+    html += `<tr><td>${f.name}</td><td class="dim">${f.leader} + ${f.members.filter((m) => m !== f.leader).join(', ') || 'no members'}</td>` +
+      `<td>${inIt ? '<span class="good">member</span>' :
+        `<button data-join-faction="${f.leader_id}">Join</button>`}</td></tr>`;
   }
   html += '</table>';
   html += '<h3>Laws</h3><table>';
@@ -752,6 +895,11 @@ function diplomacyPanel() {
   for (const b of el.querySelectorAll('button[data-law]')) {
     b.addEventListener('click', async () => {
       if (await sendCommand({ type: 'set_law', law: b.dataset.law })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-join-faction]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'join_faction', target_country: Number(b.dataset.joinFaction) })) refresh();
     });
   }
 }
@@ -791,14 +939,36 @@ async function refresh() {
   }
 }
 
+function centerOn(worldX, worldY) {
+  const w = canvas.width / devicePixelRatio;
+  const h = canvas.height / devicePixelRatio;
+  App.cam.x = Math.max(0, worldX - w / (2 * App.cam.zoom));
+  App.cam.y = Math.max(0, worldY - h / (2 * App.cam.zoom));
+}
+
+function fitMap() {
+  if (!App.map || App.map.provinces.length === 0) return;
+  let maxX = 1, maxY = 1;
+  for (const p of App.map.provinces) {
+    if (p.x + 1 > maxX) maxX = p.x + 1;
+    if (p.y + 1 > maxY) maxY = p.y + 1;
+  }
+  const w = canvas.width / devicePixelRatio;
+  const h = canvas.height / devicePixelRatio;
+  App.cam.zoom = Math.max(2, Math.min(20, Math.min(w / maxX, h / maxY) * 0.92));
+}
+
 async function init() {
   resize();
   const map = await api('/api/map');
   if (map && map.provinces) {
     App.map = map;
-    const capital = App.snap ? App.snap.player.capital : 0;
-    App.cam.x = 0;
-    App.cam.y = 0;
+    App.byId = new Map();
+    App.byCoord = new Map();
+    for (const p of map.provinces) {
+      App.byId.set(p.id, p);
+      App.byCoord.set(`${p.x},${p.y}`, p);
+    }
   }
   const meta = await api('/api/meta');
   if (meta) {
@@ -807,17 +977,16 @@ async function init() {
     renderSpeedButtons();
   }
   await refresh();
+  fitMap();
   const cap = App.snap && App.snap.player && App.snap.player.capital;
-  if (cap) {
-    const prov = App.map.provinces.find((p) => p.id === cap);
-    if (prov) { App.cam.x = prov.x - 20; App.cam.y = prov.y - 12; }
-  }
+  const prov = cap ? provinceById(cap) : null;
+  if (prov) centerOn(prov.x + 0.5, prov.y + 0.5);
   requestAnimationFrame(function frame() {
     draw();
     requestAnimationFrame(frame);
   });
   setInterval(refresh, 700);
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', () => { resize(); });
 }
 
 init();

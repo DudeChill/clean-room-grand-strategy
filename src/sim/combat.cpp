@@ -105,11 +105,48 @@ double terrain_attack_modifier(Terrain t) {
     }
 }
 
-// Removes a division from the world and from every list that references it.
+// Removes one id from a battle side, keeping `width_used` parallel.
+void remove_from_side(BattleSideState& side, DivisionId id) {
+    for (size_t i = 0; i < side.divisions.size(); ++i) {
+        if (side.divisions[i] == id) {
+            side.divisions.erase(side.divisions.begin() + static_cast<long>(i));
+            if (i < side.width_used.size()) {
+                side.width_used.erase(side.width_used.begin() + static_cast<long>(i));
+            }
+            return;
+        }
+    }
+}
+
+// Drops battle side entries that are gone or belong to another battle, so a
+// battle side can never outlive its divisions.
+void prune_side(Game& g, BattleId bid, BattleSideState& side) {
+    const size_t n = side.divisions.size();
+    if (side.width_used.size() != n) side.width_used.resize(n, 0.0);
+    std::vector<DivisionId> ids;
+    std::vector<double> widths;
+    ids.reserve(n);
+    widths.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        Division* d = g.world.division(side.divisions[i]);
+        if (!d) continue;                // destroyed elsewhere
+        if (d->battle != bid) continue;  // listed by mistake; it belongs elsewhere
+        ids.push_back(side.divisions[i]);
+        widths.push_back(side.width_used[i]);
+    }
+    side.divisions.swap(ids);
+    side.width_used.swap(widths);
+}
+
+// Removes a division from the world and from every list that references it. The
+// battle detach happens first so a destroyed division never leaves a dangling id
+// in Battle::attacker/defender.
 void military_destroy_division(Game& g, DivisionId id) {
     World& w = g.world;
     Division* d = w.division(id);
     if (!d) return;
+    if (d->battle.valid()) detach_from_battle(g, *d);
+    d->battle = BattleId{};
     Country* c = w.country(d->country);
     if (c) {
         c->divisions.erase(std::remove(c->divisions.begin(), c->divisions.end(), id),
@@ -564,7 +601,8 @@ BattleId start_battle(Game& g, ProvinceId province, CountryId attacker_lead,
     Battle* b = w.battles.try_get(id);
     if (!b) return BattleId{};
 
-    auto add = [&](BattleSideState& side, const std::vector<DivisionId>& ids, bool is_attacker) {
+    auto add = [&](BattleSideState& side, BattleSideState& other,
+                   const std::vector<DivisionId>& ids, bool is_attacker) {
         for (DivisionId did : ids) {
             Division* d = w.division(did);
             if (!d) continue;
@@ -576,7 +614,12 @@ BattleId start_battle(Game& g, ProvinceId province, CountryId attacker_lead,
                     break;
                 }
             }
-            if (present) continue;
+            if (present) {
+                d->battle = id;
+                continue;
+            }
+            // A division fights on exactly one side of one battle.
+            remove_from_side(other, did);
             side.divisions.push_back(did);
             side.width_used.push_back(0.0);
             d->battle = id;
@@ -591,8 +634,8 @@ BattleId start_battle(Game& g, ProvinceId province, CountryId attacker_lead,
             }
         }
     };
-    add(b->attacker, attackers, true);
-    add(b->defender, defenders, false);
+    add(b->attacker, b->defender, attackers, true);
+    add(b->defender, b->attacker, defenders, false);
     return id;
 }
 
@@ -612,6 +655,33 @@ void detach_from_battle(Game& g, Division& d) {
         }
     }
     d.battle = BattleId{};
+}
+
+// Purges dead ids from every battle side and closes battles whose side became
+// empty. Called at the start of combat and again at the end of the territory
+// phase, so a battle can never outlive its divisions even when another system
+// destroyed them (capitulation destroys a country's divisions in phase 5).
+void military_prune_battles(Game& g) {
+    World& w = g.world;
+    std::vector<BattleId> empty;
+    w.battles.for_each([&](BattleId bid, Battle& b) {
+        prune_side(g, bid, b.attacker);
+        prune_side(g, bid, b.defender);
+        if (b.attacker.divisions.empty() || b.defender.divisions.empty()) empty.push_back(bid);
+    });
+    for (BattleId bid : empty) {
+        Battle* b = w.battles.try_get(bid);
+        if (!b) continue;
+        for (DivisionId did : b->attacker.divisions) {
+            Division* d = w.division(did);
+            if (d && d->battle == bid) d->battle = BattleId{};
+        }
+        for (DivisionId did : b->defender.divisions) {
+            Division* d = w.division(did);
+            if (d && d->battle == bid) d->battle = BattleId{};
+        }
+        w.battles.destroy(bid);
+    }
 }
 
 ProvinceId choose_retreat_province(const Game& g, const Division& d) {
@@ -876,6 +946,9 @@ void resolve_battles(Game& g) {
 
 void phase_combat(Game& g) {
     World& w = g.world;
+    // Drop divisions destroyed since the last tick (e.g. by capitulation) before
+    // any battle logic reads the side vectors.
+    military_prune_battles(g);
     start_new_battles(g);
     reinforce_battles(g);
     resolve_battles(g);

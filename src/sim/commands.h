@@ -37,6 +37,8 @@ enum class CommandType : uint8_t {
     AssignGeneral,
     DeclareWar,
     OfferPeace,
+    JoinFaction,        // join an existing faction led by `target_country`
+    LeaveFaction,
     SetLaw,
     SetTradePolicy,
     SetStance,             // aggressive / defensive / garrison posture for an army

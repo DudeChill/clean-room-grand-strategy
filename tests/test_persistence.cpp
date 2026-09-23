@@ -79,10 +79,10 @@ void require(bool ok, const std::string& what, const std::string& err) {
     if (!ok) ::hoi_test::fail(__FILE__, __LINE__, what + ": " + err);
 }
 
-// Container layout, used to patch specific bytes of a save file in the tests below:
-// magic, version, seed, scenario, tick, date, section count, then
-// (tag, byte length, section hash, payload) per subsystem, then the world hash and
-// the command log trailer.
+// Container layout, used to patch specific bytes of a save file in the tests below.
+// The header is skipped by scanning for the section table instead of re-encoding the
+// header layout: the table is identifiable because it is nine records in tag order,
+// each (tag, byte length, hash, payload), that consume the file up to the world hash.
 struct SaveLayout {
     std::vector<size_t> payload_offset;
     std::vector<uint32_t> payload_length;
@@ -90,41 +90,46 @@ struct SaveLayout {
     size_t log_count_offset = 0;
 };
 
+uint32_t peek_u32(const std::vector<uint8_t>& bytes, size_t off) {
+    return static_cast<uint32_t>(bytes[off]) | (static_cast<uint32_t>(bytes[off + 1]) << 8) |
+           (static_cast<uint32_t>(bytes[off + 2]) << 16) |
+           (static_cast<uint32_t>(bytes[off + 3]) << 24);
+}
+
 SaveLayout parse_save(const std::vector<uint8_t>& bytes) {
-    SaveLayout layout;
-    layout.payload_offset.assign(static_cast<size_t>(Subsystem::Count), 0);
-    layout.payload_length.assign(static_cast<size_t>(Subsystem::Count), 0);
-    ByteReader r(bytes);
-    uint32_t u32 = 0;
-    uint32_t sections = 0;
-    uint64_t u64 = 0;
-    std::string str;
-    uint8_t u8 = 0;
-    int32_t i32 = 0;
-    require(r.u32(&u32) && u32 == SAVE_MAGIC, "parse_save", "bad magic");
-    require(r.u32(&u32) && u32 == SAVE_VERSION, "parse_save", "bad version");
-    require(r.u64(&u64), "parse_save", "truncated header");
-    require(r.str(&str), "parse_save", "truncated scenario");
-    require(r.u64(&u64), "parse_save", "truncated tick");
-    require(r.i32(&i32), "parse_save", "truncated date");
-    require(r.u8(&u8) && r.u8(&u8) && r.u8(&u8), "parse_save", "truncated date");
-    require(r.u32(&sections) && sections == static_cast<uint32_t>(Subsystem::Count), "parse_save",
-            "unexpected section count");
-    for (uint32_t i = 0; i < sections; ++i) {
-        uint8_t tag = 0;
-        uint32_t length = 0;
-        uint64_t hash = 0;
-        require(r.u8(&tag) && tag < static_cast<uint8_t>(Subsystem::Count), "parse_save", "bad tag");
-        require(r.u32(&length) && r.u64(&hash), "parse_save", "truncated section header");
-        layout.payload_offset[tag] = bytes.size() - r.remaining();
-        layout.payload_length[tag] = length;
-        std::vector<uint8_t> skip(length, 0);
-        require(r.raw(skip.data(), length), "parse_save", "truncated payload");
+    const size_t kinds = static_cast<size_t>(Subsystem::Count);
+    for (size_t start = 4; start + 13 * kinds + 12 < bytes.size(); ++start) {
+        std::vector<size_t> offsets(kinds, 0);
+        std::vector<uint32_t> lengths(kinds, 0);
+        size_t p = start;
+        bool ok = true;
+        for (size_t i = 0; i < kinds; ++i) {
+            if (bytes[p] != static_cast<uint8_t>(i)) {
+                ok = false;
+                break;
+            }
+            const uint32_t length = peek_u32(bytes, p + 1);
+            if (p + 13 + length > bytes.size()) {
+                ok = false;
+                break;
+            }
+            offsets[i] = p + 13;
+            lengths[i] = length;
+            p += 13 + static_cast<size_t>(length);
+        }
+        if (!ok || p + 12 > bytes.size()) continue;
+        const uint32_t log_count = peek_u32(bytes, p + 8);
+        if (p + 12 + static_cast<uint64_t>(log_count) * 14 > bytes.size()) continue;
+
+        SaveLayout layout;
+        layout.payload_offset = offsets;
+        layout.payload_length = lengths;
+        layout.world_hash_offset = p;
+        layout.log_count_offset = p + 8;
+        return layout;
     }
-    layout.world_hash_offset = bytes.size() - r.remaining();
-    require(r.u64(&u64), "parse_save", "truncated world hash");
-    layout.log_count_offset = bytes.size() - r.remaining();
-    return layout;
+    ::hoi_test::fail(__FILE__, __LINE__, "parse_save: no valid section table found");
+    return SaveLayout{};
 }
 
 // ----------------------------------------------------------- hand-built world --
@@ -256,6 +261,7 @@ void build_world(Game* g) {
         s->civilian_factories = 3 + i;
         s->military_factories = 2 + i;
         s->dockyards = i % 2;
+        s->synthetic_refineries = i % 3;
         s->building_slots = 6 + i;
         s->manpower_pool = 100000.0 * (i + 1);
     }
@@ -906,6 +912,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"state.civilian_factories", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.civilian_factories += 1; }); }},
         {"state.military_factories", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.military_factories += 1; }); }},
         {"state.dockyards", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.dockyards += 1; }); }},
+        {"state.synthetic_refineries", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.synthetic_refineries += 1; }); }},
         {"state.building_slots", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.building_slots += 1; }); }},
         {"state.manpower_pool", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.manpower_pool += 1.0; }); }},
         {"state.impassable", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.impassable = !s.impassable; }); }},
@@ -988,6 +995,54 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"template.fuel_use", +[](Game& g) { for (auto& t : g.content.templates) t.fuel_use += 0.1; }},
         {"template.build_cost", +[](Game& g) { for (auto& t : g.content.templates) t.build_cost += 1.0; }},
         {"template.train_days", +[](Game& g) { for (auto& t : g.content.templates) t.train_days += 1.0; }},
+        {"equipment.id", +[](Game& g) { for (auto& e : g.content.equipment) e.id = EquipmentId(0); }},
+        {"equipment.key", +[](Game& g) { for (auto& e : g.content.equipment) e.key += "x"; }},
+        {"equipment.name", +[](Game& g) { for (auto& e : g.content.equipment) e.name += "x"; }},
+        {"equipment.category", +[](Game& g) { for (auto& e : g.content.equipment) e.category = EquipmentCategory::Armor; }},
+        {"equipment.year", +[](Game& g) { for (auto& e : g.content.equipment) e.year += 1; }},
+        {"equipment.archetype", +[](Game& g) { for (auto& e : g.content.equipment) e.archetype += "x"; }},
+        {"equipment.soft_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.soft_attack += 1.0; }},
+        {"equipment.hard_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.hard_attack += 1.0; }},
+        {"equipment.air_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.air_attack += 1.0; }},
+        {"equipment.defense", +[](Game& g) { for (auto& e : g.content.equipment) e.defense += 1.0; }},
+        {"equipment.breakthrough", +[](Game& g) { for (auto& e : g.content.equipment) e.breakthrough += 1.0; }},
+        {"equipment.armor", +[](Game& g) { for (auto& e : g.content.equipment) e.armor += 1.0; }},
+        {"equipment.piercing", +[](Game& g) { for (auto& e : g.content.equipment) e.piercing += 1.0; }},
+        {"equipment.hardness", +[](Game& g) { for (auto& e : g.content.equipment) e.hardness += 0.1; }},
+        {"equipment.reliability", +[](Game& g) { for (auto& e : g.content.equipment) e.reliability -= 0.1; }},
+        {"equipment.speed", +[](Game& g) { for (auto& e : g.content.equipment) e.speed += 1.0; }},
+        {"equipment.max_strength", +[](Game& g) { for (auto& e : g.content.equipment) e.max_strength += 1.0; }},
+        {"equipment.organization", +[](Game& g) { for (auto& e : g.content.equipment) e.organization += 1.0; }},
+        {"equipment.build_cost", +[](Game& g) { for (auto& e : g.content.equipment) e.build_cost += 1.0; }},
+        {"equipment.resources", +[](Game& g) { for (auto& e : g.content.equipment) e.resources[static_cast<int>(Resource::Steel)] += 1.0; }},
+        {"equipment.fuel_use", +[](Game& g) { for (auto& e : g.content.equipment) e.fuel_use += 0.1; }},
+        {"equipment.supply_use", +[](Game& g) { for (auto& e : g.content.equipment) e.supply_use += 0.1; }},
+        {"equipment.manpower", +[](Game& g) { for (auto& e : g.content.equipment) e.manpower += 1.0; }},
+        {"equipment.is_archetype", +[](Game& g) { for (auto& e : g.content.equipment) e.is_archetype = true; }},
+        {"tech.id", +[](Game& g) { for (auto& t : g.content.techs) t.id = TechId(0); }},
+        {"tech.key", +[](Game& g) { for (auto& t : g.content.techs) t.key += "x"; }},
+        {"tech.name", +[](Game& g) { for (auto& t : g.content.techs) t.name += "x"; }},
+        {"tech.category", +[](Game& g) { for (auto& t : g.content.techs) t.category += "x"; }},
+        {"tech.year", +[](Game& g) { for (auto& t : g.content.techs) t.year += 1; }},
+        {"tech.cost_days", +[](Game& g) { for (auto& t : g.content.techs) t.cost_days += 1.0; }},
+        {"tech.prerequisites", +[](Game& g) { for (auto& t : g.content.techs) t.prerequisites.push_back(TechId(0)); }},
+        {"tech.unlock_equipment", +[](Game& g) { for (auto& t : g.content.techs) t.unlock_equipment.push_back("x"); }},
+        {"tech.unlock_buildings", +[](Game& g) { for (auto& t : g.content.techs) t.unlock_buildings.push_back("x"); }},
+        {"tech.modifiers", +[](Game& g) { for (auto& t : g.content.techs) t.modifiers.v[0] += 0.01; }},
+        {"law.key", +[](Game& g) { for (auto& l : g.content.laws) l.key += "x"; }},
+        {"law.name", +[](Game& g) { for (auto& l : g.content.laws) l.name += "x"; }},
+        {"law.kind", +[](Game& g) { for (auto& l : g.content.laws) l.kind += 1; }},
+        {"law.level", +[](Game& g) { for (auto& l : g.content.laws) l.level += 1; }},
+        {"law.cost", +[](Game& g) { for (auto& l : g.content.laws) l.cost += 1.0; }},
+        {"law.modifiers", +[](Game& g) { for (auto& l : g.content.laws) l.modifiers.v[0] += 0.01; }},
+        {"law.requires_law", +[](Game& g) { for (auto& l : g.content.laws) l.requires_law += "x"; }},
+        {"law.requires_level", +[](Game& g) { for (auto& l : g.content.laws) l.requires_level += 1; }},
+        {"building.kind", +[](Game& g) { for (auto& b : g.content.buildings) b.kind = BuildingKind::Fort; }},
+        {"building.key", +[](Game& g) { for (auto& b : g.content.buildings) b.key += "x"; }},
+        {"building.name", +[](Game& g) { for (auto& b : g.content.buildings) b.name += "x"; }},
+        {"building.base_cost", +[](Game& g) { for (auto& b : g.content.buildings) b.base_cost += 1.0; }},
+        {"building.per_state", +[](Game& g) { for (auto& b : g.content.buildings) b.per_state = !b.per_state; }},
+        {"building.max_level", +[](Game& g) { for (auto& b : g.content.buildings) b.max_level += 1; }},
         {"country.divisions", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.divisions.push_back(DivisionId(0)); }); }},
         {"country.armies", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.armies.push_back(ArmyId(0)); }); }},
         {"country.training", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.training.push_back(TrainingDivision{DivisionId(0), TemplateId(0), 5.0}); }); }},
@@ -1122,6 +1177,118 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         if (world_hash(mutated) == before) {
             ::hoi_test::fail(__FILE__, __LINE__,
                              std::string("field is not covered by the world hash: ") + flip.what);
+        }
+    }
+
+    // SimConstants is one flat record of balance numbers: every member is part of the
+    // hash individually, so a data tune cannot slip past a save/load comparison.
+    double SimConstants::*const constant_members[] = {
+        &SimConstants::ic_per_military_factory,
+        &SimConstants::ic_per_civilian_factory,
+        &SimConstants::ic_per_dockyard,
+        &SimConstants::efficiency_start,
+        &SimConstants::efficiency_cap_base,
+        &SimConstants::efficiency_cap_growth_per_day,
+        &SimConstants::efficiency_growth_per_day,
+        &SimConstants::switch_same_archetype_retention,
+        &SimConstants::resource_shortage_floor,
+        &SimConstants::consumer_goods_base,
+        &SimConstants::fuel_per_oil,
+        &SimConstants::fuel_storage_per_factory,
+        &SimConstants::synthetic_oil_per_refinery_per_day,
+        &SimConstants::synthetic_rubber_per_refinery_per_day,
+        &SimConstants::construction_cost_factory,
+        &SimConstants::construction_cost_infrastructure,
+        &SimConstants::construction_cost_railway,
+        &SimConstants::construction_cost_supply_hub,
+        &SimConstants::construction_cost_air_base,
+        &SimConstants::construction_cost_naval_base,
+        &SimConstants::construction_cost_fort,
+        &SimConstants::construction_cost_radar,
+        &SimConstants::construction_cost_synthetic,
+        &SimConstants::construction_level_scaling,
+        &SimConstants::research_base_days,
+        &SimConstants::research_year_penalty,
+        &SimConstants::research_speed_base,
+        &SimConstants::manpower_growth_per_year_fraction,
+        &SimConstants::recruitable_base,
+        &SimConstants::base_hours_per_province,
+        &SimConstants::min_division_speed,
+        &SimConstants::river_crossing_penalty,
+        &SimConstants::combat_width_base,
+        &SimConstants::damage_scale,
+        &SimConstants::org_damage_share,
+        &SimConstants::strength_damage_share,
+        &SimConstants::armor_advantage_multiplier,
+        &SimConstants::armor_disadvantage_multiplier,
+        &SimConstants::org_recovery_base,
+        &SimConstants::entrenchment_per_day,
+        &SimConstants::planning_per_day,
+        &SimConstants::planning_max_attack_bonus,
+        &SimConstants::battle_retreat_org_threshold,
+        &SimConstants::max_battles_per_province,
+        &SimConstants::supply_hub_radius,
+        &SimConstants::supply_range_penalty,
+        &SimConstants::supply_demand_per_width,
+        &SimConstants::supply_rail_bonus_per_level,
+        &SimConstants::supply_infrastructure_bonus_per_level,
+        &SimConstants::fuel_demand_per_day,
+        &SimConstants::political_power_per_day,
+        &SimConstants::stability_drift,
+        &SimConstants::war_support_drift,
+        &SimConstants::weather_change_chance,
+    };
+    for (double SimConstants::*member : constant_members) {
+        Game mutated = f.source;
+        mutated.content.constants.*member += 1.0;
+        if (world_hash(mutated) == before) {
+            ::hoi_test::fail(__FILE__, __LINE__, "SimConstants member is not covered by the world hash");
+        }
+    }
+}
+
+// A save must be self-contained: GOLDEN_010 loads into a default-constructed Game
+// (no content, no scenario), and a save that left the content database or the control
+// routing behind would continue differently from the run it came from.
+HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
+    const Fixture& f = fixture();
+
+    Game empty;  // no content, no world, no scenario path
+    std::string err;
+    require(load_game(empty, f.save_path, &err), "load_game into empty Game", err);
+
+    CHECK_EQ(world_hash(empty), f.hash);
+    check_all_sections_equal(f.source, empty);
+    CHECK_EQ(empty.content.equipment.size(), f.source.content.equipment.size());
+    CHECK_EQ(empty.content.techs.size(), f.source.content.techs.size());
+    CHECK_EQ(empty.content.laws.size(), f.source.content.laws.size());
+    CHECK_EQ(empty.content.buildings.size(), f.source.content.buildings.size());
+    CHECK_EQ(empty.content.templates.size(), f.source.content.templates.size());
+    CHECK(empty.content.constants.ic_per_military_factory ==
+          f.source.content.constants.ic_per_military_factory);
+    // Derived key -> id maps are rebuilt, not stored: lookups must work after a load.
+    for (const EquipmentDef& e : f.source.content.equipment) {
+        CHECK(empty.content.equipment_id(e.key) == e.id);
+    }
+    for (const DivisionTemplate& t : f.source.content.templates) {
+        CHECK(empty.content.template_id(t.key) == t.id);
+    }
+    CHECK(empty.content.laws.size() == f.source.content.laws.size());
+    if (!f.source.content.laws.empty()) {
+        CHECK(empty.content.law(f.source.content.laws.front().key) != nullptr);
+    }
+
+    // Continuing both runs must stay identical: this is what a lost field would break.
+    Game original = f.source;
+    Game loaded = empty;
+    original.run_ticks(TICKS_PER_DAY * 5);
+    loaded.run_ticks(TICKS_PER_DAY * 5);
+    CHECK_EQ(world_hash(original), world_hash(loaded));
+    for (int i = 0; i < static_cast<int>(Subsystem::Count); ++i) {
+        const Subsystem s = static_cast<Subsystem>(i);
+        if (subsystem_hash(original, s) != subsystem_hash(loaded, s)) {
+            ::hoi_test::fail(__FILE__, __LINE__,
+                             std::string("subsystem diverged after continuing: ") + subsystem_name(s));
         }
     }
 }

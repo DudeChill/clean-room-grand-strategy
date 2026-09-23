@@ -10,51 +10,191 @@
       "ideology": "democratic",
       "capital_state": "s297",
       "states": [
-        "s312",
+        "s1",
+        "s117",
+        "s118",
+        "s124",
+        "s129",
+        "s130",
+        "s136",
+        "s137",
+        "s138",
+        "s139",
+        "s145",
+        "s151",
+        "s152",
+        "s156",
+        "s157",
+        "s166",
+        "s167",
+        "s173",
+        "s174",
+        "s180",
+        "s190",
+        "s196",
+        "s202",
+        "s211",
+        "s217",
+        "s218",
+        "s224",
+        "s232",
+        "s236",
+        "s237",
+        "s246",
+        "s252",
+        "s253",
+        "s261",
+        "s262",
+        "s267",
+        "s268",
+        "s269",
         "s27",
-        "s297"
+        "s270",
+        "s278",
+        "s281",
+        "s288",
+        "s289",
+        "s296",
+        "s297",
+        "s301",
+        "s311",
+        "s312",
+        "s313",
+        "s318",
+        "s323",
+        "s324",
+        "s325",
+        "s327",
+        "s332"
       ],
-      "civilian_factories": 22,
-      "military_factories": 12,
-      "dockyards": 2,
+      "civilian_factories": 38,
+      "military_factories": 15,
+      "dockyards": 5,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
         "motorization",
         "light_armor",
-        "production_lines",
-        "construction_engineering"
+        "production_lines"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 6
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 2
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 2
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 2
+        },
+        {
+          "equipment": "armor_1",
+          "factories": 3
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 9000,
-        "support_equipment_1": 3000,
-        "motorized_1": 2400,
-        "armor_1": 1800
+        "infantry_equipment_1": 640,
+        "support_equipment_1": 192,
+        "artillery_1": 96,
+        "motorized_1": 160,
+        "armor_1": 80
       },
       "laws": [
         "conscription_limited",
         "economy_civilian",
         "trade_free"
       ],
-      "political_power": 35.0,
+      "political_power": 48.0,
       "stability": 0.62,
       "war_support": 0.35,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p2113",
-          "count": 6
+          "province": "p3",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p835",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p791",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p935",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p974",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p881",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p922",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p973",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p979",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p938",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1025",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1116",
+          "count": 1
         },
         {
           "template": "motorized_division",
-          "province": "p2113",
-          "count": 2
+          "province": "p1032",
+          "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1126",
+          "count": 1
         },
         {
           "template": "armored_division",
-          "province": "p2113",
-          "count": 2
+          "province": "p1127",
+          "count": 1
+        },
+        {
+          "template": "armored_division",
+          "province": "p1118",
+          "count": 1
         }
       ]
     },
@@ -64,24 +204,97 @@
       "ideology": "fascist",
       "capital_state": "s5",
       "states": [
+        "s10",
+        "s102",
+        "s103",
+        "s108",
+        "s109",
+        "s11",
+        "s110",
+        "s114",
+        "s115",
+        "s119",
+        "s122",
+        "s123",
+        "s125",
+        "s126",
+        "s127",
+        "s131",
+        "s132",
+        "s133",
+        "s134",
+        "s135",
+        "s14",
+        "s140",
+        "s141",
+        "s146",
+        "s147",
+        "s148",
+        "s158",
+        "s168",
+        "s169",
+        "s17",
+        "s18",
+        "s181",
+        "s197",
+        "s2",
+        "s20",
+        "s22",
+        "s23",
+        "s24",
+        "s32",
+        "s321",
+        "s329",
+        "s39",
+        "s4",
+        "s43",
+        "s45",
         "s5",
-        "s321"
+        "s54",
+        "s57",
+        "s67",
+        "s7",
+        "s74",
+        "s8",
+        "s82",
+        "s9",
+        "s90",
+        "s91",
+        "s98"
       ],
-      "civilian_factories": 14,
-      "military_factories": 7,
-      "dockyards": 6,
+      "civilian_factories": 23,
+      "military_factories": 9,
+      "dockyards": 4,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
         "basic_naval_design",
-        "construction_engineering",
-        "aircraft_design"
+        "aircraft_design",
+        "construction_engineering"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 4
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "destroyer_1",
+          "factories": 3
+        },
+        {
+          "equipment": "convoy_1",
+          "factories": 1
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 5200,
-        "support_equipment_1": 1500,
-        "motorized_1": 900,
+        "infantry_equipment_1": 640,
+        "support_equipment_1": 192,
+        "artillery_1": 96,
         "destroyer_1": 40,
         "convoy_1": 200
       },
@@ -90,23 +303,73 @@
         "economy_partial_mobilization",
         "trade_free"
       ],
-      "political_power": 40.0,
+      "political_power": 48.5,
       "stability": 0.55,
       "war_support": 0.55,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p122",
-          "count": 4
+          "province": "p115",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p703",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p717",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p748",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p752",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p123",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p855",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p822",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p780",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p850",
+          "count": 1
         },
         {
           "template": "garrison_division",
-          "province": "p122",
-          "count": 2
+          "province": "p823",
+          "count": 1
         },
         {
-          "template": "motorized_division",
-          "province": "p122",
+          "template": "garrison_division",
+          "province": "p827",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p892",
           "count": 1
         }
       ]
@@ -117,38 +380,93 @@
       "ideology": "neutrality",
       "capital_state": "s47",
       "states": [
-        "s47"
+        "s15",
+        "s16",
+        "s21",
+        "s28",
+        "s3",
+        "s33",
+        "s34",
+        "s40",
+        "s41",
+        "s46",
+        "s47",
+        "s50",
+        "s51",
+        "s58",
+        "s59",
+        "s60",
+        "s61",
+        "s68",
+        "s69",
+        "s75",
+        "s83",
+        "s84",
+        "s85",
+        "s86",
+        "s96",
+        "s97"
       ],
-      "civilian_factories": 4,
-      "military_factories": 2,
+      "civilian_factories": 6,
+      "military_factories": 3,
       "dockyards": 0,
       "technologies": [
         "infantry_weapons",
         "field_artillery",
         "production_lines"
       ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 2
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        }
+      ],
       "stockpile": {
-        "infantry_equipment_1": 2200,
-        "support_equipment_1": 400,
-        "artillery_1": 200
+        "infantry_equipment_1": 320,
+        "support_equipment_1": 96,
+        "artillery_1": 48
       },
       "laws": [
         "conscription_volunteer",
         "economy_undisturbed",
         "trade_free"
       ],
-      "political_power": 25.0,
+      "political_power": 33.0,
       "stability": 0.5,
       "war_support": 0.25,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p336",
-          "count": 3
+          "province": "p106",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p110",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p202",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p286",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p108",
+          "count": 1
         },
         {
           "template": "garrison_division",
-          "province": "p336",
+          "province": "p289",
           "count": 1
         }
       ]
@@ -159,10 +477,32 @@
       "ideology": "neutrality",
       "capital_state": "s221",
       "states": [
-        "s221"
+        "s171",
+        "s172",
+        "s179",
+        "s187",
+        "s188",
+        "s189",
+        "s193",
+        "s194",
+        "s195",
+        "s207",
+        "s208",
+        "s209",
+        "s210",
+        "s216",
+        "s221",
+        "s222",
+        "s223",
+        "s234",
+        "s235",
+        "s244",
+        "s245",
+        "s251",
+        "s260"
       ],
-      "civilian_factories": 6,
-      "military_factories": 3,
+      "civilian_factories": 5,
+      "military_factories": 2,
       "dockyards": 0,
       "technologies": [
         "infantry_weapons",
@@ -170,28 +510,49 @@
         "field_artillery",
         "production_lines"
       ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 2
+        }
+      ],
       "stockpile": {
-        "infantry_equipment_1": 3000,
-        "support_equipment_1": 600,
-        "artillery_1": 300
+        "infantry_equipment_1": 280,
+        "support_equipment_1": 84,
+        "artillery_1": 42
       },
       "laws": [
         "conscription_limited",
         "economy_civilian",
         "trade_free"
       ],
-      "political_power": 30.0,
+      "political_power": 31.5,
       "stability": 0.48,
       "war_support": 0.3,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p1539",
-          "count": 4
+          "province": "p1159",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1164",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1258",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1300",
+          "count": 1
         },
         {
           "template": "garrison_division",
-          "province": "p1539",
+          "province": "p1304",
           "count": 1
         }
       ]
@@ -200,44 +561,108 @@
       "tag": "AVA",
       "name": "Avalonia",
       "ideology": "democratic",
-      "capital_state": "s65",
+      "capital_state": "s49",
       "states": [
+        "s100",
+        "s101",
+        "s107",
+        "s116",
+        "s12",
+        "s13",
+        "s19",
+        "s25",
+        "s26",
+        "s30",
+        "s31",
+        "s37",
+        "s38",
+        "s44",
+        "s48",
         "s49",
-        "s65"
+        "s55",
+        "s56",
+        "s6",
+        "s64",
+        "s65",
+        "s66",
+        "s72",
+        "s73",
+        "s81",
+        "s88",
+        "s89",
+        "s94",
+        "s95"
       ],
-      "civilian_factories": 8,
-      "military_factories": 4,
+      "civilian_factories": 14,
+      "military_factories": 6,
       "dockyards": 2,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "motorization",
-        "construction_engineering"
+        "construction_engineering",
+        "production_lines"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 3
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 1
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 1
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 3600,
-        "support_equipment_1": 800,
-        "motorized_1": 600,
-        "artillery_1": 250
+        "infantry_equipment_1": 360,
+        "support_equipment_1": 108,
+        "artillery_1": 54
       },
       "laws": [
-        "conscription_limited",
-        "economy_partial_mobilization",
+        "conscription_volunteer",
+        "economy_civilian",
         "trade_free"
       ],
-      "political_power": 20.0,
+      "political_power": 34.5,
       "stability": 0.52,
       "war_support": 0.3,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p364",
-          "count": 4
+          "province": "p735",
+          "count": 1
         },
         {
-          "template": "motorized_division",
-          "province": "p364",
+          "template": "infantry_division",
+          "province": "p741",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p777",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p783",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p131",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p180",
           "count": 1
         }
       ]
@@ -246,44 +671,121 @@
       "tag": "MER",
       "name": "Mervath",
       "ideology": "fascist",
-      "capital_state": "s248",
+      "capital_state": "s241",
       "states": [
+        "s185",
+        "s186",
+        "s192",
+        "s201",
+        "s204",
+        "s205",
+        "s206",
+        "s213",
+        "s214",
+        "s215",
+        "s220",
+        "s228",
+        "s229",
+        "s230",
+        "s231",
         "s241",
-        "s248"
+        "s242",
+        "s257",
+        "s258",
+        "s259",
+        "s272",
+        "s273",
+        "s274",
+        "s280",
+        "s284",
+        "s292",
+        "s293",
+        "s299",
+        "s305",
+        "s306",
+        "s316",
+        "s330"
       ],
-      "civilian_factories": 9,
+      "civilian_factories": 12,
       "military_factories": 5,
-      "dockyards": 0,
+      "dockyards": 1,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "production_lines",
-        "construction_engineering"
+        "construction_engineering",
+        "production_lines"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 2
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 1
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 1
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 3800,
-        "support_equipment_1": 800,
-        "motorized_1": 600,
-        "artillery_1": 250
+        "infantry_equipment_1": 400,
+        "support_equipment_1": 120,
+        "artillery_1": 60
       },
       "laws": [
-        "conscription_volunteer",
+        "conscription_limited",
         "economy_civilian",
         "trade_free"
       ],
-      "political_power": 21.0,
+      "political_power": 36.0,
       "stability": 0.52,
-      "war_support": 0.32,
+      "war_support": 0.3,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p1663",
-          "count": 5
+          "province": "p1290",
+          "count": 1
         },
         {
-          "template": "armored_division",
-          "province": "p1663",
+          "template": "infantry_division",
+          "province": "p1245",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1294",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1387",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1386",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1437",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1438",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1430",
           "count": 1
         }
       ]
@@ -294,43 +796,105 @@
       "ideology": "neutrality",
       "capital_state": "s36",
       "states": [
+        "s104",
+        "s105",
+        "s106",
+        "s111",
+        "s112",
+        "s113",
+        "s120",
+        "s121",
+        "s29",
+        "s35",
         "s36",
-        "s24"
+        "s42",
+        "s52",
+        "s53",
+        "s62",
+        "s63",
+        "s70",
+        "s71",
+        "s76",
+        "s77",
+        "s78",
+        "s79",
+        "s80",
+        "s87",
+        "s92",
+        "s93",
+        "s99"
       ],
-      "civilian_factories": 10,
-      "military_factories": 6,
-      "dockyards": 2,
+      "civilian_factories": 11,
+      "military_factories": 5,
+      "dockyards": 1,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "motorization",
-        "construction_engineering"
+        "construction_engineering",
+        "production_lines"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 2
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 1
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 1
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 4000,
-        "support_equipment_1": 800,
-        "motorized_1": 600,
-        "artillery_1": 250
+        "infantry_equipment_1": 320,
+        "support_equipment_1": 96,
+        "artillery_1": 48
       },
       "laws": [
-        "conscription_limited",
-        "economy_partial_mobilization",
+        "conscription_volunteer",
+        "economy_civilian",
         "trade_free"
       ],
-      "political_power": 22.0,
+      "political_power": 33.5,
       "stability": 0.52,
-      "war_support": 0.33999999999999997,
+      "war_support": 0.3,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p392",
-          "count": 3
+          "province": "p761",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p765",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p727",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p860",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p768",
+          "count": 1
         },
         {
           "template": "garrison_division",
-          "province": "p392",
-          "count": 2
+          "province": "p769",
+          "count": 1
         }
       ]
     },
@@ -340,43 +904,131 @@
       "ideology": "democratic",
       "capital_state": "s275",
       "states": [
+        "s128",
+        "s142",
+        "s143",
+        "s144",
+        "s149",
+        "s150",
+        "s153",
+        "s154",
+        "s155",
+        "s159",
+        "s160",
+        "s161",
+        "s162",
+        "s163",
+        "s164",
+        "s165",
+        "s170",
+        "s175",
+        "s176",
+        "s177",
+        "s178",
+        "s182",
+        "s183",
+        "s184",
+        "s191",
+        "s200",
+        "s203",
+        "s233",
+        "s243",
+        "s248",
+        "s249",
+        "s250",
+        "s265",
+        "s266",
         "s275",
-        "s295"
+        "s276",
+        "s277",
+        "s287"
       ],
-      "civilian_factories": 11,
-      "military_factories": 4,
-      "dockyards": 0,
+      "civilian_factories": 13,
+      "military_factories": 6,
+      "dockyards": 2,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "production_lines",
-        "construction_engineering"
+        "construction_engineering",
+        "production_lines"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 3
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 1
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 1
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 4200,
-        "support_equipment_1": 800,
-        "motorized_1": 600,
-        "artillery_1": 250
+        "infantry_equipment_1": 440,
+        "support_equipment_1": 132,
+        "artillery_1": 66
       },
       "laws": [
-        "conscription_volunteer",
+        "conscription_limited",
         "economy_civilian",
         "trade_free"
       ],
-      "political_power": 23.0,
+      "political_power": 39.0,
       "stability": 0.52,
-      "war_support": 0.36,
+      "war_support": 0.3,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p1858",
-          "count": 4
+          "province": "p870",
+          "count": 1
         },
         {
-          "template": "mountain_division",
-          "province": "p1858",
-          "count": 2
+          "template": "infantry_division",
+          "province": "p1009",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p965",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1014",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1048",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1063",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1102",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1105",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1110",
+          "count": 1
         }
       ]
     },
@@ -384,45 +1036,94 @@
       "tag": "NOR",
       "name": "Norvane",
       "ideology": "communist",
-      "capital_state": "s239",
+      "capital_state": "s247",
       "states": [
+        "s198",
+        "s199",
+        "s212",
+        "s219",
+        "s225",
+        "s226",
+        "s227",
+        "s238",
+        "s239",
+        "s240",
         "s247",
-        "s239"
+        "s254",
+        "s255",
+        "s256",
+        "s263",
+        "s264",
+        "s271",
+        "s282",
+        "s283",
+        "s291",
+        "s298",
+        "s315",
+        "s320"
       ],
-      "civilian_factories": 12,
-      "military_factories": 5,
+      "civilian_factories": 10,
+      "military_factories": 4,
       "dockyards": 2,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "motorization",
-        "construction_engineering"
+        "construction_engineering",
+        "production_lines"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 2
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 1
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 4400,
-        "support_equipment_1": 800,
-        "motorized_1": 600,
-        "artillery_1": 250
+        "infantry_equipment_1": 280,
+        "support_equipment_1": 84,
+        "artillery_1": 42
       },
       "laws": [
-        "conscription_limited",
-        "economy_partial_mobilization",
+        "conscription_volunteer",
+        "economy_civilian",
         "trade_free"
       ],
-      "political_power": 24.0,
+      "political_power": 31.5,
       "stability": 0.52,
-      "war_support": 0.38,
+      "war_support": 0.3,
       "divisions": [
         {
           "template": "infantry_division",
-          "province": "p1647",
-          "count": 6
+          "province": "p1374",
+          "count": 1
         },
         {
-          "template": "motorized_division",
-          "province": "p1647",
-          "count": 2
+          "template": "infantry_division",
+          "province": "p1423",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1513",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p1470",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p1557",
+          "count": 1
         }
       ]
     },
@@ -430,45 +1131,92 @@
       "tag": "TIR",
       "name": "Tirolith",
       "ideology": "neutrality",
-      "capital_state": "s294",
+      "capital_state": "s309",
       "states": [
+        "s279",
+        "s285",
+        "s286",
+        "s290",
+        "s294",
+        "s295",
+        "s300",
+        "s302",
+        "s303",
+        "s304",
+        "s307",
+        "s308",
         "s309",
-        "s294"
+        "s310",
+        "s314",
+        "s317",
+        "s319",
+        "s322",
+        "s326",
+        "s328",
+        "s331"
       ],
-      "civilian_factories": 13,
-      "military_factories": 6,
-      "dockyards": 0,
+      "civilian_factories": 9,
+      "military_factories": 4,
+      "dockyards": 1,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "production_lines",
-        "construction_engineering"
+        "construction_engineering",
+        "production_lines"
+      ],
+      "production_lines": [
+        {
+          "equipment": "infantry_equipment_1",
+          "factories": 2
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 1
+        }
       ],
       "stockpile": {
-        "infantry_equipment_1": 4600,
-        "support_equipment_1": 800,
-        "motorized_1": 600,
-        "artillery_1": 250
+        "infantry_equipment_1": 240,
+        "support_equipment_1": 72,
+        "artillery_1": 36
       },
       "laws": [
         "conscription_volunteer",
         "economy_civilian",
         "trade_free"
       ],
-      "political_power": 25.0,
+      "political_power": 30.5,
       "stability": 0.52,
-      "war_support": 0.4,
+      "war_support": 0.3,
       "divisions": [
         {
-          "template": "garrison_division",
-          "province": "p2051",
-          "count": 4
+          "template": "infantry_division",
+          "province": "p1833",
+          "count": 1
         },
         {
           "template": "infantry_division",
-          "province": "p2051",
-          "count": 2
+          "province": "p1952",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p2001",
+          "count": 1
+        },
+        {
+          "template": "infantry_division",
+          "province": "p2025",
+          "count": 1
+        },
+        {
+          "template": "garrison_division",
+          "province": "p2006",
+          "count": 1
         }
       ]
     }

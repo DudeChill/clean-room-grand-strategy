@@ -130,22 +130,27 @@ int building_max_level(const Content& content, BuildingKind kind) {
     return 0;
 }
 
+// Kinds whose level lives on a State rather than a Province.
+bool is_state_scope(BuildingKind kind) {
+    return is_factory_kind(kind) || kind == BuildingKind::SyntheticRefinery;
+}
+
 int project_current_level(const World& w, const ConstructionProject& p) {
-    switch (p.kind) {
-        case BuildingKind::CivilianFactory: {
-            const State* s = w.state(p.state);
-            return s ? s->civilian_factories : 0;
+    if (is_state_scope(p.kind)) {
+        const State* s = w.state(p.state);
+        if (!s) return 0;
+        switch (p.kind) {
+            case BuildingKind::CivilianFactory:
+                return s->civilian_factories;
+            case BuildingKind::MilitaryFactory:
+                return s->military_factories;
+            case BuildingKind::Dockyard:
+                return s->dockyards;
+            case BuildingKind::SyntheticRefinery:
+                return s->synthetic_refineries;
+            default:
+                return 0;
         }
-        case BuildingKind::MilitaryFactory: {
-            const State* s = w.state(p.state);
-            return s ? s->military_factories : 0;
-        }
-        case BuildingKind::Dockyard: {
-            const State* s = w.state(p.state);
-            return s ? s->dockyards : 0;
-        }
-        default:
-            break;
     }
     const Province* pr = w.province(p.province);
     if (!pr) return 0;
@@ -169,15 +174,15 @@ int project_current_level(const World& w, const ConstructionProject& p) {
     }
 }
 
-// Cost in capacity-days: base scaled by every level already standing in the
-// target. The level table is iterated instead of using std::pow so the result is
-// bit-stable without depending on the platform libm.
+// Cost in capacity-days: base scaled LINEARLY by the levels already standing in the
+// target - `base * (1 + (level_scaling - 1) * current_level)` - which is the same
+// formula commands.cpp stamps on a project when a command creates it, so a project
+// that arrives without a cost (script, hand-built world, older save) costs exactly
+// what the command layer would have charged.
 double project_cost(const Content& content, BuildingKind kind, int current_level) {
     const double base = building_base_cost(content, kind);
     const double scaling = content.constants.construction_level_scaling;
-    double scale = 1.0;
-    for (int i = 0; i < current_level && i < 64; ++i) scale *= scaling;
-    const double cost = base * scale;
+    const double cost = base * (1.0 + (scaling - 1.0) * static_cast<double>(current_level));
     return std::isfinite(cost) && cost > 0.0 ? cost : base;
 }
 
@@ -187,18 +192,20 @@ enum class ProjectStatus { Ready, Blocked, Invalid };
 // building-slot row, can clear later). Invalid projects are pruned: the target is
 // gone, the kind has no representable state, or the level is already at maximum.
 ProjectStatus project_status(const World& w, const Content& content, const ConstructionProject& p) {
-    switch (p.kind) {
-        case BuildingKind::AntiAir:
-        case BuildingKind::SyntheticRefinery:
-            // No state field exists in the world model for these two kinds.
-            return ProjectStatus::Invalid;
-        default:
-            break;
+    if (p.kind == BuildingKind::AntiAir) {
+        // Air warfare does not exist yet (discrepancy AIR-002), so the command layer
+        // rejects anti-air projects and Province has no field for them. A project
+        // that still reaches here (hand-written save, script) is pruned rather than
+        // left to accumulate capacity forever.
+        return ProjectStatus::Invalid;
     }
-    if (is_factory_kind(p.kind)) {
+    if (is_state_scope(p.kind)) {
         const State* s = w.state(p.state);
         if (!s) return ProjectStatus::Invalid;
-        if (s->building_slots > 0 && s->total_factories() >= s->building_slots) {
+        // Building slots cap factories only: they are the state's industrial slots,
+        // and the command layer accounts slots the same way (civ + mil + dock).
+        if (is_factory_kind(p.kind) && s->building_slots > 0 &&
+            s->total_factories() >= s->building_slots) {
             return ProjectStatus::Blocked;
         }
     } else if (!w.province(p.province)) {
@@ -238,6 +245,12 @@ bool complete_project(Game& g, Country& c, const ConstructionProject& p) {
             State* s = w.state(p.state);
             if (!s) return false;
             s->dockyards = wanted;
+            break;
+        }
+        case BuildingKind::SyntheticRefinery: {
+            State* s = w.state(p.state);
+            if (!s) return false;
+            s->synthetic_refineries = wanted;
             break;
         }
         case BuildingKind::Infrastructure: {
@@ -283,8 +296,9 @@ bool complete_project(Game& g, Country& c, const ConstructionProject& p) {
             break;
         }
         case BuildingKind::AntiAir:
-        case BuildingKind::SyntheticRefinery:
         case BuildingKind::Count:
+            // Anti-air has no world field (AIR-002); project_status() prunes it, so
+            // reaching here means the project was rebuilt between the two calls.
             return false;
     }
     HOI_DEBUG("construction: country %u completed %s project (level %d)", c.id.raw(),
@@ -328,9 +342,6 @@ void apply_switch_retention(const Content& content, ProductionLine& line) {
 
 void compute_resource_production(const World& w, const Content& c, CountryId country,
                                  double out[RESOURCE_COUNT]) {
-    // Resource yields are province data; `c` is part of the declared interface but
-    // no content table takes part in the sum.
-    (void)c;
     for (int r = 0; r < RESOURCE_COUNT; ++r) out[r] = 0.0;
     if (!country.valid()) return;
     w.provinces.for_each([&](ProvinceId, const Province& p) {
@@ -346,6 +357,21 @@ void compute_resource_production(const World& w, const Content& c, CountryId cou
             if (yield > 0.0) out[r] += yield * infra;
         }
     });
+    // Synthetic refineries are a second, state-level source of oil and rubber that
+    // does not depend on province geology (hence no infrastructure scaling). Each
+    // state is counted once, for its controller.
+    const double synthetic_oil = c.constants.synthetic_oil_per_refinery_per_day;
+    const double synthetic_rubber = c.constants.synthetic_rubber_per_refinery_per_day;
+    if (synthetic_oil > 0.0 || synthetic_rubber > 0.0) {
+        w.states.for_each([&](StateId, const State& s) {
+            if (s.controller != country || s.synthetic_refineries <= 0) return;
+            const double refineries = static_cast<double>(s.synthetic_refineries);
+            if (synthetic_oil > 0.0) out[static_cast<R>(Resource::Oil)] += refineries * synthetic_oil;
+            if (synthetic_rubber > 0.0) {
+                out[static_cast<R>(Resource::Rubber)] += refineries * synthetic_rubber;
+            }
+        });
+    }
     for (int r = 0; r < RESOURCE_COUNT; ++r) out[r] = finite_or(out[r], 0.0);
 }
 
@@ -432,6 +458,60 @@ void phase_industry(Game& g) {
             for (ProductionLine& line : c.lines) line.output_today = 0.0;
         }
 
+        // Facility counts are read once per country and hour: the assignment-release
+        // rule, construction, fuel storage and the consumer-goods record all work
+        // from the same numbers.
+        int civ = 0, mil = 0, dock = 0;
+        count_factories(w, id, &civ, &mil, &dock);
+
+        // Broken-state rule (a repair, not a gameplay decision): after territorial
+        // loss a country can control fewer military factories than its production
+        // lines still claim. Nation loss is not something industry can play back,
+        // so the excess is released here, from the LAST line in `Country::lines`
+        // order, keeping the earliest (highest-priority) line intact. A line drained
+        // to zero is retired exactly as RemoveProductionLine retires it: its model
+        // goes onto the pending-switch queue and its equipment is cleared.
+        //
+        // Reporting is throttled by the release itself, not by a clock: a release is
+        // only logged when it changes the country's line set (a line is retired), and
+        // one message carries the whole hour's total. A war that shaves a factory per
+        // hour off an eight-line country therefore logs at most once per retired line
+        // instead of once per hour, and no cross-tick scratch state is needed.
+        int assigned = 0;
+        for (const ProductionLine& line : c.lines) {
+            if (line.factories > 0) assigned += line.factories;
+        }
+        if (assigned > mil) {
+            int excess = assigned - mil;
+            const int released = excess;
+            int retired_lines = 0;
+            for (size_t i = c.lines.size(); i-- > 0 && excess > 0;) {
+                ProductionLine& line = c.lines[i];
+                if (line.factories <= 0) continue;
+                const int taken = std::min(excess, line.factories);
+                line.factories -= taken;
+                excess -= taken;
+                if (line.factories == 0) {
+                    if (line.equipment.valid()) {
+                        line.previous.insert(line.previous.begin(), line.equipment);
+                        if (line.previous.size() > 8) line.previous.resize(8);
+                    }
+                    line.equipment = EquipmentId{};
+                    line.output_today = 0.0;
+                    ++retired_lines;
+                }
+            }
+            if (retired_lines > 0) {
+                HOI_WARN("industry: country %u released %d production-line factories it no longer "
+                         "controls (assigned %d, controlled %d) and retired %d line(s)",
+                         id.raw(), released, assigned, mil, retired_lines);
+                g.log_event("production",
+                            c.name + " lost production lines: " + std::to_string(released) +
+                                " factory assignments released (industry lost)",
+                            id);
+            }
+        }
+
         // The consumer-goods share is policy owned by politics (phase 9); it is
         // read here as the previous tick's value and clamps the civilian
         // construction branch below.
@@ -502,9 +582,19 @@ void phase_industry(Game& g) {
             c.resources_consumed[r] = balance.consumed[r];
         }
 
-        // (d) Construction: civilian capacity is spent down the queue in order,
-        // surplus capacity flowing to the next project in the same hour.
-        double capacity = construction_output(g, c);
+        // (d) Construction. Civilian capacity is split in queue order: a project
+        // may hold at most `max_factories_per_project` factories, so a queue of N
+        // projects uses up to N * cap factories and anything the whole queue cannot
+        // absorb stays idle this hour (it is never concentrated on the head
+        // project). Blocked projects hold no factories, so their share stays
+        // available to the projects behind them.
+        double idle_factories = static_cast<double>(civ);
+        double per_project_cap = k.max_factories_per_project;
+        if (!(per_project_cap > 0.0)) per_project_cap = idle_factories;  // no cap: old behaviour
+        const double speed_factor = 1.0 + c.total_modifiers().get(ModifierKind::ConstructionSpeed);
+        const double consumer_factor = 1.0 - clamp01(c.consumer_goods_ratio);
+        const double ic_per_factory_hour =
+            k.ic_per_civilian_factory / static_cast<double>(TICKS_PER_DAY);
         std::vector<ConstructionProject> remaining;
         remaining.reserve(c.construction.queue.size());
         for (ConstructionProject p : c.construction.queue) {
@@ -522,16 +612,20 @@ void phase_industry(Game& g) {
                     continue;
                 }
             }
-            if (status == ProjectStatus::Ready && capacity > 0.0) {
-                double spend = capacity;
-                if (p.cost > 0.0) spend = std::min(spend, p.cost - p.progress);
-                if (spend > 0.0) {
-                    p.progress += spend;
-                    capacity -= spend;
-                    if (p.cost > 0.0 && p.progress >= p.cost && complete_project(g, c, p)) {
-                        g.log_event("construction", c.name + " completed construction", id);
-                        continue;
-                    }
+            if (status != ProjectStatus::Ready) {
+                remaining.push_back(std::move(p));  // blocked: keeps its place, no factories
+                continue;
+            }
+            const double share = std::min(idle_factories, per_project_cap);
+            if (share > 0.0) {
+                idle_factories -= share;
+                p.progress += share * ic_per_factory_hour * speed_factor * consumer_factor;
+                if (p.cost > 0.0 && p.progress >= p.cost && complete_project(g, c, p)) {
+                    // The factories this project held return to the pool at the
+                    // next tick; the projects behind it already have their own
+                    // share, so nothing stalls.
+                    g.log_event("construction", c.name + " completed construction", id);
+                    continue;
                 }
             }
             remaining.push_back(std::move(p));
@@ -540,8 +634,6 @@ void phase_industry(Game& g) {
 
         // (e) Fuel: storage scales with the industry that supports it, and oil
         // extraction from this hour is added up to the storage ceiling.
-        int civ = 0, mil = 0, dock = 0;
-        count_factories(w, id, &civ, &mil, &dock);
         const double fuel_mods = 1.0 + c.total_modifiers().get(ModifierKind::FuelGain);
         const double capacity_fuel =
             static_cast<double>(civ + mil + dock) * k.fuel_storage_per_factory * fuel_mods;

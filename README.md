@@ -17,7 +17,16 @@ Honest, evidence-based status lives in `docs/PARITY_MATRIX.md`. There is no
 percentage-complete figure anywhere in this repository: only per-feature states
 (`NOT_IMPLEMENTED` … `VALIDATED`) with the evidence that justifies each one.
 
-Current milestone: **0.4 Land Warfare / 0.5 Logistics (work in progress)**.
+Current milestone: **0.4 Land Warfare / 0.5 Logistics**.
+
+Measured on the shipped scenario (2,275 provinces, 332 states, 10 countries, 79
+divisions, all AI-controlled): `world audit: OK`, ~2.6 ms per simulated hour
+(p95 13 ms) on a 4-core N100, and identical world hashes across repeated runs with
+the same seed. Re-run it yourself:
+
+```sh
+build/game --days 3 --audit --summary --hashes
+```
 
 ## Build
 
@@ -39,10 +48,50 @@ build/game --serve --port 8080 --player VEL --autosave-days 30
 # then open http://127.0.0.1:8080
 ```
 
+The simulation starts paused; press `1`-`5` to set game speed, space to pause. `VEL`
+(Veldoria) is the strongest power in the shipped scenario; any tag from
+`data/scenarios/1936.json` works.
+
+What you can do in the client:
+
+* **Map**: click a province for terrain, ownership, control, supply and garrison;
+  switch overlays (political, control, supply, terrain, fronts); drag to pan, wheel
+  to zoom; your own border is outlined in white.
+* **Production**: assign military factories to equipment models, watch efficiency
+  and resource satisfaction, see the stockpile.
+* **Construction**: queue civilian/military factories, dockyards, infrastructure,
+  railways, supply hubs, air/naval bases, radar, forts and synthetic refineries;
+  each project shows progress against its cost.
+* **Research**: fill research slots from the available technologies; completed
+  technologies unlock equipment and modifiers.
+* **Military**: train divisions from templates, deploy them, form armies, assign
+  generals, set front/offensive/fallback/garrison orders, stances and motorisation.
+  Click a division to select it, then click a province to order a move.
+* **Diplomacy**: declare war, join a faction, enact laws; watch wars, factions and
+  country strength.
+* **Details**: selecting a province shows the live battle breakdown (per division
+  organisation, strength, planning, entrenchment, and the last tick's damage
+  decomposition) and the supply route with per-step capacity and the bottleneck.
+
 Headless observer run (AI plays every country):
 
 ```sh
 build/game --days 365 --summary --audit --hashes
+```
+
+Inspectors answer "why is this happening" from the authoritative state:
+
+```sh
+build/game --days 30 --inspect-country VEL      # budgets, lines, queue, research, stockpile
+build/game --days 30 --inspect-province 42      # terrain, control, supply, garrison
+build/game --days 30 --inspect-supply 42        # supply route with per-step capacity
+build/game --days 30 --inspect-battle 3         # battle breakdown with per-division damage
+```
+
+Stress ladder and long-run observer automation:
+
+```sh
+scripts/stress.sh        # tiers of increasing duration; writes docs/benchmarks/history.tsv
 ```
 
 Persistence round trip and deterministic verification:
@@ -81,3 +130,11 @@ docs/         parity matrix, discrepancies, mechanics research, workflows, revie
 
 See `ARCHITECTURE.md` for the tick order, formulas and data formats, and
 `docs/` for parity tracking.
+
+## License and content
+
+MIT (see `LICENSE`). The engine, the client, the generated map and all content are
+original work: no proprietary source, art, audio, text or data tables from any
+commercial title are used. Every known mechanical approximation is listed in
+`docs/DISCREPANCIES.md`, and every feature's status and evidence in
+`docs/PARITY_MATRIX.md`.

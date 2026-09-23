@@ -26,11 +26,6 @@ double ms_since(Clock::time_point a, Clock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
-bool add_violation(std::vector<std::string>* out, const std::string& text) {
-    if (out) out->push_back(text);
-    return false;
-}
-
 std::string fmt(const char* f, ...) {
     char buf[512];
     va_list args;
@@ -178,6 +173,7 @@ std::vector<std::string> check_invariants(const Game& g) {
     });
 
     w.countries.for_each([&](CountryId cid, const Country& c) {
+        if (!c.alive) return;  // a defeated country is out of play and owns no industry
         if (c.manpower < -1e-6) out.push_back(fmt("country %u has negative manpower (%f)", cid.v, c.manpower));
         if (c.fuel < -1e-6) out.push_back(fmt("country %u has negative fuel (%f)", cid.v, c.fuel));
         if (c.political_power < -1e-6) {
@@ -244,10 +240,30 @@ std::vector<std::string> check_invariants(const Game& g) {
             out.push_back(fmt("battle %u has no participants", bid.v));
         }
         for (DivisionId did : b.attacker.divisions) {
-            if (!w.divisions.alive(did)) out.push_back(fmt("battle %u attacker %u missing", bid.v, did.v));
+            if (!w.divisions.alive(did)) {
+                out.push_back(fmt("battle %u attacker %u missing", bid.v, did.v));
+                continue;
+            }
+            const Division* d = w.division(did);
+            if (d && d->battle != bid) {
+                out.push_back(fmt("battle %u lists attacker %u but that division is in battle %s",
+                                  bid.v, did.v,
+                                  d->battle.valid() ? std::to_string(d->battle.v).c_str()
+                                                    : "none"));
+            }
         }
         for (DivisionId did : b.defender.divisions) {
-            if (!w.divisions.alive(did)) out.push_back(fmt("battle %u defender %u missing", bid.v, did.v));
+            if (!w.divisions.alive(did)) {
+                out.push_back(fmt("battle %u defender %u missing", bid.v, did.v));
+                continue;
+            }
+            const Division* d = w.division(did);
+            if (d && d->battle != bid) {
+                out.push_back(fmt("battle %u lists defender %u but that division is in battle %s",
+                                  bid.v, did.v,
+                                  d->battle.valid() ? std::to_string(d->battle.v).c_str()
+                                                    : "none"));
+            }
         }
     });
 

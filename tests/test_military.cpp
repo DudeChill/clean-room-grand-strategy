@@ -67,6 +67,14 @@ CountryId add_country(World& w, const char* tag) {
     return id;
 }
 
+RegionId add_region(World& w, const char* name) {
+    RegionId id = w.regions.create();
+    Region& r = *w.regions.try_get(id);
+    r.id = id;
+    r.name = name;
+    return id;
+}
+
 StateId add_state(World& w, const char* name, CountryId owner) {
     StateId id = w.states.create();
     State& s = *w.states.try_get(id);
@@ -109,6 +117,14 @@ void add_war(World& w, CountryId attacker, CountryId defender) {
     dp.country = defender;
     war.attackers.push_back(ap);
     war.defenders.push_back(dp);
+}
+
+// Fails with the first violation so audit failures are diagnosable.
+void expect_clean_audit(const Game& g) {
+    const std::vector<std::string> violations = check_invariants(g);
+    if (!violations.empty()) {
+        ::hoi_test::fail(__FILE__, __LINE__, "world audit: " + violations.front());
+    }
 }
 
 DivisionId add_division(Game& g, CountryId country, TemplateId tpl, ProvinceId location) {
@@ -409,4 +425,73 @@ HOI_TEST(military_territory_transfers_control_to_occupier) {
 
     CHECK_EQ(w.g.world.province(p)->controller, w.a);
     CHECK_EQ(w.g.world.state(sb)->controller, w.a);
+}
+
+// Regression: a division destroyed mid-battle by another system (capitulation
+// destroys a country's divisions) must not leave a dangling id in
+// Battle::attacker/defender, and a battle must end when its last side member is
+// gone. The world satisfies every check_invariants rule, so the audit is the
+// assertion.
+HOI_TEST(military_destroyed_division_leaves_no_dangling_battle_refs) {
+    Game g;
+    CountryId a = add_country(g.world, "AAA");
+    CountryId b = add_country(g.world, "BBB");
+    EquipmentId eq =
+        add_equipment(g, "rifle", 6.0, 0.5, 8.0, 2.0, 0.0, 1.0, 4.0, 25.0, 60.0, 0.2, 0.5, 1000.0);
+    BattalionSlot slot;
+    slot.equipment = eq;
+    slot.count = 1;
+    TemplateId tpl = add_template(g, "infantry", a, {slot});
+
+    RegionId rg = add_region(g.world, "region");
+    StateId sa = add_state(g.world, "sa", a);
+    StateId sb = add_state(g.world, "sb", b);
+    add_war(g.world, a, b);
+
+    ProvinceId p = add_province(g.world, "p", Terrain::Plains, sb, b, 0);
+    ProvinceId q = add_province(g.world, "q", Terrain::Plains, sa, a, 0);
+    g.world.province(p)->region = rg;
+    g.world.province(q)->region = rg;
+    link(g.world, p, q);
+
+    std::vector<DivisionId> attackers;
+    for (int i = 0; i < 3; ++i) {
+        const DivisionId id = add_division(g, a, tpl, q);
+        g.world.division(id)->order_target = p;
+        attackers.push_back(id);
+    }
+    const DivisionId def1 = add_division(g, b, tpl, p);
+    const DivisionId def2 = add_division(g, b, tpl, p);
+    g.rng.seed(7);
+
+    phase_combat(g);
+    CHECK_EQ(g.world.battles.size(), 1u);
+    expect_clean_audit(g);
+    const BattleId bid = g.world.division(def1)->battle;
+    CHECK(bid.valid());
+
+    // Another system destroys one defender in place (Store::destroy only).
+    g.world.divisions.destroy(def1);
+
+    phase_combat(g);
+    const Battle* b1 = g.world.battle(bid);
+    CHECK(b1 != nullptr);
+    // (a) the battle no longer lists the destroyed division...
+    for (DivisionId did : b1->defender.divisions) CHECK(did != def1);
+    // ...but still fights with the remaining defender and the attackers.
+    CHECK_EQ(b1->defender.divisions.size(), 1u);
+    CHECK_EQ(b1->attacker.divisions.size(), 3u);
+    expect_clean_audit(g);
+
+    // (b) the last defender has no retreat province, so combat destroys it and the
+    // battle ends; (c) the world stays audit-clean.
+    int ticks = 0;
+    do {
+        phase_combat(g);
+        ++ticks;
+    } while (g.world.battles.size() > 0 && ticks < 2000);
+    CHECK_EQ(g.world.battles.size(), 0u);
+    CHECK(g.world.division(def2) == nullptr);
+    for (DivisionId did : attackers) CHECK(g.world.divisions.alive(did));
+    expect_clean_audit(g);
 }

@@ -23,6 +23,9 @@ namespace hoi {
 // War-side helpers shared by the military phases (implemented in combat.cpp).
 bool mil_at_war(const World& w, CountryId a, CountryId b);
 bool mil_same_side(const World& w, CountryId a, CountryId b);
+// Drops dead ids from battle sides and closes battles with an empty side
+// (implemented in combat.cpp).
+void military_prune_battles(Game& g);
 
 void phase_territory(Game& g) {
     World& w = g.world;
@@ -143,6 +146,10 @@ void phase_territory(Game& g) {
         c.last_capitulation_check = w.tick;
         check_capitulation(g, cid);
     });
+
+    // Capitulation destroys a country's divisions; purge them from battle sides
+    // in the same tick so no battle outlives its divisions.
+    military_prune_battles(g);
 }
 
 }  // namespace hoi

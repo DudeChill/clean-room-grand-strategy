@@ -18,6 +18,15 @@ WarId declare_war(Game& g, CountryId aggressor, CountryId target,
 // True when the two countries are on opposite sides of an active war.
 bool countries_at_war(const World& w, CountryId a, CountryId b);
 
+// Faction membership. `join_faction` succeeds when the leader is a different, alive
+// country that is not at war with `who`, `who` has no faction yet, and the ideology
+// matches the leader's. Returns false without side effects otherwise.
+bool join_faction(Game& g, CountryId who, CountryId faction_leader);
+bool leave_faction(Game& g, CountryId who);
+
+// Faction id led by `leader`, or 0 when there is none.
+uint32_t faction_of(const World& w, CountryId leader);
+
 // Countries fighting alongside `c` in any active war (allies, faction members).
 std::vector<CountryId> co_belligerents(const World& w, CountryId c);
 

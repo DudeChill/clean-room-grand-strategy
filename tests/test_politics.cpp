@@ -308,6 +308,11 @@ HOI_TEST(diplomacy_capitulation_transfers_territory_and_closes_wars) {
     CHECK(countries_at_war(g.world, alpha, beta));
     CHECK(!check_capitulation(g, beta));  // capital still held: no capitulation yet
 
+    // The defeated country still holds industry assignments and a build queue.
+    g.world.countries.try_get(beta)->lines.push_back(ProductionLine{});
+    g.world.countries.try_get(beta)->lines.push_back(ProductionLine{});
+    g.world.countries.try_get(beta)->construction.queue.push_back(ConstructionProject{});
+
     // The capital falls with 100% of the industry: the country capitulates.
     g.world.provinces.try_get(beta_capital)->controller = alpha;
     g.world.provinces.try_get(beta_second_capital)->controller = alpha;
@@ -330,6 +335,13 @@ HOI_TEST(diplomacy_capitulation_transfers_territory_and_closes_wars) {
     CHECK(g.world.countries.try_get(alpha)->at_war == false);
     CHECK(!g.world.war(war)->active);
     CHECK(!countries_at_war(g.world, alpha, beta));
+
+    // A defeated country owns no industry: assignments and the build queue stand down.
+    CHECK(b->lines.empty());
+    CHECK(b->construction.queue.empty());
+    // An ended war keeps both sides populated (the auditor inspects ended wars too).
+    CHECK(!g.world.war(war)->attackers.empty());
+    CHECK(!g.world.war(war)->defenders.empty());
 }
 
 // Peace is offered only when the war is decided, and it settles the claims the
@@ -500,4 +512,166 @@ HOI_TEST(weather_is_daily_deterministic_and_affects_movement) {
     CHECK_NEAR(weather_movement_multiplier(clear_sky), 1.0, 1e-12);
     CHECK_NEAR(weather_attack_penalty(clear_sky), 0.0, 1e-12);
     CHECK_NEAR(weather_attrition_per_day(clear_sky), 0.0, 1e-12);
+}
+
+// Faction membership: every refusal leaves the world untouched.
+HOI_TEST(diplomacy_join_faction_refusals_leave_state_untouched) {
+    Game g;
+    const RegionId region = g.world.regions.create();
+    const CountryId alpha = make_country(g.world, "AAA");
+    const CountryId gamma = make_country(g.world, "CCC");
+    const CountryId delta = make_country(g.world, "DDD");
+    const CountryId beta = make_country(g.world, "BBB");
+    for (CountryId c : {alpha, gamma, delta, beta}) {
+        make_home_state(g.world, region, c, 0.0, "home");
+        g.world.countries.try_get(c)->ideology = Ideology::Democratic;
+    }
+    g.world.countries.try_get(beta)->ideology = Ideology::Fascist;
+
+    Faction pact;
+    pact.id = 9;
+    pact.name = "Test Pact";
+    pact.leader = alpha;
+    pact.members = {alpha, gamma};
+    g.world.factions.push_back(pact);
+    g.world.countries.try_get(alpha)->faction = 9;
+    g.world.countries.try_get(gamma)->faction = 9;
+
+    CHECK_EQ(faction_of(g.world, alpha), 9u);
+    CHECK_EQ(faction_of(g.world, delta), 0u);  // delta leads nothing
+
+    CHECK(!join_faction(g, alpha, alpha));              // cannot join itself
+    CHECK(!join_faction(g, delta, CountryId{}));        // unknown leader
+    CHECK(!join_faction(g, gamma, alpha));              // already a member
+    CHECK(!join_faction(g, beta, alpha));               // ideology mismatch
+    CHECK(declare_war(g, delta, alpha, {}).valid());
+    CHECK(!join_faction(g, delta, alpha));              // at war with the leader
+
+    CHECK_EQ(g.world.countries.try_get(delta)->faction, 0u);
+    CHECK_EQ(g.world.countries.try_get(beta)->faction, 0u);
+    CHECK_EQ(g.world.factions.size(), 1u);
+    CHECK_EQ(g.world.factions.front().members.size(), 2u);
+}
+
+// Joining means co-belligerence, and a departing leader hands over to the lowest-id
+// successor; the last member out dissolves the faction.
+HOI_TEST(diplomacy_join_faction_then_leader_steps_down) {
+    Game g;
+    const RegionId region = g.world.regions.create();
+    const CountryId alpha = make_country(g.world, "AAA");
+    const CountryId gamma = make_country(g.world, "CCC");
+    const CountryId delta = make_country(g.world, "DDD");
+    for (CountryId c : {alpha, gamma, delta}) {
+        make_home_state(g.world, region, c, 0.0, "home");
+        g.world.countries.try_get(c)->ideology = Ideology::Democratic;
+    }
+
+    Faction pact;
+    pact.id = 9;
+    pact.name = "Test Pact";
+    pact.leader = alpha;
+    pact.members = {alpha, gamma};
+    g.world.factions.push_back(pact);
+    g.world.countries.try_get(alpha)->faction = 9;
+    g.world.countries.try_get(gamma)->faction = 9;
+
+    CHECK(join_faction(g, delta, alpha));
+    CHECK_EQ(g.world.countries.try_get(delta)->faction, 9u);
+    CHECK(g.world.find_relation(alpha, delta)->value >= 25.0);
+    auto is_member = [&](CountryId c) {
+        const std::vector<CountryId> allies = co_belligerents(g.world, alpha);
+        return std::find(allies.begin(), allies.end(), c) != allies.end();
+    };
+    CHECK(is_member(delta));
+    CHECK(is_member(gamma));
+
+    // A non-leader leaves: the faction carries on under the same leader.
+    CHECK(leave_faction(g, gamma));
+    CHECK(g.world.countries.try_get(gamma)->faction == 0u);
+    CHECK_EQ(faction_of(g.world, alpha), 9u);
+    CHECK(!is_member(gamma));
+
+    // The leader leaves: the lowest-id remaining member is promoted.
+    CHECK(leave_faction(g, alpha));
+    CHECK(g.world.countries.try_get(alpha)->faction == 0u);
+    CHECK_EQ(faction_of(g.world, delta), 9u);
+
+    // The last member leaving removes the empty faction entirely.
+    CHECK(leave_faction(g, delta));
+    CHECK_EQ(faction_of(g.world, delta), 0u);
+    CHECK(g.world.factions.empty());
+    CHECK(!leave_faction(g, delta));
+}
+
+// A war outlives a defeated member: the surviving belligerents keep fighting, and the
+// war only ends once a side has no living participant left. Neither side of the war
+// record is ever emptied.
+HOI_TEST(diplomacy_war_outlives_a_capitulating_ally) {
+    Game g;
+    const RegionId region = g.world.regions.create();
+    const CountryId alpha = make_country(g.world, "AAA");
+    const CountryId beta = make_country(g.world, "BBB");
+    const CountryId delta = make_country(g.world, "DDD");
+    const ProvinceId alpha_home = make_home_state(g.world, region, alpha, 0.0, "alpha_home");
+    const StateId beta_main = make_state(g.world, "beta_main", region);
+    const ProvinceId beta_capital = make_capital(g.world, beta_main, region, beta, "beta_capital");
+    const StateId delta_main = make_state(g.world, "delta_main", region);
+    const ProvinceId delta_capital = make_capital(g.world, delta_main, region, delta, "delta_capital");
+    link(g.world, alpha_home, beta_capital);
+    g.world.states.try_get(beta_main)->civilian_factories = 10;
+    g.world.states.try_get(delta_main)->civilian_factories = 10;
+    g.world.countries.try_get(beta)->starting_factories = 10;
+    g.world.countries.try_get(delta)->starting_factories = 10;
+
+    Faction pact;
+    pact.id = 11;
+    pact.leader = beta;
+    pact.members = {beta, delta};
+    g.world.factions.push_back(pact);
+    g.world.countries.try_get(beta)->faction = 11;
+    g.world.countries.try_get(delta)->faction = 11;
+
+    const WarId war = declare_war(g, alpha, beta, {});
+    CHECK(war.valid());
+    CHECK(countries_at_war(g.world, alpha, delta));  // delta joins the defence
+
+    g.world.provinces.try_get(beta_capital)->controller = alpha;
+    g.world.states.try_get(beta_main)->controller = alpha;
+    CHECK(check_capitulation(g, beta));
+    // Beta is gone, the war is not: delta still holds the line.
+    CHECK(!g.world.countries.try_get(beta)->alive);
+    CHECK(g.world.war(war)->active);
+    CHECK(countries_at_war(g.world, alpha, delta));
+    CHECK(g.world.countries.try_get(alpha)->at_war);
+    CHECK(g.world.countries.try_get(delta)->at_war);
+    CHECK(!g.world.war(war)->attackers.empty());
+    CHECK(!g.world.war(war)->defenders.empty());
+
+    // When the last defender goes, the war is over for everyone.
+    g.world.provinces.try_get(delta_capital)->controller = alpha;
+    g.world.states.try_get(delta_main)->controller = alpha;
+    CHECK(check_capitulation(g, delta));
+    CHECK(!g.world.war(war)->active);
+    CHECK(!countries_at_war(g.world, alpha, delta));
+    CHECK(!g.world.countries.try_get(alpha)->at_war);
+    CHECK(!g.world.war(war)->attackers.empty());
+    CHECK(!g.world.war(war)->defenders.empty());
+}
+
+// Occupation only applies to ground that has a political owner: unowned/neutral
+// states accumulate no resistance and require no garrison.
+HOI_TEST(occupation_skips_unowned_states) {
+    Game g;
+    const RegionId region = g.world.regions.create();
+    const CountryId alpha = make_country(g.world, "AAA");
+    make_home_state(g.world, region, alpha, 0.0, "alpha_home");
+    const StateId neutral = make_state(g.world, "neutral", region);
+    const ProvinceId neutral_province = make_province(g.world, "neutral_p", neutral, region);
+    g.world.provinces.try_get(neutral_province)->population = 500000.0;
+    g.world.states.try_get(neutral)->controller = alpha;  // held, but owned by nobody
+
+    phase_occupation(g, alpha);
+    CHECK_NEAR(g.world.states.try_get(neutral)->resistance, 0.0, 1e-12);
+    CHECK_NEAR(g.world.states.try_get(neutral)->compliance, 0.0, 1e-12);
+    CHECK_NEAR(g.world.states.try_get(neutral)->garrison_required, 0.0, 1e-12);
 }

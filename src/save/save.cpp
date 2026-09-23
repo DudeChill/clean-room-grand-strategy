@@ -18,9 +18,14 @@
 //              law_levels, the four Modifier sets, the per-resource
 //              produced/consumed/imported/exported aggregates, starting_factories,
 //              the general roster (Country::generals) and the character store
-//   Economy    per country: production lines, construction queue, research state,
-//              template roster (Country::templates); plus the runtime template
-//              table (Content::templates - templates created by CreateTemplate)
+//   Economy    the content snapshot - equipment, division templates, technologies,
+//              laws, buildings and SimConstants, i.e. every table the simulation
+//              reads - plus per country: production lines, construction queue,
+//              research state and the template roster (Country::templates). Content
+//              lives here because it is what industry and research consume, and it
+//              travels with the save so a default-constructed Game can continue from
+//              a file without help from data/; the derived key -> id maps are rebuilt
+//              on load instead of being stored twice
 //   Military   per country: division/army rosters and the training list; then the
 //              army store and the division store
 //   Battles    the battle store, including both sides, the debug breakdown lines
@@ -39,11 +44,15 @@
 //              not-yet-applied command queue (the remaining input that decides the
 //              next tick)
 //
+// The file header additionally repeats the seed, scenario path, tick, date, ticks_run,
+// start date, player country and AI control bitmap. Sections are authoritative (only
+// they are hashed) and load_game rejects a header that disagrees with them; the copy
+// exists so a tool can describe a file without parsing sections.
+//
 // Deliberately not saved because they are not gameplay state: SimMetrics
 // (wall-clock timings), SimEvents (UI history), the command log (appended as its own
-// file trailer so a replay is extractable without touching sections) and the static
-// Content tables (equipment, techs, laws, buildings, constants), which are reloaded
-// from `data_root` before loading a save.
+// file trailer so a replay is extractable without touching sections) and
+// Game::data_root (a load path, not state).
 
 #include "save/save.h"
 
@@ -341,6 +350,7 @@ void write_state(ByteWriter& w, const State& s) {
     w.i32(s.civilian_factories);
     w.i32(s.military_factories);
     w.i32(s.dockyards);
+    w.i32(s.synthetic_refineries);
     w.i32(s.building_slots);
     w.f64(s.manpower_pool);
     w.boolean(s.impassable);
@@ -364,6 +374,7 @@ bool read_state(ByteReader& r, State* s) {
     if (!read_ids(r, &s->provinces)) return false;
     if (!read_ids(r, &s->core_owners)) return false;
     if (!r.i32(&s->civilian_factories) || !r.i32(&s->military_factories) || !r.i32(&s->dockyards)) return false;
+    if (!r.i32(&s->synthetic_refineries)) return false;
     if (!r.i32(&s->building_slots)) return false;
     if (!r.f64(&s->manpower_pool)) return false;
     if (!r.boolean(&s->impassable)) return false;
@@ -392,6 +403,297 @@ bool read_region(ByteReader& r, Region* g) {
     if (!read_ids(r, &g->provinces)) return false;
     if (!r.f64(&g->temperature)) return false;
     if (!r.boolean(&g->rain) || !r.boolean(&g->snow) || !r.boolean(&g->mud) || !r.boolean(&g->sandstorm)) return false;
+    return true;
+}
+
+// ---------------------------------------------------------------- content ----
+//
+// The content database (equipment statistics, technologies, laws, buildings and
+// SimConstants) is read by every simulation phase, so a save that omitted it would
+// continue differently from the run it came from: a save is self-contained and a
+// default-constructed Game can continue from it. It travels inside the Economy
+// section and is therefore part of the world hash. The by-key index maps are derived
+// state, rebuilt from the vectors on load rather than stored twice.
+
+// Division templates are shared with the per-country template rosters below.
+void write_template(ByteWriter& w, const DivisionTemplate& t);
+bool read_template(ByteReader& r, DivisionTemplate* t);
+
+void write_strs(ByteWriter& w, const std::vector<std::string>& v) {
+    w.u32(static_cast<uint32_t>(v.size()));
+    for (const std::string& s : v) w.str(s);
+}
+
+bool read_strs(ByteReader& r, std::vector<std::string>* out) {
+    uint32_t n = 0;
+    if (!read_count(r, 4, &n)) return false;
+    out->clear();
+    out->resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!r.str(&(*out)[i])) return false;
+    }
+    return true;
+}
+
+void write_equipment(ByteWriter& w, const EquipmentDef& e) {
+    write_id(w, e.id);
+    w.str(e.key);
+    w.str(e.name);
+    write_enum(w, e.category);
+    w.i32(e.year);
+    w.str(e.archetype);
+    w.f64(e.soft_attack);
+    w.f64(e.hard_attack);
+    w.f64(e.air_attack);
+    w.f64(e.defense);
+    w.f64(e.breakthrough);
+    w.f64(e.armor);
+    w.f64(e.piercing);
+    w.f64(e.hardness);
+    w.f64(e.reliability);
+    w.f64(e.speed);
+    w.f64(e.max_strength);
+    w.f64(e.organization);
+    w.f64(e.build_cost);
+    write_resources(w, e.resources);
+    w.f64(e.fuel_use);
+    w.f64(e.supply_use);
+    w.f64(e.manpower);
+    w.boolean(e.is_archetype);
+}
+
+bool read_equipment(ByteReader& r, EquipmentDef* e) {
+    uint32_t id = INVALID_ID;
+    if (!r.u32(&id)) return false;
+    e->id = EquipmentId(id);
+    if (!r.str(&e->key) || !r.str(&e->name)) return false;
+    if (!read_enum(r, &e->category, static_cast<int>(EquipmentCategory::Count))) return false;
+    if (!r.i32(&e->year)) return false;
+    if (!r.str(&e->archetype)) return false;
+    if (!r.f64(&e->soft_attack) || !r.f64(&e->hard_attack) || !r.f64(&e->air_attack)) return false;
+    if (!r.f64(&e->defense) || !r.f64(&e->breakthrough) || !r.f64(&e->armor)) return false;
+    if (!r.f64(&e->piercing) || !r.f64(&e->hardness) || !r.f64(&e->reliability)) return false;
+    if (!r.f64(&e->speed) || !r.f64(&e->max_strength) || !r.f64(&e->organization)) return false;
+    if (!r.f64(&e->build_cost)) return false;
+    if (!read_resources(r, e->resources)) return false;
+    if (!r.f64(&e->fuel_use) || !r.f64(&e->supply_use) || !r.f64(&e->manpower)) return false;
+    return r.boolean(&e->is_archetype);
+}
+
+void write_tech(ByteWriter& w, const TechDef& t) {
+    write_id(w, t.id);
+    w.str(t.key);
+    w.str(t.name);
+    w.str(t.category);
+    w.i32(t.year);
+    w.f64(t.cost_days);
+    write_ids(w, t.prerequisites);
+    write_strs(w, t.unlock_equipment);
+    write_strs(w, t.unlock_buildings);
+    write_modifiers(w, t.modifiers);
+}
+
+bool read_tech(ByteReader& r, TechDef* t) {
+    uint32_t id = INVALID_ID;
+    if (!r.u32(&id)) return false;
+    t->id = TechId(id);
+    if (!r.str(&t->key) || !r.str(&t->name) || !r.str(&t->category)) return false;
+    if (!r.i32(&t->year) || !r.f64(&t->cost_days)) return false;
+    if (!read_ids(r, &t->prerequisites)) return false;
+    if (!read_strs(r, &t->unlock_equipment)) return false;
+    if (!read_strs(r, &t->unlock_buildings)) return false;
+    return read_modifiers(r, &t->modifiers);
+}
+
+void write_law(ByteWriter& w, const LawDef& l) {
+    w.str(l.key);
+    w.str(l.name);
+    w.i32(l.kind);
+    w.i32(l.level);
+    w.f64(l.cost);
+    write_modifiers(w, l.modifiers);
+    w.str(l.requires_law);
+    w.i32(l.requires_level);
+}
+
+bool read_law(ByteReader& r, LawDef* l) {
+    if (!r.str(&l->key) || !r.str(&l->name)) return false;
+    if (!r.i32(&l->kind) || !r.i32(&l->level) || !r.f64(&l->cost)) return false;
+    if (!read_modifiers(r, &l->modifiers)) return false;
+    if (!r.str(&l->requires_law)) return false;
+    return r.i32(&l->requires_level);
+}
+
+void write_building(ByteWriter& w, const BuildingDef& b) {
+    write_enum(w, b.kind);
+    w.str(b.key);
+    w.str(b.name);
+    w.f64(b.base_cost);
+    w.boolean(b.per_state);
+    w.i32(b.max_level);
+}
+
+bool read_building(ByteReader& r, BuildingDef* b) {
+    if (!read_enum(r, &b->kind, static_cast<int>(BuildingKind::Count))) return false;
+    if (!r.str(&b->key) || !r.str(&b->name)) return false;
+    if (!r.f64(&b->base_cost)) return false;
+    if (!r.boolean(&b->per_state)) return false;
+    return r.i32(&b->max_level);
+}
+
+// SimConstants in declaration order; every balance number the simulation reads is
+// part of the state, so a data change cannot slip past a hash comparison.
+void write_constants(ByteWriter& w, const SimConstants& k) {
+    const double values[] = {
+        k.ic_per_military_factory, k.ic_per_civilian_factory, k.ic_per_dockyard,
+        k.efficiency_start, k.efficiency_cap_base, k.efficiency_cap_growth_per_day,
+        k.efficiency_growth_per_day, k.switch_same_archetype_retention, k.resource_shortage_floor,
+        k.consumer_goods_base, k.fuel_per_oil, k.fuel_storage_per_factory,
+        k.synthetic_oil_per_refinery_per_day, k.synthetic_rubber_per_refinery_per_day,
+        k.construction_cost_factory, k.construction_cost_infrastructure, k.construction_cost_railway,
+        k.construction_cost_supply_hub, k.construction_cost_air_base, k.construction_cost_naval_base,
+        k.construction_cost_fort, k.construction_cost_radar, k.construction_cost_synthetic,
+        k.construction_level_scaling, k.research_base_days, k.research_year_penalty,
+        k.research_speed_base, k.manpower_growth_per_year_fraction, k.recruitable_base,
+        k.base_hours_per_province, k.min_division_speed, k.river_crossing_penalty,
+        k.combat_width_base, k.damage_scale, k.org_damage_share, k.strength_damage_share,
+        k.armor_advantage_multiplier, k.armor_disadvantage_multiplier, k.org_recovery_base,
+        k.entrenchment_per_day, k.planning_per_day, k.planning_max_attack_bonus,
+        k.battle_retreat_org_threshold, k.max_battles_per_province, k.supply_hub_radius,
+        k.supply_range_penalty, k.supply_demand_per_width, k.supply_rail_bonus_per_level,
+        k.supply_infrastructure_bonus_per_level, k.fuel_demand_per_day, k.political_power_per_day,
+        k.stability_drift, k.war_support_drift, k.weather_change_chance};
+    w.u32(static_cast<uint32_t>(sizeof(values) / sizeof(values[0])));
+    for (double v : values) w.f64(v);
+}
+
+bool read_constants(ByteReader& r, SimConstants* k) {
+    uint32_t n = 0;
+    if (!read_count(r, 8, &n)) return false;
+    if (n != 54) return false;  // a different count means a different SimConstants layout
+    double v[54] = {0.0};
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!r.f64(&v[i])) return false;
+    }
+    k->ic_per_military_factory = v[0];
+    k->ic_per_civilian_factory = v[1];
+    k->ic_per_dockyard = v[2];
+    k->efficiency_start = v[3];
+    k->efficiency_cap_base = v[4];
+    k->efficiency_cap_growth_per_day = v[5];
+    k->efficiency_growth_per_day = v[6];
+    k->switch_same_archetype_retention = v[7];
+    k->resource_shortage_floor = v[8];
+    k->consumer_goods_base = v[9];
+    k->fuel_per_oil = v[10];
+    k->fuel_storage_per_factory = v[11];
+    k->synthetic_oil_per_refinery_per_day = v[12];
+    k->synthetic_rubber_per_refinery_per_day = v[13];
+    k->construction_cost_factory = v[14];
+    k->construction_cost_infrastructure = v[15];
+    k->construction_cost_railway = v[16];
+    k->construction_cost_supply_hub = v[17];
+    k->construction_cost_air_base = v[18];
+    k->construction_cost_naval_base = v[19];
+    k->construction_cost_fort = v[20];
+    k->construction_cost_radar = v[21];
+    k->construction_cost_synthetic = v[22];
+    k->construction_level_scaling = v[23];
+    k->research_base_days = v[24];
+    k->research_year_penalty = v[25];
+    k->research_speed_base = v[26];
+    k->manpower_growth_per_year_fraction = v[27];
+    k->recruitable_base = v[28];
+    k->base_hours_per_province = v[29];
+    k->min_division_speed = v[30];
+    k->river_crossing_penalty = v[31];
+    k->combat_width_base = v[32];
+    k->damage_scale = v[33];
+    k->org_damage_share = v[34];
+    k->strength_damage_share = v[35];
+    k->armor_advantage_multiplier = v[36];
+    k->armor_disadvantage_multiplier = v[37];
+    k->org_recovery_base = v[38];
+    k->entrenchment_per_day = v[39];
+    k->planning_per_day = v[40];
+    k->planning_max_attack_bonus = v[41];
+    k->battle_retreat_org_threshold = v[42];
+    k->max_battles_per_province = v[43];
+    k->supply_hub_radius = v[44];
+    k->supply_range_penalty = v[45];
+    k->supply_demand_per_width = v[46];
+    k->supply_rail_bonus_per_level = v[47];
+    k->supply_infrastructure_bonus_per_level = v[48];
+    k->fuel_demand_per_day = v[49];
+    k->political_power_per_day = v[50];
+    k->stability_drift = v[51];
+    k->war_support_drift = v[52];
+    k->weather_change_chance = v[53];
+    return true;
+}
+
+void write_content(ByteWriter& w, const Content& c) {
+    w.u32(static_cast<uint32_t>(c.equipment.size()));
+    for (const EquipmentDef& e : c.equipment) write_equipment(w, e);
+    w.u32(static_cast<uint32_t>(c.templates.size()));
+    for (const DivisionTemplate& t : c.templates) write_template(w, t);
+    w.u32(static_cast<uint32_t>(c.techs.size()));
+    for (const TechDef& t : c.techs) write_tech(w, t);
+    w.u32(static_cast<uint32_t>(c.laws.size()));
+    for (const LawDef& l : c.laws) write_law(w, l);
+    w.u32(static_cast<uint32_t>(c.buildings.size()));
+    for (const BuildingDef& b : c.buildings) write_building(w, b);
+    write_constants(w, c.constants);
+}
+
+// Rebuilds the derived key -> id maps so the loaded database behaves exactly like a
+// designed one: commands and the AI look definitions up by key.
+void rebuild_content_index(Content& c) {
+    c.equipment_by_key.clear();
+    for (const EquipmentDef& e : c.equipment) c.equipment_by_key[e.key] = e.id;
+    c.template_by_key.clear();
+    for (const DivisionTemplate& t : c.templates) c.template_by_key[t.key] = t.id;
+    c.tech_by_key.clear();
+    for (const TechDef& t : c.techs) c.tech_by_key[t.key] = t.id;
+    c.law_index.clear();
+    for (size_t i = 0; i < c.laws.size(); ++i) c.law_index[c.laws[i].key] = static_cast<int>(i);
+    c.load_errors.clear();
+}
+
+bool read_content(ByteReader& r, Content* c) {
+    uint32_t n = 0;
+    if (!read_count(r, 28, &n)) return false;
+    c->equipment.clear();
+    c->equipment.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_equipment(r, &c->equipment[i])) return false;
+    }
+    if (!read_count(r, 28, &n)) return false;
+    c->templates.clear();
+    c->templates.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_template(r, &c->templates[i])) return false;
+    }
+    if (!read_count(r, 24, &n)) return false;
+    c->techs.clear();
+    c->techs.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_tech(r, &c->techs[i])) return false;
+    }
+    if (!read_count(r, 32, &n)) return false;
+    c->laws.clear();
+    c->laws.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_law(r, &c->laws[i])) return false;
+    }
+    if (!read_count(r, 24, &n)) return false;
+    c->buildings.clear();
+    c->buildings.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_building(r, &c->buildings[i])) return false;
+    }
+    if (!read_constants(r, &c->constants)) return false;
+    rebuild_content_index(*c);
     return true;
 }
 
@@ -1150,6 +1452,60 @@ bool migrate_from(uint32_t found, Game& g, const std::string& path, std::string*
                          std::to_string(SAVE_VERSION) + " (file: " + path + ")");
 }
 
+// The save header carries a redundant, human-readable copy of the run's identity and
+// control routing next to the seed so tools can describe a file without parsing
+// sections. Sections stay authoritative (only they are hashed); load_game checks the
+// two against each other and rejects a file where they disagree.
+struct SaveHeader {
+    uint64_t seed = 0;
+    std::string scenario;
+    uint64_t tick = 0;
+    GameDate date;
+    uint64_t ticks_run = 0;
+    GameDate start_date;
+    uint32_t player_country = INVALID_ID;
+    std::vector<uint8_t> ai_controlled;
+};
+
+void write_header(ByteWriter& w, const Game& g) {
+    w.u32(SAVE_MAGIC);
+    w.u32(SAVE_VERSION);
+    w.u64(g.seed);
+    w.str(g.scenario_path);
+    w.u64(g.world.tick);
+    write_date(w, g.world.date);
+    w.u64(g.ticks_run);
+    write_date(w, g.start_date);
+    w.u32(g.player_country.v);
+    write_bytes(w, g.ai_controlled);
+}
+
+bool read_header(ByteReader& r, SaveHeader* h, const std::string& path, std::string* err) {
+    uint32_t magic = 0;
+    if (!r.u32(&magic)) return fail(err, "save file is truncated: no magic in " + path);
+    if (magic != SAVE_MAGIC) {
+        return fail(err, "not a save file: found magic " + hex64(magic) + ", expected " + hex64(SAVE_MAGIC) +
+                             " (file: " + path + ")");
+    }
+    uint32_t version = 0;
+    if (!r.u32(&version)) return fail(err, "save file is truncated: no version in " + path);
+    if (version != SAVE_VERSION) {
+        if (version > SAVE_VERSION) {
+            return fail(err, "unsupported save version " + std::to_string(version) +
+                                 ": this build supports version " + std::to_string(SAVE_VERSION) +
+                                 " and cannot read newer files (file: " + path + ")");
+        }
+        return fail(err, "no migration path from version " + std::to_string(version) + " to version " +
+                             std::to_string(SAVE_VERSION) + " (file: " + path + ")");
+    }
+    if (!r.u64(&h->seed) || !r.str(&h->scenario) || !r.u64(&h->tick) || !read_date(r, &h->date) ||
+        !r.u64(&h->ticks_run) || !read_date(r, &h->start_date) || !r.u32(&h->player_country) ||
+        !read_bytes(r, &h->ai_controlled)) {
+        return fail(err, "save file is truncated in its header: " + path);
+    }
+    return true;
+}
+
 // ------------------------------------------------------------------- files ---
 
 bool write_file(const std::string& path, const std::vector<uint8_t>& bytes, std::string* err) {
@@ -1260,8 +1616,7 @@ void serialize_subsystem(const Game& g, Subsystem s, ByteWriter* out) {
             g.world.countries.for_each([&](CountryId id, const Country& c) {
                 write_country_block(w, id, c, write_country_economy);
             });
-            w.u32(static_cast<uint32_t>(g.content.templates.size()));
-            for (const DivisionTemplate& t : g.content.templates) write_template(w, t);
+            write_content(w, g.content);
             break;
         }
 
@@ -1350,14 +1705,7 @@ bool deserialize_subsystem(Game& g, Subsystem s, ByteReader* in) {
                 if (c == nullptr || !ok) return false;
                 if (!read_country_economy(r, c)) return false;
             }
-            uint32_t templates = 0;
-            if (!read_count(r, 28, &templates)) return false;
-            g.content.templates.clear();
-            g.content.templates.resize(templates);
-            for (uint32_t i = 0; i < templates; ++i) {
-                if (!read_template(r, &g.content.templates[i])) return false;
-            }
-            return true;
+            return read_content(r, &g.content);
         }
 
         case Subsystem::Military: {
@@ -1474,12 +1822,7 @@ std::string hash_report(const Game& g) {
 
 bool save_game(const Game& g, const std::string& path, std::string* err) {
     ByteWriter w;
-    w.u32(SAVE_MAGIC);
-    w.u32(SAVE_VERSION);
-    w.u64(g.seed);
-    w.str(g.scenario_path);
-    w.u64(g.world.tick);
-    write_date(w, g.world.date);
+    write_header(w, g);
 
     w.u32(static_cast<uint32_t>(Subsystem::Count));
     for (int i = 0; i < static_cast<int>(Subsystem::Count); ++i) {
@@ -1501,37 +1844,14 @@ bool load_game(Game& g, const std::string& path, std::string* err) {
     if (!read_file(path, &bytes, err)) return false;
     ByteReader r(bytes);
 
-    uint32_t magic = 0;
-    if (!r.u32(&magic)) return fail(err, "save file is truncated: no magic in " + path);
-    if (magic != SAVE_MAGIC) {
-        return fail(err, "not a save file: found magic " + hex64(magic) + ", expected " + hex64(SAVE_MAGIC) +
-                             " (file: " + path + ")");
-    }
-    uint32_t version = 0;
-    if (!r.u32(&version)) return fail(err, "save file is truncated: no version in " + path);
-    if (version != SAVE_VERSION) {
-        if (version > SAVE_VERSION) {
-            return fail(err, "unsupported save version " + std::to_string(version) +
-                                 ": this build supports version " + std::to_string(SAVE_VERSION) +
-                                 " and cannot read newer files (file: " + path + ")");
-        }
-        return migrate_from(version, g, path, err);
-    }
-
-    uint64_t header_seed = 0;
-    std::string header_scenario;
-    uint64_t header_tick = 0;
-    GameDate header_date;
-    if (!r.u64(&header_seed) || !r.str(&header_scenario) || !r.u64(&header_tick) ||
-        !read_date(r, &header_date)) {
-        return fail(err, "save file is truncated in its header: " + path);
-    }
+    SaveHeader header;
+    if (!read_header(r, &header, path, err)) return false;
 
     uint32_t section_count = 0;
     if (!r.u32(&section_count)) return fail(err, "save file is truncated before its sections: " + path);
     if (section_count != static_cast<uint32_t>(Subsystem::Count)) {
         return fail(err, "save file declares " + std::to_string(section_count) + " sections, version " +
-                             std::to_string(version) + " defines " +
+                             std::to_string(SAVE_VERSION) + " defines " +
                              std::to_string(static_cast<uint32_t>(Subsystem::Count)));
     }
 
@@ -1597,12 +1917,37 @@ bool load_game(Game& g, const std::string& path, std::string* err) {
         payload[i].shrink_to_fit();
     }
 
-    if (g.seed != header_seed || g.world.tick != header_tick || !(g.world.date == header_date)) {
-        return fail(err, "save header disagrees with its Rng section (header tick " +
-                             std::to_string(header_tick) + ", section tick " +
-                             std::to_string(g.world.tick) + ")");
+    // The header copy is redundant, so a disagreement means the file was assembled
+    // from two different games: report which field diverged.
+    if (g.seed != header.seed) {
+        return fail(err, "save header seed " + hex64(header.seed) + " disagrees with the Rng section seed " +
+                             hex64(g.seed));
     }
-    g.scenario_path = header_scenario;
+    if (g.world.tick != header.tick) {
+        return fail(err, "save header tick " + std::to_string(header.tick) + " disagrees with the Rng section tick " +
+                             std::to_string(g.world.tick));
+    }
+    if (!(g.world.date == header.date)) {
+        return fail(err, "save header date disagrees with the Rng section date");
+    }
+    if (g.ticks_run != header.ticks_run) {
+        return fail(err, "save header ticks_run " + std::to_string(header.ticks_run) +
+                             " disagrees with the Rng section ticks_run " + std::to_string(g.ticks_run));
+    }
+    if (!(g.start_date == header.start_date)) {
+        return fail(err, "save header start_date disagrees with the Rng section start_date");
+    }
+    if (g.player_country.v != header.player_country) {
+        return fail(err, "save header player_country " + std::to_string(header.player_country) +
+                             " disagrees with the Ai section player_country " +
+                             std::to_string(g.player_country.v));
+    }
+    if (g.ai_controlled != header.ai_controlled) {
+        return fail(err, "save header ai_controlled (" + std::to_string(header.ai_controlled.size()) +
+                             " entries) disagrees with the Ai section (" +
+                             std::to_string(g.ai_controlled.size()) + " entries)");
+    }
+    g.scenario_path = header.scenario;
 
     uint64_t stored_world = 0;
     if (!r.u64(&stored_world)) return fail(err, "save file is truncated before the world hash: " + path);

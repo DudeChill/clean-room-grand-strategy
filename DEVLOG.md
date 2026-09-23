@@ -3,6 +3,110 @@
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /
 NEW DISCREPANCIES / PERFORMANCE / TEST RESULTS / NEXT PRIORITY.
 
+## 2026-09-23 — v0.1.0 release gate green
+
+VALIDATED (with evidence packets under docs/evidence/)
+* SIM-001 simulation clock and tick order, TOOL-002 determinism oracle,
+  LND-005 land combat, IND-004 production efficiency.
+
+FIXED (release-candidate round)
+* `ai_production_layer` indexed a vector by `EquipmentDef::id`, which hand-built
+  content had left invalid: an out-of-bounds write that only crashed at -O3. The
+  upgrade target is now tracked by index; nothing in the AI indexes by a definition
+  id any more.
+* `military_destroy_division` destroyed a division without detaching it from its
+  battle, leaving dangling ids that the auditor caught; `start_battle` could also add
+  a division to both sides of the same battle. Both fixed, plus
+  `military_prune_battles` called at the start of combat and the end of the territory
+  phase so no battle can outlive its divisions.
+* Wars could keep an empty side after a capitulation. Rosters are now kept as the
+  historical record and a war ends when a side has no living participant;
+  `phase_diplomacy` closes such wars defensively. Capitulation also clears the
+  loser's production lines and construction queue (a defeated country owns no
+  industry).
+* `refresh_at_war` read `live.empty()` after `std::move(live)`, so every surviving
+  participant of a still-active war silently lost `at_war` after any capitulation -
+  which broke supply sharing, co-belligerence and AI war perception for the rest of
+  that war.
+* Production lines kept assignments for factories the country no longer controlled;
+  the industry phase now releases the excess deterministically (last line first,
+  retiring it exactly like a removal) and logs it once per retired line.
+* Verification-gate defects: the inspector checks in `scripts/verify.sh` were
+  malformed shell (they never ran), and the determinism comparison included timing
+  lines that legitimately differ between runs.
+
+PERFORMANCE
+* Supply was 99% of tick time (43.4 ms/tick). A signature-keyed network cache plus a
+  bounded, grouped multi-source search brought it to 1.2 ms/tick with **bit-identical
+  results** (proved by digesting every province supply level, source, bottleneck and
+  every division's supply/fuel before and after the change). Under full war load
+  (449 divisions, 31 wars) a simulated hour costs 7.2 ms on average, p50 0.63 ms, and
+  a year of game time runs in 54 s wall.
+
+TEST RESULTS
+* `hoi_tests`: 112 passed, 0 failed.
+* `scripts/verify.sh`: 8 checks passed, 0 failed - build, tests, world audit,
+  determinism, save/load round trip, 365-day observer run, three inspectors.
+* 365-day observer run: `world audit: OK`, 31 wars, 449 divisions, 23,989 commands
+  applied, civilian industry growing for every surviving country.
+
+NEW DISCREPANCIES
+* IND-012 (ship lines charge the military factory pool), AIR-002 (anti-air gated),
+  plus the tuning note AI-009 (AI aggression in all-AI games).
+
+NEXT PRIORITY
+* Air warfare per `docs/mechanics/air_warfare.md` (AIR-001, BLOCKER), then naval
+  warfare, then focus trees/events/decisions.
+
+FIXED (verification round)
+* `Division::id` was never populated at creation, so `detach_from_battle` could not
+  find a retreating division and battles kept fighting phantom defenders forever -
+  attackers never advanced and provinces never changed hands. Fixed at the storage
+  layer: `Store::create` now assigns a payload's own `id` field via `if constexpr`,
+  so no creation site can forget it.
+* Saves were not self-contained: the loaded game had no content (equipment, techs,
+  laws, buildings, constants), so a save played differently from the session that
+  produced it. The Economy section now carries the content snapshot and rebuilds the
+  derived key maps; the header also carries `start_date`, `ticks_run`,
+  `ai_controlled` and `player_country` and cross-checks them against the sections.
+* Scenario coverage: 313 of 332 states were unowned (an inert world with no industry
+  and no supply sources). Every land state is now assigned to a country by a
+  capacity-aware multi-source BFS with a smoothing pass; all ten countries hold 21+
+  states and no land province is unowned.
+* Construction: cost was exponential per level and capacity sat entirely on the head
+  project, so nothing ever completed. Cost is now linear per level, and capacity
+  spreads across queued projects (up to 15 factories each, the parity cap). First
+  completion for the largest power lands around day 110, which is reference-like
+  pacing for a 38-civilian-factory economy.
+* Factory costs are differentiated in data (civilian 10800, military 7200, dockyard
+  6400) instead of one cost for all three.
+* `SimConstants::from_json` silently ignored three fields that had been added to the
+  struct, so two synthetic-refinery rates and the per-project factory cap could not
+  be tuned from data at all.
+* Scenario capitals: the snapshot exposed the capital *state* id where the client
+  expected a province, so "recenter" flew to a sea zone.
+* Audit additions: battle membership consistency (battle side <-> division.battle),
+  sea provinces exempt from state/owner checks, land adjacency must be land-only.
+
+PERFORMANCE
+* Measured on the shipped scenario: 52.7 ms/tick, of which supply is ~52 ms (99%).
+  Every other phase sums to about 0.4 ms/tick. A supply-network cache plus a bounded
+  search is being implemented; the target is <= 5 ms/tick.
+
+NEW DISCREPANCIES
+* AIR-002 (anti-air gated until air warfare exists), IND-011 closed for synthetic
+  refineries (now produce oil and rubber through real state fields).
+
+TEST RESULTS
+* 100/102 tests pass on a clean build; the two remaining failures are the
+  construction golden test (fixed by the linear cost model plus per-project factory
+  allocation) and the save round-trip hash (missing `ai_controlled`,
+  `player_country`, `start_date`, `ticks_run` - being added to the save/Ai section).
+
+NEXT PRIORITY
+* Land the three integration fixes above, re-run the full verification, publish
+  v0.1.0, then implement air warfare against `docs/mechanics/air_warfare.md`.
+
 ## 2026-09-23 — foundation, map, economy, land warfare, logistics, AI, persistence
 
 IMPLEMENTED

@@ -11,6 +11,8 @@
   "consumer_goods_base": 0.35,
   "fuel_per_oil": 1.0,
   "fuel_storage_per_factory": 200.0,
+  "synthetic_oil_per_refinery_per_day": 2.0,
+  "synthetic_rubber_per_refinery_per_day": 1.0,
 
   "construction_cost_factory": 10800.0,
   "construction_cost_infrastructure": 3000.0,
@@ -22,6 +24,7 @@
   "construction_cost_radar": 2400.0,
   "construction_cost_synthetic": 8000.0,
   "construction_level_scaling": 1.25,
+  "max_factories_per_project": 15.0,
 
   "research_base_days": 100.0,
   "research_year_penalty": 0.0,

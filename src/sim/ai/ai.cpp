@@ -126,9 +126,14 @@ constexpr int kProdMaxLines = 3;
 constexpr int kMilRecruitPerRunWar = 2;
 constexpr int kMilRecruitPerRunPeace = 1;
 constexpr int kMilDivisionsPerArmy = 12;
-constexpr int kMilMaxArmies = 6;
+constexpr int kMilMaxArmies = 24;
 constexpr int kMilMinUnassignedForArmy = 4;
-constexpr int kMilMaxMovesPerRun = 4;
+constexpr int kMilMaxMovesPerRun = 8;
+constexpr double kMilLocalAttackRatio = 1.0;  // attack when locally at least equal
+constexpr int kMilMaxAttacksPerRun = 6;       // the rest of the budget reinforces the line
+constexpr double kMilAttackUndefended = 60.0;  // free occupation
+constexpr double kMilAttackBase = 20.0;
+constexpr double kMilAttackRatioWeight = 40.0;
 constexpr double kMilEquipmentReady = 0.5;  // stockpile share needed to train
 constexpr double kMilOffensiveThreshold = 45.0;
 constexpr double kMilOffensiveRatio = 1.15;
@@ -147,11 +152,13 @@ constexpr double kDipFactionThreshold = 40.0;
 constexpr double kDipWarForce = 40.0;
 constexpr double kDipWarWeakness = 20.0;
 constexpr double kDipWarPosture = 20.0;
+constexpr double kDipWarOwnThreat = 25.0;
 constexpr double kDipWarCooldown = -100.0;
+// Force ratio the country needs *against the specific target* (and its faction)
+// before it will start a war; the declaration score is also reachable at 1.5.
 constexpr double kDipWarRatioGate = 1.5;
-constexpr double kDipWarThreshold = 50.0;
-constexpr double kDipPeaceOccupation = 60.0;
-constexpr double kDipPeaceThreshold = 30.0;
+constexpr double kDipWarThreshold = 45.0;
+constexpr double kDipPeaceOccupation = 60.0;  // reason score only; the gate is decisiveness
 constexpr uint64_t kWarDeclarationCooldown = 30ull * static_cast<uint64_t>(TICKS_PER_DAY);
 
 // ------------------------------------------------------------------ helpers --
@@ -241,9 +248,12 @@ int building_max_level(const Content& content, BuildingKind kind, int fallback) 
 
 // The province a country's capital sits in: the province flagged `is_capital`
 // inside CapitalState, or the lowest-id land province of that state when the map
-// does not flag one.
-ProvinceId capital_province(const World& w, const Country& c) {
-    const State* s = w.state(c.capital);
+// does not flag one. Takes a country id so callers that only hold ids (war
+// participants) can use it.
+ProvinceId capital_province(const World& w, CountryId id) {
+    const Country* c = w.country(id);
+    if (!c) return ProvinceId{};
+    const State* s = w.state(c->capital);
     if (!s) return ProvinceId{};
     ProvinceId best;
     for (ProvinceId p : s->provinces) {
@@ -327,6 +337,117 @@ std::vector<char> template_equipment_mask(const Content& content, const Country&
     return mask;
 }
 
+// Strength a country can put in the field: division strength is the public measure
+// of an army, and it is what a player reads off the map before picking a fight.
+double divisions_strength(const World& w, CountryId c) {
+    const Country* cc = w.country(c);
+    if (!cc) return 0.0;
+    double s = 0.0;
+    for (DivisionId d : cc->divisions) {
+        const Division* dd = w.division(d);
+        if (dd) s += clamp01(dd->strength);
+    }
+    return s;
+}
+
+// Strength a war against `id` would actually face: its own divisions plus everything
+// its faction would pull into the war (declare_war brings faction members in).
+double side_strength(const World& w, CountryId id, uint32_t own_faction) {
+    const Country* target = w.country(id);
+    if (!target) return 0.0;
+    double s = divisions_strength(w, id);
+    if (target->faction == 0 || target->faction == own_faction) return s;
+    for (const Faction& f : w.factions) {
+        if (f.id != target->faction) continue;
+        for (CountryId m : f.members) {
+            if (m != id) s += divisions_strength(w, m);
+        }
+    }
+    return s;
+}
+
+// Rate limit on starting wars: one declaration per country per 30 days. Read from
+// the command log (public, saved and deterministic) rather than from the live wars,
+// because a war that has already ended must still hold the ceasefire period.
+bool declared_recently(const Game& g, CountryId country, Tick now) {
+    for (auto it = g.log.records.rbegin(); it != g.log.records.rend(); ++it) {
+        if (it->command.type != CommandType::DeclareWar || it->command.country != country) continue;
+        if (it->result != CommandResult::Applied) continue;
+        return now < it->tick + kWarDeclarationCooldown;
+    }
+    return false;
+}
+
+// The state a war is declared for: the first (lowest id) state of the target that
+// borders us. A war without a claim can only ever end in capitulation, so the AI
+// always names one - the claim is also what its peace offers are settled against.
+StateId border_claim_state(const World& w, CountryId self, CountryId target) {
+    StateId best;
+    w.states.for_each([&](StateId sid, const State& s) {
+        if (best.valid() || s.impassable || s.owner != target) return;
+        for (ProvinceId p : s.provinces) {
+            const Province* pr = w.province(p);
+            if (!pr || pr->is_sea || pr->controller != target) continue;
+            for (ProvinceId a : pr->adj) {
+                if (w.province_controller(a) == self) {
+                    best = sid;
+                    return;
+                }
+            }
+        }
+    });
+    return best;
+}
+
+// Mirrors the diplomacy phase's decisive-settlement rule: a side may only end a war
+// once it holds every state it claims, or - as the defender - once the aggressor has
+// lost its own capital. Public state only; used as a gate so the AI never queues a
+// peace offer the diplomacy phase would refuse.
+bool war_decided_for(const World& w, const War& war, CountryId proposer) {
+    auto side_of = [&war](CountryId country) -> int {
+        for (const WarParticipant& p : war.attackers) {
+            if (p.country == country) return 1;
+        }
+        for (const WarParticipant& p : war.defenders) {
+            if (p.country == country) return 0;
+        }
+        return -1;
+    };
+    const int mine = side_of(proposer);
+    if (mine < 0) return false;
+
+    bool any_goal = false, all_held = true;
+    for (const WarGoal& goal : war.goals) {
+        if (side_of(goal.claimant) != mine || !goal.state.valid()) continue;
+        any_goal = true;
+        const State* st = w.state(goal.state);
+        if (!st) {
+            all_held = false;
+            continue;
+        }
+        for (ProvinceId pid : st->provinces) {
+            const Province* pr = w.province(pid);
+            if (!pr || pr->is_sea) continue;
+            if (side_of(pr->controller) != mine) {
+                all_held = false;
+                break;
+            }
+        }
+    }
+    if (any_goal && all_held) return true;
+
+    const int aggressor_side = side_of(war.aggressor);
+    if (aggressor_side >= 0 && mine != aggressor_side) {
+        const ProvinceId cap = capital_province(w, war.aggressor);
+        const Province* p = w.province(cap);
+        if (p && p->controller.valid() && p->controller != war.aggressor &&
+            side_of(p->controller) == mine) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct IndustryCandidate {
     BuildingKind kind = BuildingKind::CivilianFactory;
     StateId state;
@@ -337,10 +458,15 @@ struct IndustryCandidate {
 
 // ------------------------------------------------------------------ posture --
 
+// True when the country is a belligerent of any live (or only just concluded) war.
+// `Country::wars` is authoritative for the AI: it is public state and it survives a
+// save, unlike anything the AI could cache for itself.
+bool at_war_state(const Country& c) { return c.at_war || !c.wars.empty(); }
+
 // Strategic assessment shared by the military and diplomacy layers: force ratio
-// against everyone the country is at war with, supply health, and how close the
-// enemy is to the capital. All of it is information a player could read off the
-// map and the ledger.
+// against everyone the country is at war with, supply health, how close the enemy is
+// to the capital, and which neighbour (if any) the country could actually beat. All
+// of it is information a player could read off the map and the ledger.
 struct StrategicAssessment {
     double own_strength = 0.0;
     double enemy_strength = 0.0;
@@ -348,7 +474,14 @@ struct StrategicAssessment {
     double avg_supply = 1.0;
     double capital_threat = 0.0;   // 0..1
     double occupied_share = 0.0;   // own provinces controlled by a hostile
+    double own_threat = 0.0;       // 0..1 combined danger to the country itself
     double offensive_score = 0.0;
+    // Countries that border us (ascending id) and the best ratio we could bring
+    // against one of them. Makes an offensive posture meaningful before any war
+    // exists, and spares every later layer from re-scanning the map for borders.
+    std::vector<CountryId> neighbours;
+    double neighbour_ratio = 0.0;
+    CountryId best_neighbour;
     std::vector<std::pair<std::string, double>> factors;
 };
 
@@ -381,7 +514,7 @@ StrategicAssessment assess_strategy(const Game& g, const Country& c,
     a.force_ratio = safe_div(a.own_strength, a.enemy_strength + 0.5);
 
     // Capital threat: enemy boots on the capital, or on its doorstep.
-    const ProvinceId cap = capital_province(w, c);
+    const ProvinceId cap = capital_province(w, c.id);
     const Province* capital = w.province(cap);
     if (!capital) {
         a.capital_threat = 0.5;
@@ -400,6 +533,44 @@ StrategicAssessment assess_strategy(const Game& g, const Country& c,
     });
     a.occupied_share = clamp01(safe_div(occupied, owned));
 
+    // How much danger the country itself is in: pressure on the capital, lost
+    // territory, and being outmatched in a war it is already fighting.
+    const double war_pressure = at_war_state(c) ? clamp01(1.0 - a.force_ratio) : 0.0;
+    a.own_threat = clamp01(a.capital_threat * 0.5 + a.occupied_share * 2.0 + war_pressure);
+
+    // Reachable neighbours and the best force ratio available against one of them.
+    // This is what gives a country an offensive posture before any war exists: a
+    // large army alone is not a plan, a beatable neighbour is.
+    std::vector<CountryId> neighbours;
+    w.states.for_each([&](StateId, const State& s) {
+        if (s.controller != c.id) return;
+        for (ProvinceId p : s.provinces) {
+            const Province* pr = w.province(p);
+            if (!pr || pr->is_sea || terrain_is_water(pr->terrain)) continue;
+            for (ProvinceId adj : pr->adj) {
+                const CountryId ctrl = w.province_controller(adj);
+                if (!ctrl.valid() || ctrl == c.id) continue;
+                bool seen = false;
+                for (CountryId known : neighbours) {
+                    if (known == ctrl) seen = true;
+                }
+                if (!seen) neighbours.push_back(ctrl);
+            }
+        }
+    });
+    std::sort(neighbours.begin(), neighbours.end());
+    a.neighbours = neighbours;
+    for (CountryId n : a.neighbours) {
+        const Country* nc = w.country(n);
+        if (!nc || !nc->alive) continue;
+        if (nc->faction != 0 && nc->faction == c.faction) continue;  // already allied
+        const double ratio = safe_div(a.own_strength, side_strength(w, n, c.faction) + 0.5);
+        if (ratio > a.neighbour_ratio) {
+            a.neighbour_ratio = ratio;
+            a.best_neighbour = n;
+        }
+    }
+
     a.offensive_score = kOrderForceWeight * clamp(a.force_ratio - 0.5, 0.0, 1.5) +
                         kOrderSupplyWeight * clamp01(a.avg_supply) +
                         kOrderFrontWeight * (front.empty() ? 0.0 : 1.0) -
@@ -411,11 +582,11 @@ StrategicAssessment assess_strategy(const Game& g, const Country& c,
     a.factors.emplace_back("supply", a.avg_supply);
     a.factors.emplace_back("capital_threat", a.capital_threat);
     a.factors.emplace_back("occupied_share", a.occupied_share);
+    a.factors.emplace_back("own_threat", a.own_threat);
+    a.factors.emplace_back("neighbour_ratio", a.neighbour_ratio);
     a.factors.emplace_back("offensive_score", a.offensive_score);
     return a;
 }
-
-bool at_war_state(const Country& c) { return c.at_war || !c.wars.empty(); }
 
 }  // namespace
 
@@ -880,7 +1051,21 @@ void ai_production_layer(Game& g, Country& c) {
     if (!c.alive) return;
     int civ = 0, mil = 0, dock = 0;
     count_factories(w, c.id, &civ, &mil, &dock);
-    if (mil <= 0) return;
+    if (mil <= 0) {
+        // No military factories left (occupied or destroyed industry): every line has
+        // to be released, otherwise the country keeps factories assigned that it no
+        // longer controls.
+        for (const ProductionLine& line : c.lines) {
+            if (line.factories <= 0) continue;
+            Command cmd = make_command(CommandType::RemoveProductionLine, c.id);
+            cmd.equipment = line.equipment;
+            if (!push_if_valid(g, std::move(cmd))) continue;
+            record_reason(g, AiLayer::Production, "release_line", 5.0,
+                          {{"factories_freed", static_cast<double>(line.factories)},
+                           {"controlled_factories", static_cast<double>(mil)}});
+        }
+        return;
+    }
 
     // ---- need per equipment model -------------------------------------------
     std::vector<double> need(g.content.equipment.size(), 0.0);
@@ -914,13 +1099,20 @@ void ai_production_layer(Game& g, Country& c) {
         if (def.is_archetype || !factory_producible(def.category)) continue;
 
         // Upgrade within the archetype when the new model is measurably better and
-        // the efficiency thrown away by switching is smaller than the gain.
+        // the efficiency thrown away by switching is smaller than the gain. The
+        // upgrade target is tracked by *index*: `EquipmentDef::id` is metadata, and a
+        // definition whose id does not match its slot must not be able to index the
+        // need vector out of bounds.
         const EquipmentDef* best = &def;
+        size_t best_index = i;
         for (size_t j = 0; j < g.content.equipment.size(); ++j) {
             const EquipmentDef& other = g.content.equipment[j];
             if (other.is_archetype || other.archetype != def.archetype) continue;
             if (other.year > year) continue;
-            if (equipment_stat_score(other) > equipment_stat_score(*best)) best = &other;
+            if (equipment_stat_score(other) > equipment_stat_score(*best)) {
+                best = &other;
+                best_index = j;
+            }
         }
         if (best != &def) {
             const double gain =
@@ -935,7 +1127,7 @@ void ai_production_layer(Game& g, Country& c) {
                              {"efficiency_loss", loss},
                              {"switch_margin", margin}};
                 record_reason(g, AiLayer::Production, std::move(r));
-                need[best->id.v] += need[i];
+                need.at(best_index) += need[i];
                 need[i] = 0.0;
                 continue;
             }
@@ -1151,6 +1343,11 @@ void ai_military_layer(Game& g, Country& c) {
                    assess.force_ratio >= kMilOffensiveRatio)
                       ? 2
                       : 1;
+    } else {
+        // At peace the posture says whether the country is ready to pick a fight: it
+        // needs a neighbour it could actually beat, not merely a large army. The army
+        // itself stays on garrison orders until war is declared.
+        posture = assess.neighbour_ratio >= kDipWarRatioGate ? 2 : 0;
     }
     set_posture(g, c.id, posture);
 
@@ -1159,7 +1356,7 @@ void ai_military_layer(Game& g, Country& c) {
     if (!front.empty()) {
         goal = front[0];
     } else {
-        const ProvinceId cap = capital_province(w, c);
+        const ProvinceId cap = capital_province(w, c.id);
         const Province* p = w.province(cap);
         if (p && p->controller == c.id) goal = cap;
     }
@@ -1257,7 +1454,9 @@ void ai_military_layer(Game& g, Country& c) {
                                {"army_size", static_cast<double>(host_size)}});
             }
         } else if (unassigned.size() >= kMilMinUnassignedForArmy &&
-                   static_cast<int>(c.armies.size()) < kMilMaxArmies) {
+                   static_cast<int>(c.armies.size()) <
+                       std::min(kMilMaxArmies, 1 + static_cast<int>(c.divisions.size()) /
+                                                      kMilDivisionsPerArmy)) {
             Command cmd = make_command(CommandType::CreateArmy, c.id);
             cmd.text = c.tag + " " + std::to_string(c.armies.size() + 1) + ". Armee";
             if (push_if_valid(g, std::move(cmd))) {
@@ -1310,7 +1509,7 @@ void ai_military_layer(Game& g, Country& c) {
     for (ArmyId aid : c.armies) {
         const Army* a = w.army(aid);
         if (!a || a->divisions.empty()) continue;
-        const uint8_t stance = posture == 2 ? 0 : (posture == 0 ? 2 : 1);
+        const uint8_t stance = !war ? 2 : (posture == 2 ? 0 : 1);
 
         if (a->order.kind != desired || a->order.line.empty()) {
             Command cmd = make_command(CommandType::SetDivisionOrder, c.id);
@@ -1338,45 +1537,158 @@ void ai_military_layer(Game& g, Country& c) {
         }
     }
 
-    // ---- (d) walk idle divisions to the front ------------------------------
-    if (!front.empty()) {
-        int moves = 0;
-        PathRequest req;
-        req.country = c.id;
-        req.require_controlled = true;
+    // ---- (d) march and attack ----------------------------------------------
+    // The movement phase only advances paths that already exist and an army order
+    // only marks `order`/`order_target`, so every division that should move needs an
+    // explicit MoveDivision. Attack targets come from the *local* balance of force on
+    // the front: a division attacks the enemy province next to it when its own front
+    // province is locally stronger (or nothing defends the target). That is what
+    // starts battles - two armies facing each other across a border would otherwise
+    // simply stare, because attacking requires someone to walk into contact.
+    int moves = 0;
+    if (war && !front.empty()) {
+        // Strength by province, one pass over the division store: ours on one side,
+        // everything we are at war with on the other.
+        std::vector<double> our_strength(w.provinces.capacity() + 1, 0.0);
+        std::vector<double> hostile_strength(w.provinces.capacity() + 1, 0.0);
+        w.divisions.for_each([&](DivisionId, const Division& d) {
+            if (!d.location.valid() || d.location.v >= our_strength.size()) return;
+            if (d.country == c.id) {
+                our_strength[d.location.v] += clamp01(d.strength);
+            } else if (hostile_pair(w, c.id, d.country)) {
+                hostile_strength[d.location.v] += clamp01(d.strength);
+            }
+        });
+
+        // Best opportunity per front province.
+        std::vector<ProvinceId> best_target(w.provinces.capacity() + 1, ProvinceId{});
+        std::vector<double> best_score(w.provinces.capacity() + 1, 0.0);
+        std::vector<double> best_ratio(w.provinces.capacity() + 1, 0.0);
+        std::vector<double> best_defenders(w.provinces.capacity() + 1, 0.0);
+        for (ProvinceId f : front) {
+            const Province* fp = w.province(f);
+            if (!fp) continue;
+            const double local = our_strength[f.v];
+            for (ProvinceId n : fp->adj) {
+                const Province* np = w.province(n);
+                if (!np || np->is_sea || terrain_is_water(np->terrain)) continue;
+                if (!hostile_pair(w, c.id, np->controller)) continue;
+                if (n.v >= hostile_strength.size()) continue;
+                const double defenders = hostile_strength[n.v];
+                // A lone defender must not look unbeatable: compare raw strength, not
+                // strength against a padded denominator.
+                const double ratio = safe_div(local, std::max(defenders, 0.25));
+                const bool undefended = defenders <= 0.0;
+                if (!undefended && ratio < kMilLocalAttackRatio) continue;
+                const double score = undefended
+                                         ? kMilAttackUndefended
+                                         : kMilAttackBase + kMilAttackRatioWeight * clamp01(ratio - 1.0);
+                if (best_target[f.v].valid() && score <= best_score[f.v]) continue;
+                best_target[f.v] = n;
+                best_score[f.v] = score;
+                best_ratio[f.v] = ratio;
+                best_defenders[f.v] = defenders;
+            }
+        }
+
+        // Divisions already holding a front province take the strongest openings
+        // first; the rest of the run's budget goes to filling the line.
+        struct AttackOrder {
+            DivisionId division;
+            double score = 0.0;
+            ProvinceId target;
+            double local_ratio = 0.0;
+            double defender_strength = 0.0;
+        };
+        std::vector<AttackOrder> orders;
+        w.divisions.for_each([&](DivisionId did, const Division& d) {
+            if (d.country != c.id || d.moving || d.retreating || d.in_combat()) return;
+            if (!d.location.valid() || d.location.v >= best_target.size()) return;
+            if (!best_target[d.location.v].valid()) return;
+            AttackOrder o;
+            o.division = did;
+            o.score = best_score[d.location.v];
+            o.target = best_target[d.location.v];
+            o.local_ratio = best_ratio[d.location.v];
+            o.defender_strength = best_defenders[d.location.v];
+            orders.push_back(o);
+        });
+        std::sort(orders.begin(), orders.end(), [](const AttackOrder& a, const AttackOrder& b) {
+            if (a.score != b.score) return a.score > b.score;
+            return a.division < b.division;
+        });
+        int attacks = 0;
+        for (const AttackOrder& o : orders) {
+            if (moves >= kMilMaxMovesPerRun || attacks >= kMilMaxAttacksPerRun) break;
+            const Division* d = w.division(o.division);
+            if (!d) continue;
+            Command cmd = make_command(CommandType::MoveDivision, c.id);
+            cmd.division = o.division;
+            cmd.province = o.target;
+            if (!push_if_valid(g, std::move(cmd))) continue;
+            AiReason r;
+            r.what = "attack";
+            r.score = o.score;
+            r.factors = {{"local_ratio", o.local_ratio},
+                         {"defender_strength", o.defender_strength},
+                         {"supply", clamp01(d->supply)},
+                         {"strength", clamp01(d->strength)}};
+            record_reason(g, AiLayer::Military, std::move(r));
+            ++moves;
+            ++attacks;
+        }
+    }
+
+    // Divisions away from the fighting march to the front (or hold the capital when
+    // there is no front at all). They go to the thinnest part of the line: a front
+    // that is only held in a few provinces can be walked around, and a line that is
+    // held everywhere is what turns intrusions into battles.
+    std::vector<ProvinceId> hold_objectives = front;
+    if (hold_objectives.empty()) {
+        const ProvinceId cap = capital_province(w, c.id);
+        const Province* cp = w.province(cap);
+        if (cp && cp->controller == c.id) hold_objectives.push_back(cap);
+    }
+    if (!hold_objectives.empty() && moves < kMilMaxMovesPerRun) {
+        std::vector<int> held(w.provinces.capacity() + 1, 0);
+        w.divisions.for_each([&](DivisionId, const Division& d) {
+            if (d.country != c.id || !d.location.valid()) return;
+            if (d.location.v < held.size()) ++held[d.location.v];
+        });
+        std::sort(hold_objectives.begin(), hold_objectives.end(),
+                  [&](ProvinceId a, ProvinceId b) {
+                      if (held[a.v] != held[b.v]) return held[a.v] < held[b.v];
+                      return a < b;
+                  });
+
         w.divisions.for_each([&](DivisionId did, const Division& d) {
             if (moves >= kMilMaxMovesPerRun) return;
-            if (d.country != c.id || d.moving || d.in_combat() || d.army.valid()) return;
-            if (!d.location.valid()) return;
-            bool already_there = false;
-            for (ProvinceId f : front) {
-                if (f == d.location) already_there = true;
-            }
-            if (already_there) return;
+            if (d.country != c.id || d.moving || d.retreating || d.in_combat()) return;
+            if (!d.location.valid()) return;  // still training off-map
+            if (std::find(front.begin(), front.end(), d.location) != front.end()) return;  // on the line
 
-            // Nearest front province in land distance, then the first step of the
-            // path towards it.
-            std::vector<int32_t> hops;
-            compute_hop_distances(w, d.location, req, &hops);
-            ProvinceId best;
-            int best_hops = -1;
-            for (ProvinceId f : front) {
-                if (f.v >= hops.size() || hops[f.v] < 0) continue;
-                if (best_hops < 0 || hops[f.v] < best_hops) {
-                    best_hops = static_cast<int>(hops[f.v]);
-                    best = f;
+            // The thinnest objective that is not where the division already stands.
+            ProvinceId move_goal;
+            for (ProvinceId o : hold_objectives) {
+                if (o != d.location) {
+                    move_goal = o;
+                    break;
                 }
             }
-            if (!best.valid()) return;
-            const std::vector<ProvinceId> path = find_path(w, d.location, best, req);
-            if (path.empty()) return;
+            if (!move_goal.valid()) return;
+
             Command cmd = make_command(CommandType::MoveDivision, c.id);
             cmd.division = did;
-            cmd.province = path.front();
+            cmd.province = move_goal;
             if (!push_if_valid(g, std::move(cmd))) return;
-            record_reason(g, AiLayer::Military, "move_to_front", 18.0,
-                          {{"hops_to_front", static_cast<double>(best_hops)},
-                           {"supply", clamp01(d.supply)}});
+            AiReason r;
+            r.what = "move_to_front";
+            r.score = 18.0;
+            r.factors = {{"line_strength", static_cast<double>(held[move_goal.v])},
+                         {"supply", clamp01(d.supply)},
+                         {"strength", clamp01(d.strength)},
+                         {"posture_offensive", posture == 2 ? 1.0 : 0.0}};
+            record_reason(g, AiLayer::Military, std::move(r));
             ++moves;
         });
     }
@@ -1392,24 +1704,39 @@ void ai_diplomacy_layer(Game& g, Country& c) {
     const std::vector<ProvinceId> front = compute_front_line(w, c.id);
     uint8_t posture = posture_of(g.ai, c.id);
     StrategicAssessment assess = assess_strategy(g, c, front);
-    if (posture == 0 && at_war_state(c)) {
-        posture = assess.offensive_score >= kMilOffensiveThreshold ? 2 : 1;
+    if (posture == 0) {
+        // The military layer owns the posture, but this layer must also work when it
+        // is exercised on its own: replay the same rule instead of acting blind.
+        if (at_war_state(c)) {
+            posture = (assess.offensive_score >= kMilOffensiveThreshold &&
+                       assess.force_ratio >= kMilOffensiveRatio)
+                          ? 2
+                          : 1;
+        } else if (assess.neighbour_ratio >= kDipWarRatioGate) {
+            posture = 2;
+        }
         set_posture(g, c.id, posture);
     }
 
-    // ---- (a) faction intent -------------------------------------------------
-    // The engine has no command that joins a faction, so this stays a recorded
-    // plan: the AI evaluates the move and the debugger explains it, but the
-    // country's faction membership is not something the AI may write.
+    // ---- (a) faction membership --------------------------------------------
+    // A country looks for protectors when it is losing more than it is winning:
+    // threat combines enemy pressure on the capital, lost territory and being
+    // outmatched in an active war.
     if (c.faction == 0) {
+        const double war_pressure = at_war_state(c) ? clamp01(1.0 - assess.force_ratio) : 0.0;
+        const double threat =
+            clamp01(assess.capital_threat * 0.5 + assess.occupied_share * 2.0 + war_pressure);
+
         double best_score = -1.0;
+        CountryId best_leader;
         AiReason best;
         for (const Faction& f : w.factions) {
             const Country* leader = w.country(f.leader);
             if (!leader || !leader->alive || f.leader == c.id) continue;
             if (leader->ideology != c.ideology) continue;
+            if (hostile_pair(w, c.id, f.leader)) continue;  // an enemy cannot be a patron
             if (f.members.empty()) continue;
-            const double threat = clamp01(assess.capital_threat * 0.5 + assess.occupied_share * 2.0);
+
             const double threat_factor = kDipFactionThreat * threat;
             const double weakness = kDipFactionWeakness * clamp01(1.0 - assess.force_ratio);
             double patron_strength = 0.0;
@@ -1421,24 +1748,42 @@ void ai_diplomacy_layer(Game& g, Country& c) {
             const double score = kDipFactionIdeology + threat_factor + weakness + patron;
             if (score > best_score) {
                 best_score = score;
+                best_leader = f.leader;
                 best.what = "join_faction_of_" + leader->tag;
                 best.score = score;
                 best.factors = {{"ideology_match", kDipFactionIdeology},
                                 {"threat", threat_factor},
+                                {"war_pressure", war_pressure},
                                 {"own_weakness", weakness},
                                 {"patron_strength", patron},
                                 {"force_ratio", assess.force_ratio},
                                 {"capital_threat", assess.capital_threat}};
             }
         }
-        if (best_score >= kDipFactionThreshold) record_reason(g, AiLayer::Diplomacy, std::move(best));
+
+        if (best_leader.valid() && best_score >= kDipFactionThreshold) {
+            Command cmd = make_command(CommandType::JoinFaction, c.id);
+            cmd.target_country = best_leader;
+            const bool accepted = push_if_valid(g, std::move(cmd));
+            if (!accepted) {
+                // The intent was worth acting on but the command system says no
+                // (leader at war with us, no faction to join): keep the reason so the
+                // debugger shows the plan that did not happen.
+                best.what += "_deferred";
+            }
+            best.factors.emplace_back("accepted", accepted ? 1.0 : 0.0);
+            record_reason(g, AiLayer::Diplomacy, std::move(best));
+        }
     }
 
     // ---- (b) war declarations ----------------------------------------------
-    if (posture == 2 && assess.force_ratio >= kDipWarRatioGate) {
-        bool recently_declared = false;
+    // Only an offensive posture declares war, and only against a target the country
+    // can actually beat: the ratio is measured against that target and its faction,
+    // never against the world, so a strong army is not enough on its own.
+    if (posture == 2) {
+        bool recently_declared = declared_recently(g, c.id, now);
         w.wars.for_each([&](WarId, const War& war) {
-            if (war.aggressor != c.id || !war.active) return;
+            if (recently_declared || war.aggressor != c.id || !war.active) return;
             if (now < war.start_tick + kWarDeclarationCooldown) recently_declared = true;
         });
 
@@ -1446,50 +1791,45 @@ void ai_diplomacy_layer(Game& g, Country& c) {
             CountryId best_target;
             double best_score = -1.0;
             AiReason best;
-            w.countries.for_each([&](CountryId oid, const Country& other) {
-                if (oid == c.id || !other.alive) return;
-                if (other.faction != 0 && other.faction == c.faction) return;
-                if (hostile_pair(w, c.id, oid)) return;
-                if (other.ideology == c.ideology) return;
-                // Only neighbours are reachable: a war the army cannot walk to is
-                // a war the country should not start.
-                bool adjacent_territory = false;
-                w.provinces.for_each([&](ProvinceId, const Province& p) {
-                    if (adjacent_territory || p.is_sea || p.controller != c.id) return;
-                    for (ProvinceId a : p.adj) {
-                        if (w.province_controller(a) == oid) {
-                            adjacent_territory = true;
-                            return;
-                        }
-                    }
-                });
-                if (!adjacent_territory) return;
+            for (CountryId oid : assess.neighbours) {
+                const Country* other = w.country(oid);
+                if (!other || !other->alive || oid == c.id) continue;
+                if (other->faction != 0 && other->faction == c.faction) continue;
+                if (hostile_pair(w, c.id, oid)) continue;
+                if (other->ideology == c.ideology) continue;
+                // Reachability is already established: `neighbours` holds exactly the
+                // countries that border us, so a war we start can always be walked to.
 
-                double target_strength = 0.0;
-                for (DivisionId did : other.divisions) {
-                    const Division* d = w.division(did);
-                    if (d) target_strength += clamp01(d->strength);
-                }
-                const double force_factor = kDipWarForce * clamp01(assess.force_ratio - 1.0);
+                const double side = side_strength(w, oid, c.faction);
+                const double target_ratio = safe_div(assess.own_strength, side + 0.5);
+                if (target_ratio < kDipWarRatioGate) continue;
+
+                const double force_factor = kDipWarForce * clamp01(target_ratio - 1.0);
                 const double weakness_factor =
-                    kDipWarWeakness * (1.0 - clamp01(safe_div(target_strength, assess.own_strength + 0.5)));
-                const double score = force_factor + weakness_factor + kDipWarPosture;
+                    kDipWarWeakness * (1.0 - clamp01(safe_div(side, assess.own_strength + 0.5)));
+                const double threat_factor = kDipWarOwnThreat * assess.own_threat;
+                const double score =
+                    force_factor + weakness_factor + kDipWarPosture - threat_factor;
                 if (score > best_score) {
                     best_score = score;
                     best_target = oid;
-                    best.what = "declare_war_on_" + other.tag;
+                    best.what = "declare_war_on_" + other->tag;
                     best.score = score;
-                    best.factors = {{"force_ratio", assess.force_ratio},
+                    best.factors = {{"target_ratio", target_ratio},
+                                    {"target_side_strength", side},
+                                    {"claim_state", border_claim_state(w, c.id, oid).valid() ? 1.0 : 0.0},
                                     {"force", force_factor},
                                     {"target_weakness", weakness_factor},
                                     {"posture_offensive", kDipWarPosture},
-                                    {"target_strength", target_strength}};
+                                    {"own_threat", -threat_factor},
+                                    {"own_strength", assess.own_strength}};
                 }
-            });
+            }
 
             if (best_target.valid() && best_score >= kDipWarThreshold) {
                 Command cmd = make_command(CommandType::DeclareWar, c.id);
                 cmd.target_country = best_target;
+                cmd.state = border_claim_state(w, c.id, best_target);
                 if (push_if_valid(g, std::move(cmd))) {
                     record_reason(g, AiLayer::Diplomacy, std::move(best));
                 }
@@ -1527,7 +1867,9 @@ void ai_diplomacy_layer(Game& g, Country& c) {
         const double foe_taken_share = clamp01(safe_div(foe_taken, foe_home));
         const double best_share = std::max(own_lost_share, foe_taken_share);
         const double score = kDipPeaceOccupation * best_share;
-        if (score < kDipPeaceThreshold) continue;
+        // Only ask when the war is already decided in this country's favour or
+        // against it, which is exactly when the diplomacy phase would settle it.
+        if (!war_decided_for(w, *war, c.id)) continue;
 
         const bool winning = foe_taken_share >= own_lost_share;
         Command cmd = make_command(CommandType::OfferPeace, c.id);

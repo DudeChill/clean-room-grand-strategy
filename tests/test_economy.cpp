@@ -2,6 +2,7 @@
 // research. Every world here is hand-built so the expected numbers are arithmetic
 // rather than fixtures from data files.
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@ using namespace hoi;
 // created in a fixed order so every world created by the same recipe is identical.
 struct Fixture {
     Game g;
+    RegionId region_;
 
     // ------------------------------------------------------------- content ----
     EquipmentId equipment(const char* key, const char* archetype, double cost, double steel,
@@ -84,6 +86,13 @@ struct Fixture {
         g.content.buildings.push_back(b);
     }
 
+    // Tests derive their expectations from this value, so they also set it to a
+    // value that is deliberately NOT the shipped default: that way a phase that
+    // hardcodes the cap instead of reading the constant fails the test.
+    void set_max_factories_per_project(double value) {
+        g.content.constants.max_factories_per_project = value;
+    }
+
     // -------------------------------------------------------------- world ----
     CountryId add_country(const char* tag) {
         const CountryId id = g.world.countries.create();
@@ -93,6 +102,18 @@ struct Fixture {
         c->name = tag;
         c->alive = true;
         return id;
+    }
+
+    // Land provinces must reference a state and a region for the world auditor, so
+    // the fixture keeps one region per world and attaches every province to it.
+    RegionId region() {
+        if (!region_.valid()) {
+            region_ = g.world.regions.create();
+            Region& r = g.world.regions[region_];
+            r.id = region_;
+            r.name = "region";
+        }
+        return region_;
     }
 
     StateId add_state(CountryId owner, int building_slots) {
@@ -113,12 +134,14 @@ struct Fixture {
         p->id = id;
         p->name = "province";
         p->state = state;
+        p->region = region();
         p->owner = owner;
         p->controller = controller;
         p->infrastructure = infrastructure;
         p->resource_yield[static_cast<int>(Resource::Steel)] = steel;
         p->resource_yield[static_cast<int>(Resource::Oil)] = oil;
         if (State* s = g.world.state(state)) s->provinces.push_back(id);
+        g.world.regions[region()].provinces.push_back(id);
         return id;
     }
 
@@ -127,7 +150,32 @@ struct Fixture {
     Province* province(ProvinceId id) { return g.world.province(id); }
 
     // --------------------------------------------------------- production ----
-    size_t add_line(CountryId id, EquipmentId eq, int factories, double efficiency, double cap) {
+    State* first_controlled_state(CountryId id) {
+        State* found = nullptr;
+        g.world.states.for_each([&](StateId, State& s) {
+            if (!found && s.controller == id) found = &s;
+        });
+        return found;
+    }
+
+    // A production line is staffed from factories the country controls, so the helper
+    // tops up the country's military factories to cover the assignment (the world
+    // auditor requires the assignment to stay within them). Tests that deliberately
+    // build an inconsistent world pass `staff = false`.
+    size_t add_line(CountryId id, EquipmentId eq, int factories, double efficiency, double cap,
+                    bool staff = true) {
+        if (staff && factories > 0) {
+            int mil = 0;
+            int assigned = 0;
+            count_factories(g.world, id, nullptr, &mil, nullptr);
+            for (const ProductionLine& existing : g.world.country(id)->lines) {
+                assigned += existing.factories;
+            }
+            const int missing = assigned + factories - mil;
+            if (missing > 0) {
+                if (State* pool = first_controlled_state(id)) pool->military_factories += missing;
+            }
+        }
         Country* c = g.world.country(id);
         ProductionLine line;
         line.equipment = eq;
@@ -362,6 +410,97 @@ HOI_TEST(equipment_switch_applies_efficiency_retention) {
     CHECK_NEAR(g.line(gc, gindex).efficiency_cap, 0.50 + 0.001667 / 24.0, 1e-12);
 }
 
+// A country that lost the states holding its military factories must not keep
+// producing from factories it does not have: the excess assignment is released
+// from the end of the line list, and the world is consistent afterwards.
+HOI_TEST(production_lines_release_factories_the_country_no_longer_controls) {
+    Fixture f;
+    const CountryId c = f.add_country("AAA");
+    const EquipmentId rifle = f.equipment("rifle", "infantry_rifle", 4.0, 1.0);
+    const StateId st = f.add_state(c, 10);
+    f.state(st)->military_factories = 1;  // one factory is all that is still controlled
+    f.add_province(st, c, c, 0, 1000.0, 0.0);
+    const size_t first = f.add_line(c, rifle, 1, 1.0, 1.0, false);
+    const size_t second = f.add_line(c, rifle, 3, 1.0, 1.0, false);
+
+    // The world starts inconsistent: four factories assigned, one controlled.
+    CHECK(check_invariants(f.g).empty() == false);
+
+    f.advance_industry(1);
+    CHECK_EQ(f.line(c, first).factories, 1);   // the earliest line keeps its assignment
+    CHECK_EQ(f.line(c, second).factories, 0);  // the last line is released first
+    CHECK(f.line(c, second).equipment.valid() == false);
+    CHECK_EQ(f.line(c, second).previous.size(), size_t{1});
+    CHECK_EQ(f.line(c, second).previous.front(), rifle);
+    // Retirement is not an equipment switch: efficiency is untouched.
+    CHECK_NEAR(f.line(c, second).efficiency, 1.0, 1e-12);
+    CHECK(check_invariants(f.g).empty());
+
+    int mil = 0;
+    int assigned = 0;
+    count_factories(f.g.world, c, nullptr, &mil, nullptr);
+    for (const ProductionLine& line : f.country(c)->lines) assigned += line.factories;
+    CHECK_EQ(assigned, mil);
+    CHECK_EQ(assigned, 1);
+    CHECK_EQ(f.g.events.size(), size_t{1});
+    CHECK_EQ(f.g.events.front().kind, std::string("production"));
+    CHECK(f.g.events.front().text.find("AAA") != std::string::npos);
+
+    // Nothing re-releases on later ticks, and the retired line stays retired.
+    f.advance_industry(48);
+    CHECK_EQ(f.line(c, first).factories, 1);
+    CHECK_EQ(f.line(c, second).factories, 0);
+    CHECK_EQ(f.g.events.size(), size_t{1});
+    CHECK(check_invariants(f.g).empty());
+
+    // A country whose whole industry is gone releases every assignment.
+    Fixture wiped;
+    const CountryId wc = wiped.add_country("BBB");
+    const EquipmentId wrifle = wiped.equipment("rifle", "infantry_rifle", 4.0, 1.0);
+    const StateId wst = wiped.add_state(wc, 10);
+    wiped.state(wst)->military_factories = 1;
+    wiped.add_province(wst, wc, wc, 0, 1000.0, 0.0);
+    wiped.add_line(wc, wrifle, 1, 1.0, 1.0, false);
+    wiped.add_line(wc, wrifle, 2, 1.0, 1.0, false);
+    wiped.state(wst)->military_factories = 0;  // conquered before the tick runs
+    wiped.advance_industry(1);
+    CHECK_EQ(wiped.line(wc, 0).factories, 0);
+    CHECK_EQ(wiped.line(wc, 1).factories, 0);
+    CHECK(wiped.line(wc, 0).equipment.valid() == false);
+    CHECK(wiped.line(wc, 1).equipment.valid() == false);
+    CHECK(check_invariants(wiped.g).empty());
+    // A trickle of losses that never retires a line is not reported at all: the log
+    // must not gain one line per lost factory per hour during a long retreat.
+    Fixture trickle;
+    const CountryId tc = trickle.add_country("CCC");
+    const EquipmentId trickle_rifle = trickle.equipment("rifle", "infantry_rifle", 4.0, 1.0);
+    const StateId trickle_state = trickle.add_state(tc, 10);
+    trickle.add_province(trickle_state, tc, tc, 0, 1000.0, 0.0);
+    trickle.add_line(tc, trickle_rifle, 2, 1.0, 1.0, false);
+    trickle.add_line(tc, trickle_rifle, 3, 1.0, 1.0, false);
+    trickle.state(trickle_state)->military_factories = 4;  // one assignment over
+    trickle.advance_industry(1);
+    CHECK_EQ(trickle.line(tc, 0).factories, 2);
+    CHECK_EQ(trickle.line(tc, 1).factories, 2);  // trimmed, not retired
+    CHECK(trickle.g.events.empty());
+    CHECK(check_invariants(trickle.g).empty());
+
+    trickle.state(trickle_state)->military_factories = 3;
+    trickle.advance_industry(1);
+    CHECK_EQ(trickle.line(tc, 1).factories, 1);
+    CHECK(trickle.g.events.empty());
+
+    // Only the release that retires the line is reported, once for the whole trickle.
+    trickle.state(trickle_state)->military_factories = 2;
+    trickle.advance_industry(1);
+    CHECK_EQ(trickle.line(tc, 0).factories, 2);
+    CHECK_EQ(trickle.line(tc, 1).factories, 0);
+    CHECK_EQ(trickle.g.events.size(), size_t{1});
+    CHECK_EQ(trickle.g.events.front().kind, std::string("production"));
+    CHECK_NEAR(trickle.line(tc, 1).efficiency, 1.0, 1e-12);
+    CHECK(check_invariants(trickle.g).empty());
+}
+
 // A switch driven through the command path must reach industry's retention rule
 // exactly once (the pending-switch queue in `ProductionLine::previous`).
 HOI_TEST(production_line_switch_through_command_applies_retention_once) {
@@ -405,6 +544,7 @@ HOI_TEST(production_line_switch_through_command_applies_retention_once) {
 
 HOI_TEST(construction_completes_factory_project_and_raises_state_factories) {
     Fixture f;
+    f.set_max_factories_per_project(7.0);
     const CountryId c = f.add_country("AAA");
     const StateId industry_state = f.add_state(c, 100);
     const StateId target_state = f.add_state(c, 5);
@@ -425,18 +565,25 @@ HOI_TEST(construction_completes_factory_project_and_raises_state_factories) {
     project.target_level = 1;
     f.country(c)->construction.queue.push_back(project);
 
+    // A project holds at most `max_factories_per_project` factories, so 50 civilian
+    // factories build at the capped rate; the cap is read from the content the test
+    // builds, never hardcoded, so tuning it cannot stale this test.
+    const SimConstants& k = f.g.content.constants;
+    const double cap = k.max_factories_per_project;
+    const double per_project_rate = cap * k.ic_per_civilian_factory / 24.0;
     f.advance_industry(10);
     CHECK_EQ(f.state(target_state)->civilian_factories, 0);
-    CHECK_NEAR(f.country(c)->construction.queue.front().progress, 10.0 * 10.416666666666666, 1e-9);
+    CHECK_NEAR(f.country(c)->construction.queue.front().progress, 10.0 * per_project_rate, 1e-9);
 
+    // A level-0 factory costs the plain base cost (linear scaling adds nothing at
+    // level 0), so it should take base_cost / rate hours.
+    const double expected_hours = k.construction_cost_factory / per_project_rate;
     int hours = 10;
-    while (!f.country(c)->construction.queue.empty() && hours < 4000) {
+    while (!f.country(c)->construction.queue.empty() && hours < 40000) {
         f.advance_industry(1);
         ++hours;
     }
-    // base_cost / (factories * ic_per_civilian / 24) days, i.e. 10800 / 10.4166...
-    CHECK_GT(hours, 1020);
-    CHECK_LT(hours, 1050);
+    CHECK_NEAR(static_cast<double>(hours), expected_hours, 1.0);
     CHECK_EQ(f.state(target_state)->civilian_factories, 1);
     CHECK_EQ(f.state(industry_state)->civilian_factories, 50);
     CHECK(f.country(c)->construction.queue.empty());
@@ -455,6 +602,196 @@ HOI_TEST(construction_completes_factory_project_and_raises_state_factories) {
     blocked.advance_industry(48);
     CHECK_EQ(blocked.country(bc)->construction.queue.size(), size_t{1});
     CHECK_EQ(blocked.state(full)->civilian_factories, 1);
+}
+
+HOI_TEST(construction_capacity_splits_across_the_queue) {
+    Fixture f;
+    f.set_max_factories_per_project(7.0);
+    const CountryId c = f.add_country("AAA");
+    const StateId pool_state = f.add_state(c, 50);
+    const StateId site_a = f.add_state(c, 5);
+    const StateId site_b = f.add_state(c, 5);
+    const SimConstants& k = f.g.content.constants;
+    // Everything below is derived from the content the test builds, so re-tuning the
+    // cap or the factory output cannot stale this test.
+    const double cap = k.max_factories_per_project;
+    const double rate_per_factory = k.ic_per_civilian_factory / 24.0;
+    const double pool = cap + 3.0;
+    const double second_share = std::min(3.0, cap);  // what is left of the pool for #2
+    f.state(pool_state)->civilian_factories = static_cast<int>(pool);
+    f.country(c)->consumer_goods_ratio = 0.0;
+
+    // Stamped costs so the projects complete inside the test's short window; the
+    // production rules under test (who gets how many factories) are unaffected.
+    const double stamped_cost = 10.0;
+    ConstructionProject first;
+    first.kind = BuildingKind::CivilianFactory;
+    first.state = site_a;
+    first.target_level = 1;
+    first.cost = stamped_cost;
+    ConstructionProject second;
+    second.kind = BuildingKind::CivilianFactory;
+    second.state = site_b;
+    second.target_level = 1;
+    second.cost = stamped_cost;
+    f.country(c)->construction.queue.push_back(first);
+    f.country(c)->construction.queue.push_back(second);
+
+    f.advance_industry(1);
+    CHECK_EQ(f.country(c)->construction.queue.size(), size_t{2});
+    // The pool splits as cap + 3 in queue order, and both projects progress in the
+    // same tick.
+    CHECK_NEAR(f.country(c)->construction.queue[0].progress, cap * rate_per_factory, 1e-12);
+    CHECK_NEAR(f.country(c)->construction.queue[1].progress, second_share * rate_per_factory, 1e-12);
+
+    // Hours until the head project is paid for at its capped rate.
+    const int head_hours = static_cast<int>(std::ceil(stamped_cost / (cap * rate_per_factory) - 1e-9));
+    f.advance_industry(head_hours - 2);
+    CHECK_EQ(f.country(c)->construction.queue.size(), size_t{2});
+    CHECK_NEAR(f.country(c)->construction.queue[0].progress, (head_hours - 1) * cap * rate_per_factory,
+               1e-9);
+    CHECK_NEAR(f.country(c)->construction.queue[1].progress,
+               (head_hours - 1) * second_share * rate_per_factory, 1e-9);
+
+    f.advance_industry(1);
+    CHECK_EQ(f.state(site_a)->civilian_factories, 1);
+    CHECK_EQ(f.country(c)->construction.queue.size(), size_t{1});
+    const double carried = f.country(c)->construction.queue[0].progress;
+    CHECK_NEAR(carried, head_hours * second_share * rate_per_factory, 1e-9);
+
+    f.advance_industry(1);
+    // The factories the finished project held return to the pool, lifting the
+    // remaining project to the full cap instead of stalling it.
+    CHECK_NEAR(f.country(c)->construction.queue[0].progress - carried, cap * rate_per_factory, 1e-9);
+    int extra = 0;
+    while (!f.country(c)->construction.queue.empty() && extra < 1000) {
+        f.advance_industry(1);
+        ++extra;
+    }
+    CHECK_EQ(f.state(site_b)->civilian_factories, 1);
+    CHECK(extra <= head_hours);
+
+    // Capacity the queue cannot absorb is idle: one project with pool > cap
+    // factories available still builds at the capped rate.
+    Fixture idle;
+    idle.set_max_factories_per_project(7.0);
+    const CountryId ic = idle.add_country("AAA");
+    const StateId idle_pool = idle.add_state(ic, 50);
+    const StateId idle_site = idle.add_state(ic, 5);
+    idle.state(idle_pool)->civilian_factories = static_cast<int>(pool);
+    idle.country(ic)->consumer_goods_ratio = 0.0;
+    ConstructionProject single;
+    single.kind = BuildingKind::CivilianFactory;
+    single.state = idle_site;
+    single.target_level = 1;
+    idle.country(ic)->construction.queue.push_back(single);
+    idle.advance_industry(1);
+    CHECK_NEAR(idle.country(ic)->construction.queue.front().progress, cap * rate_per_factory, 1e-12);
+}
+
+HOI_TEST(synthetic_refinery_completion_adds_oil_and_rubber) {
+    Fixture f;
+    f.set_max_factories_per_project(7.0);
+    const CountryId c = f.add_country("AAA");
+    const StateId industry_state = f.add_state(c, 100);
+    const StateId refinery_state = f.add_state(c, 4);
+    f.state(industry_state)->civilian_factories = 100;
+    f.country(c)->consumer_goods_ratio = 0.0;
+    // A province with no oil or rubber of its own: everything must come from the
+    // refinery.
+    f.add_province(refinery_state, c, c, 0, 0.0, 0.0);
+
+    double produced[RESOURCE_COUNT];
+    compute_resource_production(f.g.world, f.g.content, c, produced);
+    CHECK_NEAR(produced[OIL], 0.0, 1e-12);
+    CHECK_NEAR(produced[static_cast<int>(Resource::Rubber)], 0.0, 1e-12);
+
+    ConstructionProject project;
+    project.kind = BuildingKind::SyntheticRefinery;
+    project.state = refinery_state;
+    project.target_level = 1;
+    f.country(c)->construction.queue.push_back(project);
+
+    int hours = 0;
+    while (!f.country(c)->construction.queue.empty() && hours < 40000) {
+        f.advance_industry(1);
+        ++hours;
+    }
+    CHECK(f.country(c)->construction.queue.empty());
+    // A level-0 refinery costs the plain synthetic base cost and runs at the
+    // content's per-project factory cap; the expected hours follow from the content
+    // constants rather than from a literal.
+    const SimConstants& rk = f.g.content.constants;
+    const double expected_hours =
+        rk.construction_cost_synthetic / (rk.max_factories_per_project * rk.ic_per_civilian_factory /
+                                          24.0);
+    CHECK_NEAR(static_cast<double>(hours), expected_hours, 1.0);
+    CHECK_EQ(f.state(refinery_state)->synthetic_refineries, 1);
+
+    compute_resource_production(f.g.world, f.g.content, c, produced);
+    CHECK_NEAR(produced[OIL], 2.0, 1e-12);
+    CHECK_NEAR(produced[static_cast<int>(Resource::Rubber)], 1.0, 1e-12);
+    // The country's published totals are computed at the start of each hour, so the
+    // refinery completed during the previous hour shows up one tick later.
+    f.advance_industry(1);
+    CHECK_NEAR(f.country(c)->resources_produced[OIL], 2.0, 1e-12);
+
+    // A second refinery stacks, and a project that arrives without a cost gets the
+    // command layer's formula: base * (1 + (1.25 - 1) * existing_level). At level 1
+    // that is 8000 * 1.25 = 10000, and at level 2 it is 12000 (exponential scaling
+    // would give 12500, so the level-2 case pins the linear rule).
+    ConstructionProject second;
+    second.kind = BuildingKind::SyntheticRefinery;
+    second.state = refinery_state;
+    second.target_level = 2;
+    f.country(c)->construction.queue.push_back(second);
+    f.advance_industry(1);
+    CHECK_NEAR(f.country(c)->construction.queue.front().cost, 8000.0 * 1.25, 1e-9);
+    hours = 0;
+    while (!f.country(c)->construction.queue.empty() && hours < 40000) {
+        f.advance_industry(1);
+        ++hours;
+    }
+    CHECK_EQ(f.state(refinery_state)->synthetic_refineries, 2);
+
+    ConstructionProject third;
+    third.kind = BuildingKind::SyntheticRefinery;
+    third.state = refinery_state;
+    third.target_level = 3;
+    f.country(c)->construction.queue.push_back(third);
+    f.advance_industry(1);
+    CHECK_NEAR(f.country(c)->construction.queue.front().cost, 8000.0 * 1.5, 1e-9);
+    hours = 0;
+    while (!f.country(c)->construction.queue.empty() && hours < 40000) {
+        f.advance_industry(1);
+        ++hours;
+    }
+    CHECK_EQ(f.state(refinery_state)->synthetic_refineries, 3);
+    compute_resource_production(f.g.world, f.g.content, c, produced);
+    CHECK_NEAR(produced[OIL], 6.0, 1e-12);
+}
+
+HOI_TEST(anti_air_projects_are_pruned_safely) {
+    Fixture f;
+    const CountryId c = f.add_country("AAA");
+    const StateId st = f.add_state(c, 10);
+    const ProvinceId p = f.add_province(st, c, c, 3, 0.0, 0.0);
+    f.state(st)->civilian_factories = 10;
+    f.country(c)->consumer_goods_ratio = 0.0;
+
+    ConstructionProject project;
+    project.kind = BuildingKind::AntiAir;
+    project.province = p;
+    project.state = st;
+    project.target_level = 1;
+    f.country(c)->construction.queue.push_back(project);
+    f.advance_industry(48);
+
+    // Air warfare does not exist yet (AIR-002): the project is dropped instead of
+    // holding a queue slot and consuming capacity forever.
+    CHECK(f.country(c)->construction.queue.empty());
+    CHECK_EQ(f.province(p)->fort_level, 0);
+    CHECK_EQ(f.province(p)->infrastructure, 3);
 }
 
 // ------------------------------------------------------------------ 5.3 -----

@@ -28,6 +28,7 @@
 #include "sim/map.h"
 #include "sim/politics.h"
 #include "sim/research.h"
+#include "sim/supply.h"
 #include "sim/units.h"
 #include "sim/world.h"
 
@@ -70,6 +71,26 @@ std::string read_file(const std::string& path, bool* ok) {
     ss << in.rdbuf();
     *ok = true;
     return ss.str();
+}
+
+// Extracts a query parameter from a request target such as "/api/supply?province=42".
+std::string query_param(const std::string& target, const std::string& key) {
+    const size_t q = target.find('?');
+    if (q == std::string::npos) return {};
+    size_t pos = q + 1;
+    while (pos < target.size()) {
+        const size_t eq = target.find('=', pos);
+        if (eq == std::string::npos) break;
+        const size_t amp = target.find('&', eq);
+        const std::string name = target.substr(pos, eq - pos);
+        if (name == key) {
+            return amp == std::string::npos ? target.substr(eq + 1)
+                                            : target.substr(eq + 1, amp - eq - 1);
+        }
+        if (amp == std::string::npos) break;
+        pos = amp + 1;
+    }
+    return {};
 }
 
 std::string content_type_for(const std::string& path) {
@@ -348,7 +369,31 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         j.set("war_support", Json(c.war_support));
         j.set("fuel", Json(c.fuel));
         j.set("at_war", Json(c.at_war));
-        j.set("capital", Json(static_cast<int>(c.capital.valid() ? c.capital.v : 0)));
+        int controlled_states = 0;
+        w.states.for_each([&](StateId, const State& s) {
+            if (s.controller == cid) ++controlled_states;
+        });
+        j.set("states", Json(controlled_states));
+        j.set("capital_state", Json(static_cast<int>(c.capital.valid() ? c.capital.v : 0)));
+        // The client needs a province to centre the map on, so resolve the capital
+        // state to the province flagged as the capital (or its highest-VP province).
+        ProvinceId capital_province;
+        int best_vp = -1;
+        if (const State* cap = w.state(c.capital)) {
+            for (ProvinceId pid : cap->provinces) {
+                const Province* p = w.province(pid);
+                if (!p || p->is_sea) continue;
+                if (p->is_capital) {
+                    capital_province = pid;
+                    break;
+                }
+                if (p->victory_points > best_vp) {
+                    best_vp = p->victory_points;
+                    capital_province = pid;
+                }
+            }
+        }
+        j.set("capital", Json(static_cast<int>(capital_province.valid() ? capital_province.v : 0)));
         countries.push_back(j);
     });
     root.set("countries", countries);
@@ -401,6 +446,24 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         wars.push_back(j);
     });
     root.set("wars", wars);
+
+    Json factions = Json::array();
+    for (const Faction& f : w.factions) {
+        Json j = Json::object();
+        j.set("id", Json(f.id));
+        j.set("name", Json(f.name));
+        const Country* leader = w.country(f.leader);
+        j.set("leader", Json(leader ? leader->tag : std::string("?")));
+        j.set("leader_id", Json(static_cast<uint32_t>(f.leader.valid() ? f.leader.v : 0)));
+        Json members = Json::array();
+        for (CountryId m : f.members) {
+            const Country* mc = w.country(m);
+            if (mc) members.push_back(Json(mc->tag));
+        }
+        j.set("members", members);
+        factions.push_back(j);
+    }
+    root.set("factions", factions);
 
     Json events = Json::array();
     const size_t event_start = g.events.size() > 200 ? g.events.size() - 200 : 0;
@@ -582,6 +645,21 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         }
         player.set("templates", templates);
 
+        Json player_states = Json::array();
+        w.states.for_each([&](StateId sid, const State& s) {
+            if (s.controller != viewer) return;
+            Json j = Json::object();
+            j.set("id", Json(static_cast<uint32_t>(sid.v)));
+            j.set("name", Json(s.name));
+            j.set("civ", Json(s.civilian_factories));
+            j.set("mil", Json(s.military_factories));
+            j.set("dock", Json(s.dockyards));
+            j.set("slots", Json(s.building_slots));
+            j.set("provinces", Json(static_cast<uint32_t>(s.provinces.size())));
+            player_states.push_back(j);
+        });
+        player.set("states", player_states);
+
         Json laws = Json::array();
         for (const auto& law : g.content.laws) {
             Json j = Json::object();
@@ -678,8 +756,8 @@ int run_server(Game& g, const ServerOptions& opts, volatile bool* stop) {
     std::printf("serving on http://127.0.0.1:%u  (web root: %s)\n",
                 static_cast<unsigned>(opts.port), opts.web_root.c_str());
 
-    bool paused = false;
-    int speed = 2;  // 0 = paused, 1..5
+    bool paused = true;  // the client unpauses; nothing runs before it connects
+    int speed = 2;       // 0 = paused, 1..5
     const uint64_t ticks_per_second[] = {0, 1, 2, 4, 8, 24};
 
     auto now = [] { return Clock::now(); };
@@ -765,11 +843,145 @@ int run_server(Game& g, const ServerOptions& opts, volatile bool* stop) {
             speed = clamp(speed, 0, 5);
             res.body = std::string("{\"ok\":true,\"paused\":") + (paused ? "true" : "false") +
                        ",\"speed\":" + std::to_string(speed) + "}";
+        } else if (path == "/api/battle") {
+            const std::string id_text = query_param(req.path, "id");
+            const Battle* b = g.world.battle(BattleId(static_cast<uint32_t>(std::strtoul(id_text.c_str(), nullptr, 10))));
+            if (!b) {
+                res.status = 404;
+                res.body = "{\"error\":\"no such battle\"}";
+            } else {
+                Json j = Json::object();
+                j.set("id", Json(static_cast<uint32_t>(b->id.v)));
+                j.set("province", Json(static_cast<uint32_t>(b->province.v)));
+                const Province* p = g.world.province(b->province);
+                j.set("province_name", Json(p ? p->name : std::string("")));
+                j.set("terrain", Json(std::string(terrain_name(b->terrain))));
+                j.set("river_crossing", Json(b->river_crossing));
+                j.set("encirclement", Json(b->encirclement));
+                j.set("progress", Json(b->progress));
+                j.set("last_tick", Json(static_cast<double>(b->last_tick)));
+                auto side_json = [&](const BattleSideState& side) {
+                    Json s = Json::object();
+                    s.set("soft_attack", Json(side.total_soft_attack));
+                    s.set("hard_attack", Json(side.total_hard_attack));
+                    s.set("defense", Json(side.total_defense));
+                    s.set("breakthrough", Json(side.total_breakthrough));
+                    s.set("armor", Json(side.total_armor));
+                    s.set("piercing", Json(side.total_piercing));
+                    Json units = Json::array();
+                    for (size_t i = 0; i < side.divisions.size(); ++i) {
+                        const Division* d = g.world.division(side.divisions[i]);
+                        Json u = Json::object();
+                        u.set("id", Json(static_cast<uint32_t>(side.divisions[i].v)));
+                        u.set("name", Json(d ? d->name : std::string("")));
+                        const Country* c = d ? g.world.country(d->country) : nullptr;
+                        u.set("tag", Json(c ? c->tag : std::string("")));
+                        u.set("org", Json(d ? d->organization : 0.0));
+                        u.set("max_org", Json(d ? d->max_organization : 0.0));
+                        u.set("strength", Json(d ? d->strength : 0.0));
+                        u.set("supply", Json(d ? d->supply : 0.0));
+                        u.set("entrenchment", Json(d ? d->entrenchment : 0.0));
+                        u.set("planning", Json(d ? d->planning : 0.0));
+                        units.push_back(u);
+                    }
+                    s.set("divisions", units);
+                    return s;
+                };
+                j.set("attacker", side_json(b->attacker));
+                j.set("defender", side_json(b->defender));
+                Json debug = Json::array();
+                for (const BattleDebugLine& line : b->debug) {
+                    Json d = Json::object();
+                    d.set("division", Json(static_cast<uint32_t>(line.division.v)));
+                    d.set("base_attack", Json(line.base_attack));
+                    d.set("planning", Json(line.planning_mod));
+                    d.set("terrain", Json(line.terrain_mod));
+                    d.set("supply", Json(line.supply_mod));
+                    d.set("commander", Json(line.commander_mod));
+                    d.set("experience", Json(line.experience_mod));
+                    d.set("final_attack", Json(line.final_attack));
+                    d.set("enemy_defense", Json(line.enemy_defense));
+                    d.set("damage", Json(line.damage));
+                    d.set("org_damage", Json(line.org_damage));
+                    d.set("strength_damage", Json(line.strength_damage));
+                    debug.push_back(d);
+                }
+                j.set("debug", debug);
+                res.body = j.dump();
+            }
+        } else if (path == "/api/supply") {
+            const std::string id_text = query_param(req.path, "province");
+            const ProvinceId pid(static_cast<uint32_t>(std::strtoul(id_text.c_str(), nullptr, 10)));
+            const Province* p = g.world.province(pid);
+            if (!p) {
+                res.status = 404;
+                res.body = "{\"error\":\"no such province\"}";
+            } else {
+                const CountryId holder = p->controller.valid() ? p->controller : p->owner;
+                std::vector<SupplyRouteStep> route;
+                ProvinceId bottleneck;
+                const double delivered =
+                    holder.valid() ? explain_supply_route(g, holder, pid, &route, &bottleneck) : 0.0;
+                Json j = Json::object();
+                j.set("province", Json(static_cast<uint32_t>(pid.v)));
+                j.set("name", Json(p->name));
+                const Country* hc = g.world.country(holder);
+                j.set("country", Json(hc ? hc->tag : std::string("")));
+                j.set("supply_level", Json(p->supply_level));
+                j.set("delivered", Json(delivered));
+                const Province* bp = g.world.province(bottleneck);
+                j.set("bottleneck", Json(bp ? bp->name : std::string("")));
+                Json steps = Json::array();
+                for (const SupplyRouteStep& step : route) {
+                    Json s = Json::object();
+                    const Province* sp = g.world.province(step.province);
+                    s.set("province", Json(static_cast<uint32_t>(step.province.v)));
+                    s.set("name", Json(sp ? sp->name : std::string("")));
+                    s.set("capacity", Json(step.capacity));
+                    steps.push_back(s);
+                }
+                j.set("route", steps);
+                Json units = Json::array();
+                g.world.divisions.for_each([&](DivisionId did, const Division& d) {
+                    if (d.location != pid) return;
+                    Json u = Json::object();
+                    u.set("id", Json(static_cast<uint32_t>(did.v)));
+                    u.set("name", Json(d.name));
+                    u.set("supply", Json(d.supply));
+                    u.set("fuel", Json(d.fuel));
+                    units.push_back(u);
+                });
+                j.set("divisions", units);
+                res.body = j.dump();
+            }
         } else if (path == "/api/save" && req.method == "POST") {
             std::string err;
             const bool ok = save_game(g, opts.save_path, &err);
             res.body = std::string("{\"ok\":") + (ok ? "true" : "false") + ",\"error\":\"" +
                        (ok ? "" : err) + "\",\"path\":\"" + opts.save_path + "\"}";
+        } else if (path == "/api/load" && req.method == "POST") {
+            std::string err;
+            Json payload = Json::parse(req.body, &err);
+            std::string source = opts.save_path;
+            if (payload.is_object() && payload.has("path")) source = payload.at("path").as_string();
+            const bool ok = load_game(g, source, &err);
+            if (ok) {
+                // The loaded world may hand different countries to the AI, so the
+                // server re-derives nothing: the save carries ai_controlled and the
+                // player country.
+                map_cache.clear();
+                next_tick = now();
+                paused = true;
+                last_autosave_day = g.world.tick / 24;
+                HOI_INFO("loaded %s at tick %llu", source.c_str(),
+                         static_cast<unsigned long long>(g.world.tick));
+            } else {
+                HOI_WARN("load failed: %s", err.c_str());
+            }
+            res.body = std::string("{\"ok\":") + (ok ? "true" : "false") + ",\"error\":\"" +
+                       (ok ? "" : err) + "\",\"tick\":" +
+                       std::to_string(static_cast<unsigned long long>(g.world.tick)) + "}";
+            if (!ok) res.status = 400;
         } else if (path == "/api/meta") {
             Json j = Json::object();
             j.set("paused", Json(paused));

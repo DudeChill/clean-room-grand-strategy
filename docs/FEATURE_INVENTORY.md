@@ -56,12 +56,15 @@ implemented.
 
 * [x] Civilian, military and dockyard factory counts per state
 * [x] Construction queue with industrial allocation, level scaling and completion
+* [x] Capacity spread across projects (up to a per-project factory cap, like the
+      reference game) instead of all capacity on the head project
 * [x] Building slots limiting state-wide construction
 * [x] Production lines with assignment validated against controlled factories
 * [x] Production efficiency with growth, cap growth and equipment-switch retention
 * [x] Resource demand per line with deterministic allocation order and shortage
       factors
 * [x] Consumer goods share reducing available industry
+* [x] Synthetic refineries producing oil and rubber from no imports
 * [x] Repair of damaged buildings (queue flag exists; bombing does not yet damage)
 * [ ] Trade (resource imports/exports), convoys and blockade effects
 * [ ] Equipment designers (tank/aircraft/ship variants with components)
@@ -154,7 +157,7 @@ implemented.
 ## 11. Diplomacy and war
 
 * [x] Relations with drift
-* [x] Factions with leaders and members
+* [x] Factions with leaders, membership, joining/leaving and leader succession
 * [x] Guarantees and military access (flags that propagate on war declaration)
 * [x] War declaration with coalitions (puppets, overlords, faction members,
       guarantors)
@@ -227,9 +230,12 @@ implemented.
       ready divisions, resource shortages
 * [x] Tooltips with province ownership, control, supply and garrison information
 * [x] Time controls (pause, speeds 1-5) and in-game save
-* [ ] Battle detail window consuming the combat debugger
-* [ ] Supply route visualisation
-* [ ] Hotkeys, selection groups, multi-select, order queues
+* [x] Battle detail window consuming the combat debugger
+* [x] Supply route visualisation for the selected province (route, capacity per step,
+      bottleneck, per-division supply/fuel)
+* [x] Hotkeys (space, 1-5, tab letters, arrow-key panning, escape to clear selection)
+* [~] Division selection: click to select, shift-click to assign to the first army
+* [ ] Selection groups, multi-select and order queues
 * [ ] Accessibility: UI scale, colour-blind palettes, remappable controls
 
 ## 19. Tooling and diagnostics
@@ -239,7 +245,9 @@ implemented.
 * [x] `--hashes` subsystem hash report
 * [x] Save/load round-trip stress mode (`--save-every-days`)
 * [x] AI decisions carry numeric reasons in the snapshot
-* [ ] Inspectors (`inspect_division`, `inspect_battle`, `inspect_supply`,
-      `inspect_production`) as CLI subcommands
-* [ ] Profiler captures and benchmark history
+* [x] Inspectors: `--inspect-country`, `--inspect-province`, `--inspect-supply`,
+      `--inspect-battle`
+* [x] Release gate script (`scripts/verify.sh`) and stress ladder
+      (`scripts/stress.sh` with `docs/benchmarks/history.tsv`)
+* [ ] Profiler captures and benchmark history beyond the tick-time series
 * [ ] Map/data editor tooling

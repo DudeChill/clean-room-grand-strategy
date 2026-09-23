@@ -45,6 +45,8 @@ struct SimConstants {
     double consumer_goods_base = 0.35;
     double fuel_per_oil = 1.0;
     double fuel_storage_per_factory = 200.0;
+    double synthetic_oil_per_refinery_per_day = 2.0;
+    double synthetic_rubber_per_refinery_per_day = 1.0;
 
     // Construction.
     double construction_cost_factory = 10800.0;
@@ -56,7 +58,8 @@ struct SimConstants {
     double construction_cost_fort = 2000.0;
     double construction_cost_radar = 2400.0;
     double construction_cost_synthetic = 8000.0;
-    double construction_level_scaling = 1.25;  // cost multiplier per existing level
+    double construction_level_scaling = 1.25;  // cost factor added per existing level
+    double max_factories_per_project = 15.0;  // capacity spreads across queued projects
 
     // Research.
     double research_base_days = 100.0;

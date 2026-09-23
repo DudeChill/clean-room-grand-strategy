@@ -2,9 +2,10 @@
 //
 // Progress, `TechDef::cost_days` and the slot's accumulator are all measured in
 // research-DAYS, so one tick (one hour) advances a slot by `TICKS_PER_HOUR /
-// TICKS_PER_DAY` of a day multiplied by the country's research speed. Across
-// `TICKS_PER_DAY` ticks a slot therefore advances exactly one day of work, which
-// keeps `days_needed` meaning what its name says.
+// TICKS_PER_DAY` days of work. Across `TICKS_PER_DAY` ticks a slot therefore
+// advances exactly one day, which keeps `days_needed` meaning what its name says.
+// ResearchSpeed is not part of that rate: per ARCHITECTURE 5.3 it divides
+// `days_needed`, so a speed bonus shortens the calendar time instead of squaring.
 //
 // Unlocks are derived, never stored: `equipment_unlocked` and `building_unlocked`
 // scan the country's completed list against the content database, so a completed

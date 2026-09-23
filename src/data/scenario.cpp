@@ -143,6 +143,9 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         return false;
     }
     std::string fatal;
+    // Non-fatal data problems (an unknown content key in the scenario) are reported
+    // without failing the load: the rest of the scenario is still playable.
+    std::vector<std::string> warnings;
     auto fail = [&](const std::string& msg) {
         if (fatal.empty()) fatal = msg;
         return false;
@@ -281,7 +284,14 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
                 return fail(map_path + ": province " + key + " lists itself as a neighbour");
             }
             const Province& other = world->provinces[it->second];
-            if (other.is_sea) {
+            if (prov.is_sea) {
+                // Sea zones keep the full generated neighbour list (land + sea):
+                // land systems never start from a sea zone, but naval code wants
+                // the complete coastline relationship in one place.
+                prov.adj.push_back(it->second);
+                if (other.is_sea) prov.sea_adj.push_back(it->second);
+            } else if (other.is_sea) {
+                // Land adjacency is land-only; sea neighbours are sea zones.
                 prov.sea_adj.push_back(it->second);
             } else {
                 prov.adj.push_back(it->second);
@@ -376,6 +386,10 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         country.political_power = c["political_power"].as_double(country.political_power);
         country.stability = c["stability"].as_double(country.stability);
         country.war_support = c["war_support"].as_double(country.war_support);
+        // Research slots must exist before the first tick, otherwise StartResearch
+        // has nowhere to put a technology.
+        const int unlocked = country.research.slots_unlocked > 0 ? country.research.slots_unlocked : 0;
+        country.research.slots.assign(static_cast<size_t>(unlocked), ResearchSlot{});
         const CountryId id = world->countries.create(country);
         world->countries[id].id = id;
         by_tag[tag] = id;
@@ -455,7 +469,6 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         const int civ = static_cast<int>(c["civilian_factories"].as_int(0));
         const int mil = static_cast<int>(c["military_factories"].as_int(0));
         const int dock = static_cast<int>(c["dockyards"].as_int(0));
-        country.starting_factories = civ + mil + dock;
 
         std::vector<StateId> states;
         const Json& jstates_c = c["states"];
@@ -473,19 +486,66 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
             const State* s = world->states.try_get(sid);
             return s != nullptr ? s->total_factories() : 0;
         };
-        distribute_factories(civ, states, total_of, slot_of, [&](StateId sid) {
-            world->states[sid].civilian_factories += 1;
-        });
+        // Military industry is placed first: a scenario's production lines must
+        // always have factories behind them, and a state can run out of building
+        // slots.
         distribute_factories(mil, states, total_of, slot_of, [&](StateId sid) {
             world->states[sid].military_factories += 1;
+        });
+        distribute_factories(civ, states, total_of, slot_of, [&](StateId sid) {
+            world->states[sid].civilian_factories += 1;
         });
         distribute_factories(dock, states, total_of, slot_of, [&](StateId sid) {
             world->states[sid].dockyards += 1;
         });
+
+        // Capitulation thresholds and production lines are based on what actually
+        // fits into the country's states, not on what the scenario asked for.
+        int placed_military = 0;
+        int placed_total = 0;
+        for (StateId sid : states) {
+            const State* s = world->states.try_get(sid);
+            if (s == nullptr) continue;
+            placed_military += s->military_factories;
+            placed_total += s->total_factories();
+        }
+        country.starting_factories = placed_total;
+
+        // Starting production lines. The scenario may name more factories than the
+        // country's military industry has; the clamp keeps the sum honest so the
+        // "unassigned factories" figure in the UI starts at zero for a planned
+        // scenario.
+        const Json& jlines = c["production_lines"];
+        if (jlines.is_array()) {
+            int factories_left = placed_military;
+            for (size_t k = 0; k < jlines.size(); ++k) {
+                const Json& entry = jlines[k];
+                const std::string eq_key = entry["equipment"].as_string();
+                const EquipmentId eq = content.equipment_id(eq_key);
+                if (!eq.valid()) {
+                    if (!eq_key.empty()) {
+                        warnings.push_back(scenario_path + ": country " + country.tag +
+                                           ": production_lines references unknown equipment " +
+                                           eq_key);
+                    }
+                    continue;
+                }
+                int factories = static_cast<int>(entry["factories"].as_int(0));
+                if (factories > factories_left) factories = factories_left;
+                if (factories <= 0) continue;
+                ProductionLine line;
+                line.equipment = eq;
+                line.factories = factories;
+                line.efficiency = content.constants.efficiency_start;
+                line.efficiency_cap = content.constants.efficiency_cap_base;
+                line.started = 0;
+                country.lines.push_back(line);
+                factories_left -= factories;
+            }
+        }
     }
 
     // ---- starting research, laws, stockpile -------------------------------
-    int warned_unknown_ref = 0;
     for (size_t i = 0; i < jcountries.size(); ++i) {
         const Json& c = jcountries[i];
         const CountryId cid = by_tag.at(c["tag"].as_string());
@@ -497,7 +557,8 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
                 const std::string tk = techs[k].as_string();
                 const TechId tid = content.tech_id(tk);
                 if (!tid.valid()) {
-                    ++warned_unknown_ref;
+                    warnings.push_back(scenario_path + ": country " + country.tag +
+                                       ": unknown technology " + tk);
                     continue;
                 }
                 if (!country.research.has_tech(tid)) {
@@ -516,7 +577,8 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
                 const std::string lk = laws[k].as_string();
                 const LawDef* def = content.law(lk);
                 if (def == nullptr) {
-                    ++warned_unknown_ref;
+                    warnings.push_back(scenario_path + ": country " + country.tag +
+                                       ": unknown law " + lk);
                     continue;
                 }
                 if (def->kind >= 0 && static_cast<size_t>(def->kind) < country.law_levels.size()) {
@@ -532,7 +594,8 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
             for (const auto& item : stock.object_items()) {
                 const EquipmentId eq = content.equipment_id(item.first);
                 if (!eq.valid()) {
-                    ++warned_unknown_ref;
+                    warnings.push_back(scenario_path + ": country " + country.tag +
+                                       ": unknown equipment " + item.first);
                     continue;
                 }
                 if (eq.v < country.equipment_stockpile.size()) {
@@ -540,12 +603,6 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
                 }
             }
         }
-    }
-    if (warned_unknown_ref > 0) {
-        // Unknown keys are a data smell, not a structural failure: the rest of the
-        // scenario is still loadable, so report and continue.
-        if (err) *err = scenario_path + ": " + std::to_string(warned_unknown_ref) +
-                        " unknown content key(s) ignored";
     }
 
     // ---- starting armies --------------------------------------------------
@@ -801,7 +858,13 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         }
     }
 
-    if (err) err->clear();
+    if (err) {
+        err->clear();
+        for (size_t i = 0; i < warnings.size(); ++i) {
+            if (i != 0) *err += "; ";
+            *err += warnings[i];
+        }
+    }
     return true;
 }
 

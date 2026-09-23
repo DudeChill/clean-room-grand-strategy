@@ -297,6 +297,59 @@ void build_world(Fixture& f) {
     g.player_country = f.b;
 }
 
+// A third country that leads a faction and owns nothing: enough for another country
+// with the same ideology to ask for membership.
+CountryId add_faction_leader(World& w, const char* tag, Ideology ideology, uint32_t faction_id) {
+    Country c;
+    c.tag = tag;
+    c.name = tag;
+    c.ideology = ideology;
+    c.manpower = 100000.0;
+    c.faction = faction_id;
+    const CountryId id = w.countries.create(std::move(c));
+    w.country(id)->id = id;
+
+    Faction faction;
+    faction.id = faction_id;
+    faction.name = "Northern League";
+    faction.leader = id;
+    faction.members.push_back(id);
+    w.factions.push_back(faction);
+    return id;
+}
+
+// A second, weaker neighbour of Auroria: two valid war targets exist, so only the
+// declaration rate limit can keep the AI from attacking both at once.
+CountryId add_weak_neighbour(Fixture& f, const char* tag, Ideology ideology) {
+    World& w = f.g.world;
+    Content& ct = f.g.content;
+    Country c;
+    c.tag = tag;
+    c.name = tag;
+    c.ideology = ideology;
+    c.manpower = 50000.0;
+    const CountryId id = w.countries.create(std::move(c));
+    w.country(id)->id = id;
+
+    const RegionId region = w.provinces[f.cap_a].region;
+    const std::string state_name = std::string(tag) + " Land";
+    const StateId state = add_state(w, state_name.c_str(), region, id, {}, 2, 1, 6);
+    const ProvinceId prov = add_province(w, "Border Town", state, region, id, 3, true);
+    w.state(state)->provinces = {prov};
+    w.regions[region].provinces.push_back(prov);
+    w.province(prov)->adj = {f.front_a};
+    w.province(f.front_a)->adj.push_back(prov);
+    w.country(id)->capital = state;
+
+    const std::string tpl_name = std::string(tag) + "_infantry";
+    const TemplateId tpl = add_template(ct, tpl_name.c_str(), id,
+                                        ct.equipment_id("infantry_equipment_1"), 5, EquipmentId{});
+    w.country(id)->templates.push_back(tpl);
+    w.country(id)->equipment_stockpile.assign(ct.equipment.size(), 0.0);
+    add_division(w, *w.country(id), tpl, prov, 1.0);
+    return id;
+}
+
 // Hash of everything the AI is not allowed to touch: the world and its economy.
 // The Ai and Rng subsystems are deliberately excluded - the AI owns its own clock,
 // reason log and counters, and never draws from the simulation RNG.
@@ -416,6 +469,165 @@ HOI_TEST(ai_plan_is_deterministic) {
     // order and leave the same world behind.
     CHECK_EQ(a.signature.size(), b.signature.size());
     CHECK(a.signature == b.signature);
+}
+
+HOI_TEST(ai_joins_a_friendly_faction_when_threatened) {
+    Fixture f;
+    build_world(f);
+    const CountryId leader = add_faction_leader(f.g.world, "NOR", f.g.world.countries[f.a].ideology, 1);
+    CHECK_EQ(f.g.world.countries[f.a].ideology, f.g.world.countries[leader].ideology);
+
+    // The war turns against Auroria: Borealis fields three divisions to its one, so
+    // the AI should look for a patron instead of standing alone.
+    for (int i = 0; i < 2; ++i) {
+        add_division(f.g.world, *f.g.world.country(f.b), f.tpl_b, f.cap_b, 1.0);
+    }
+
+    for (int tick = 0; tick < 30 * TICKS_PER_DAY; ++tick) {
+        f.g.queue.clear();
+        phase_ai(f.g);
+        phase_commands(f.g);  // the real phase: every result lands in Game::log
+        f.g.world.tick += 1;
+        f.g.ticks_run = f.g.world.tick;
+    }
+
+    bool joined = false;
+    for (const CommandRecord& rec : f.g.log.records) {
+        CHECK(rec.command.country != f.b);  // the player's country never receives orders
+        if (rec.command.type != CommandType::JoinFaction) continue;
+        CHECK_EQ(rec.command.target_country, leader);
+        CHECK_EQ(rec.result, CommandResult::Applied);
+        joined = true;
+    }
+    CHECK(joined);
+    CHECK_EQ(f.g.world.country(f.a)->faction, 1u);
+}
+
+// The same two-country world without the war: both sides at peace, so the only thing
+// that can start hostilities is the AI's own declaration.
+void build_peaceful_world(Fixture& f) {
+    build_world(f);
+    World& w = f.g.world;
+    w.wars.clear();
+    w.relations.clear();
+    Country* a = w.country(f.a);
+    Country* b = w.country(f.b);
+    a->wars.clear();
+    b->wars.clear();
+    a->at_war = false;
+    b->at_war = false;
+    f.war = WarId{};
+}
+
+HOI_TEST(ai_declares_war_when_it_has_the_advantage) {
+    Fixture f;
+    build_peaceful_world(f);
+
+    // Auroria fields four divisions to Borealis' one across a shared border: a real
+    // advantage against the specific target, which is the only thing that may start
+    // a war (the countries are neighbours and of different ideologies).
+    Country* a = f.g.world.country(f.a);
+    for (int i = 0; i < 3; ++i) add_division(f.g.world, *a, f.tpl_a, f.front_a, 1.0);
+
+    bool declared = false;
+    for (int tick = 0; tick < 60 * TICKS_PER_DAY && !declared; ++tick) {
+        f.g.queue.clear();
+        phase_ai(f.g);
+        declared = count_commands(f.g.queue, CommandType::DeclareWar) > 0;
+        phase_commands(f.g);
+        f.g.world.tick += 1;
+        f.g.ticks_run = f.g.world.tick;
+    }
+
+    CHECK(declared);
+    CHECK_EQ(f.g.world.wars.size(), 1u);
+    CHECK(f.g.world.at_war(f.a, f.b));
+    CHECK_EQ(f.g.ai.posture[f.a.v], 2u);  // the posture that authorised the attack
+}
+
+HOI_TEST(ai_does_not_declare_war_when_outmatched) {
+    Fixture f;
+    build_peaceful_world(f);
+
+    // The reverse: Borealis outnumbers Auroria six to one, so Auroria must not start
+    // a war and must not even adopt an offensive posture.
+    Country* b = f.g.world.country(f.b);
+    for (int i = 0; i < 4; ++i) add_division(f.g.world, *b, f.tpl_b, f.cap_b, 1.0);
+
+    for (int tick = 0; tick < 60 * TICKS_PER_DAY; ++tick) {
+        f.g.queue.clear();
+        phase_ai(f.g);
+        CHECK_EQ(count_commands(f.g.queue, CommandType::DeclareWar), 0);
+        phase_commands(f.g);
+        f.g.world.tick += 1;
+        f.g.ticks_run = f.g.world.tick;
+    }
+
+    CHECK_EQ(f.g.world.wars.size(), 0u);
+    CHECK(!f.g.world.at_war(f.a, f.b));
+    CHECK(f.g.ai.posture[f.a.v] != 2);  // no offensive posture against a superior enemy
+}
+
+HOI_TEST(ai_attacks_a_defended_border_and_starts_a_battle) {
+    Fixture f;
+    build_world(f);  // already at war: Auroria holds the frontier, Borealis the far side
+
+    // Borealis leaves a garrison in the province across the border; Auroria masses
+    // four divisions against it. Nothing moves unless the AI orders an attack, and a
+    // defended province can only be taken through a battle.
+    Country* a = f.g.world.country(f.a);
+    Country* b = f.g.world.country(f.b);
+    for (int i = 0; i < 3; ++i) add_division(f.g.world, *a, f.tpl_a, f.front_a, 1.0);
+    for (int i = 0; i < 2; ++i) add_division(f.g.world, *b, f.tpl_b, f.cap_b, 1.0);
+
+    bool attacked = false;
+    bool battle = false;
+    for (int tick = 0; tick < 90 * TICKS_PER_DAY && !battle; ++tick) {
+        f.g.tick_once();
+        if (!attacked) {
+            for (const CommandRecord& rec : f.g.log.records) {
+                if (rec.command.type == CommandType::MoveDivision) {
+                    attacked = true;
+                }
+            }
+        }
+        battle = f.g.world.battles.size() > 0;
+    }
+
+    CHECK(attacked);
+    CHECK(battle);
+}
+
+HOI_TEST(ai_limits_declarations_to_one_per_thirty_days) {
+    Fixture f;
+    build_peaceful_world(f);
+
+    // Auroria is strong, and both Borealis and the new neighbour are weak, bordering
+    // and of a different ideology: two legitimate targets, so only the rate limit can
+    // stop the AI from declaring on both in the same week.
+    Country* a = f.g.world.country(f.a);
+    for (int i = 0; i < 3; ++i) add_division(f.g.world, *a, f.tpl_a, f.front_a, 1.0);
+    add_weak_neighbour(f, "ZUR", Ideology::Neutrality);
+
+    for (int tick = 0; tick < 60 * TICKS_PER_DAY; ++tick) {
+        f.g.queue.clear();
+        phase_ai(f.g);
+        phase_commands(f.g);
+        f.g.world.tick += 1;
+        f.g.ticks_run = f.g.world.tick;
+    }
+
+    std::vector<Tick> declarations;
+    for (const CommandRecord& rec : f.g.log.records) {
+        if (rec.command.type == CommandType::DeclareWar && rec.command.country == f.a) {
+            declarations.push_back(rec.tick);
+        }
+    }
+    CHECK(declarations.size() >= 2);  // both targets are eventually attacked
+    for (size_t i = 1; i < declarations.size(); ++i) {
+        CHECK(declarations[i] - declarations[i - 1] >=
+              30ull * static_cast<uint64_t>(TICKS_PER_DAY));
+    }
 }
 
 HOI_TEST(ai_never_writes_world_state_outside_commands) {

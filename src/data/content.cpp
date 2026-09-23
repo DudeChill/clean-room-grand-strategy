@@ -120,6 +120,10 @@ SimConstants SimConstants::from_json(const Json& j) {
     c.consumer_goods_base = num("consumer_goods_base", c.consumer_goods_base);
     c.fuel_per_oil = num("fuel_per_oil", c.fuel_per_oil);
     c.fuel_storage_per_factory = num("fuel_storage_per_factory", c.fuel_storage_per_factory);
+    c.synthetic_oil_per_refinery_per_day =
+        num("synthetic_oil_per_refinery_per_day", c.synthetic_oil_per_refinery_per_day);
+    c.synthetic_rubber_per_refinery_per_day =
+        num("synthetic_rubber_per_refinery_per_day", c.synthetic_rubber_per_refinery_per_day);
 
     c.construction_cost_factory = num("construction_cost_factory", c.construction_cost_factory);
     c.construction_cost_infrastructure =
@@ -136,6 +140,8 @@ SimConstants SimConstants::from_json(const Json& j) {
         num("construction_cost_synthetic", c.construction_cost_synthetic);
     c.construction_level_scaling =
         num("construction_level_scaling", c.construction_level_scaling);
+    c.max_factories_per_project =
+        num("max_factories_per_project", c.max_factories_per_project);
 
     c.research_base_days = num("research_base_days", c.research_base_days);
     c.research_year_penalty = num("research_year_penalty", c.research_year_penalty);

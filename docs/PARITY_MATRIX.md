@@ -72,7 +72,7 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | POL-003 | Decisions | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | POL-004 | National spirits/advisors | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | DIP-001 | Relations and drift | FUNCTIONAL | MODERATE | part | yes | yes | unit |
-| DIP-002 | Factions | FUNCTIONAL | HIGH | part | yes | yes | unit |
+| DIP-002 | Factions (join/leave, leader succession) | PARITY_TESTING | HIGH | yes | yes | yes | unit |
 | DIP-003 | Guarantees and military access | PARTIAL | MODERATE | - | yes | yes | unit |
 | DIP-004 | War declaration and coalitions | PARITY_TESTING | HIGH | yes | yes | yes | unit + golden |
 | DIP-005 | Capitulation | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
@@ -87,7 +87,7 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | AI-003 | AI decision reasons | FUNCTIONAL | HIGH | part | yes | - | unit |
 | AI-004 | AI industry/research/production | FUNCTIONAL | MODERATE | - | yes | - | unit |
 | AI-005 | AI military (recruit, deploy, fronts, offensives) | FUNCTIONAL | MODERATE | - | yes | - | unit |
-| AI-006 | AI diplomacy | PARTIAL | LOW | - | yes | - | unit |
+| AI-006 | AI diplomacy (faction join, war declaration, peace) | FUNCTIONAL | MODERATE | part | yes | - | unit + 730-day observer run |
 | AI-007 | AI air/naval | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | SAV-001 | Versioned sectioned save files | PARITY_TESTING | HIGH | yes | - | yes | unit + golden |
 | SAV-002 | Per-section hash verification on load | PARITY_TESTING | CONFIRMED | - | - | yes | unit |
@@ -105,7 +105,8 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | TOOL-002 | Determinism oracle and hash report | VALIDATED | CONFIRMED | - | - | yes | golden |
 | TOOL-003 | Per-tick performance metrics | FUNCTIONAL | HIGH | - | - | - | manual |
 | TOOL-004 | Stress ladder and long-run automation | PARTIAL | MODERATE | - | - | - | manual |
-| TOOL-005 | Inspectors and profiler captures | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| TOOL-005 | Inspectors (country/province/supply/battle) | FUNCTIONAL | HIGH | part | - | - | manual |
+| TOOL-006 | Profiler captures and benchmark history | NOT_IMPLEMENTED | LOW | - | - | - | - |
 
 ## Promotions and demotions
 

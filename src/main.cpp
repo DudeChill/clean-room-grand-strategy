@@ -20,6 +20,9 @@
 #include "game/server.h"
 #include "save/save.h"
 #include "sim/industry.h"
+#include "sim/research.h"
+#include "sim/supply.h"
+#include "sim/units.h"
 
 using namespace hoi;
 
@@ -36,6 +39,10 @@ struct Options {
     std::string load_path;
     std::string player_tag;
     std::string web_root = "web";
+    std::string inspect_country;
+    std::string inspect_battle;
+    uint64_t inspect_province = 0;
+    uint64_t inspect_supply = 0;
     uint64_t seed = 12345;
     uint64_t days = 30;
     uint64_t ticks = 0;
@@ -70,6 +77,10 @@ void usage() {
         "  --hashes              print subsystem hashes\n"
         "  --audit               run the world auditor\n"
         "  --summary             print per-country summary\n"
+        "  --inspect-country TAG print full state of one country\n"
+        "  --inspect-province ID print province state and supply\n"
+        "  --inspect-supply ID   print the supply route of a province\n"
+        "  --inspect-battle ID   print a battle breakdown (attacker/defender/debug)\n"
         "  --verbose             debug logging\n"
         "  --quiet               errors only\n");
 }
@@ -121,6 +132,18 @@ bool parse_args(int argc, char** argv, Options* o) {
             std::string v;
             if (!next(&v)) return false;
             o->autosave_days = std::strtoull(v.c_str(), nullptr, 10);
+        } else if (a == "--inspect-country") {
+            if (!next(&o->inspect_country)) return false;
+        } else if (a == "--inspect-province") {
+            std::string v;
+            if (!next(&v)) return false;
+            o->inspect_province = std::strtoull(v.c_str(), nullptr, 10);
+        } else if (a == "--inspect-supply") {
+            std::string v;
+            if (!next(&v)) return false;
+            o->inspect_supply = std::strtoull(v.c_str(), nullptr, 10);
+        } else if (a == "--inspect-battle") {
+            if (!next(&o->inspect_battle)) return false;
         } else if (a == "--hashes") {
             o->hashes = true;
         } else if (a == "--audit") {
@@ -174,6 +197,174 @@ void print_metrics(const Game& g) {
     std::printf("tick p50 %.3f ms, p95 %.3f ms, p99 %.3f ms over %zu samples\n",
                 m.percentile_tick_ms(0.50), m.percentile_tick_ms(0.95), m.percentile_tick_ms(0.99),
                 m.tick_history.size());
+}
+
+// Inspectors (spec section 82): answer "why is this happening" from the CLI, using
+// the same authoritative state the simulation uses.
+void inspect_country(const Game& g, const std::string& tag) {
+    const World& w = g.world;
+    const Country* found = nullptr;
+    CountryId cid;
+    w.countries.for_each([&](CountryId id, const Country& c) {
+        if (c.tag == tag) { found = &c; cid = id; }
+    });
+    if (!found) {
+        std::printf("no country with tag %s\n", tag.c_str());
+        return;
+    }
+    const Country& c = *found;
+    int civ = 0, mil = 0, dock = 0;
+    count_factories(w, cid, &civ, &mil, &dock);
+    std::printf("COUNTRY %s %s (%s)\n", c.tag.c_str(), c.name.c_str(),
+                c.alive ? "alive" : "defeated");
+    std::printf("  political power %.1f  stability %.2f  war support %.2f  manpower %.0f  "
+                "fuel %.1f/%.1f  consumer goods %.2f\n",
+                c.political_power, c.stability, c.war_support, c.manpower, c.fuel, c.fuel_capacity,
+                c.consumer_goods_ratio);
+    std::printf("  factories: civilian %d, military %d, dockyards %d (assigned %d)\n", civ, mil,
+                dock,
+                [&] {
+                    int n = 0;
+                    for (const auto& l : c.lines) n += l.factories;
+                    return n;
+                }());
+    std::printf("  modifiers applied at %.4f factor summary\n",
+                c.total_modifiers().factor(ModifierKind::FactoryOutput));
+    std::printf("  divisions %zu (training %zu), armies %zu, templates %zu, wars %zu\n",
+                c.divisions.size(), c.training.size(), c.armies.size(), c.templates.size(),
+                c.wars.size());
+    std::printf("  production lines:\n");
+    for (const auto& l : c.lines) {
+        const EquipmentDef* def = g.content.equipment_def(l.equipment);
+        std::printf("    %-24s factories %3d  efficiency %.3f (cap %.3f)  total %.1f  "
+                    "resource shortage %.2f\n",
+                    def ? def->key.c_str() : "(idle/retired)", l.factories, l.efficiency,
+                    l.efficiency_cap, l.output_total, l.resource_shortage);
+    }
+    if (!c.construction.queue.empty()) {
+        std::printf("  construction queue:\n");
+        for (const auto& p : c.construction.queue) {
+            const Province* prov = w.province(p.province);
+            std::printf("    %-20s level %d  progress %.0f/%.0f  %s\n", building_kind_name(p.kind),
+                        p.target_level, p.progress, p.cost,
+                        prov ? prov->name.c_str() : "(state-wide)");
+        }
+    }
+    std::printf("  research:\n");
+    for (size_t i = 0; i < c.research.slots.size(); ++i) {
+        const ResearchSlot& s = c.research.slots[i];
+        const TechDef* def = g.content.tech_def(s.tech);
+        if (s.active && def) {
+            std::printf("    slot %zu: %-24s %.1f/%.1f days\n", i, def->key.c_str(), s.progress,
+                        tech_cost_days(g, cid, s.tech));
+        } else {
+            std::printf("    slot %zu: idle\n", i);
+        }
+    }
+    std::printf("  stockpile:\n");
+    for (size_t i = 0; i < c.equipment_stockpile.size(); ++i) {
+        if (c.equipment_stockpile[i] <= 0.0) continue;
+        const EquipmentDef* def = g.content.equipment_def(EquipmentId(static_cast<uint32_t>(i)));
+        if (def) std::printf("    %-24s %.1f\n", def->key.c_str(), c.equipment_stockpile[i]);
+    }
+}
+
+void inspect_province(const Game& g, ProvinceId pid) {
+    const Province* p = g.world.province(pid);
+    if (!p) {
+        std::printf("no province %u\n", pid.v);
+        return;
+    }
+    const State* s = g.world.state(p->state);
+    std::printf("PROVINCE %u '%s' terrain %s%s\n", pid.v, p->name.c_str(), terrain_name(p->terrain),
+                p->is_sea ? " (sea)" : "");
+    std::printf("  state '%s'  owner %s  controller %s  vp %d  infra %d  rail %d  hub %s\n",
+                s ? s->name.c_str() : "?",
+                p->owner.valid() ? g.world.country(p->owner)->tag.c_str() : "-",
+                p->controller.valid() ? g.world.country(p->controller)->tag.c_str() : "-",
+                p->victory_points, p->infrastructure, p->railway_level, p->supply_hub ? "yes" : "no");
+    std::printf("  fort %d  air base %d  naval base %d  radar %d  population %.0f\n", p->fort_level,
+                p->air_base, p->naval_base, p->radar, p->population);
+    const Province* src = g.world.province(p->supply_source);
+    const Province* bottleneck = g.world.province(p->supply_bottleneck);
+    std::printf("  supply level %.3f  source %s  bottleneck %s\n", p->supply_level,
+                src ? src->name.c_str() : "-", bottleneck ? bottleneck->name.c_str() : "-");
+    std::printf("  neighbours:");
+    for (ProvinceId n : p->adj) {
+        const Province* np = g.world.province(n);
+        std::printf(" %u(%s)", n.v, np ? np->name.c_str() : "?");
+    }
+    std::printf("\n  divisions here:\n");
+    g.world.divisions.for_each([&](DivisionId did, const Division& d) {
+        if (d.location != pid) return;
+        const Country* dc = g.world.country(d.country);
+        std::printf("    #%u %-24s %s  org %.1f/%.1f  strength %.2f  supply %.2f  "
+                    "entrenchment %.2f  planning %.2f\n",
+                    did.v, d.name.c_str(), dc ? dc->tag.c_str() : "?", d.organization,
+                    d.max_organization, d.strength, d.supply, d.entrenchment, d.planning);
+    });
+}
+
+void inspect_supply(const Game& g, ProvinceId pid) {
+    const Province* p = g.world.province(pid);
+    if (!p) {
+        std::printf("no province %u\n", pid.v);
+        return;
+    }
+    const CountryId holder = p->controller.valid() ? p->controller : p->owner;
+    std::vector<SupplyRouteStep> route;
+    ProvinceId bottleneck;
+    const double delivered =
+        holder.valid() ? explain_supply_route(g, holder, pid, &route, &bottleneck) : 0.0;
+    std::printf("SUPPLY for %s (%s): delivered %.2f/hr, level %.3f\n", p->name.c_str(),
+                g.world.country(holder) ? g.world.country(holder)->tag.c_str() : "-", delivered,
+                p->supply_level);
+    for (const SupplyRouteStep& step : route) {
+        const Province* sp = g.world.province(step.province);
+        std::printf("  -> %-24s capacity %.2f\n", sp ? sp->name.c_str() : "?", step.capacity);
+    }
+    const Province* bp = g.world.province(bottleneck);
+    std::printf("  bottleneck: %s\n", bp ? bp->name.c_str() : "none");
+}
+
+void inspect_battle(const Game& g, BattleId bid) {
+    const Battle* b = g.world.battle(bid);
+    if (!b) {
+        std::printf("no battle %u\n", bid.v);
+        return;
+    }
+    const Province* p = g.world.province(b->province);
+    std::printf("BATTLE %u in '%s' (%s)%s%s  progress %.2f  since tick %llu\n", bid.v,
+                p ? p->name.c_str() : "?", terrain_name(b->terrain),
+                b->river_crossing ? " river" : "", b->encirclement ? " ENCIRCLED" : "", b->progress,
+                static_cast<unsigned long long>(b->start_tick));
+    auto side = [&](const char* label, const BattleSideState& s) {
+        std::printf("  %s: soft %.1f  hard %.1f  defence %.1f  breakthrough %.1f  armour %.1f  "
+                    "piercing %.1f\n",
+                    label, s.total_soft_attack, s.total_hard_attack, s.total_defense,
+                    s.total_breakthrough, s.total_armor, s.total_piercing);
+        for (size_t i = 0; i < s.divisions.size(); ++i) {
+            const Division* d = g.world.division(s.divisions[i]);
+            if (!d) continue;
+            const Country* dc = g.world.country(d->country);
+            std::printf("    #%u %-22s %s org %.1f/%.1f str %.2f supply %.2f width %.1f\n",
+                        s.divisions[i].v, d->name.c_str(), dc ? dc->tag.c_str() : "?",
+                        d->organization, d->max_organization, d->strength, d->supply,
+                        i < s.width_used.size() ? s.width_used[i] : 0.0);
+        }
+    };
+    side("attackers", b->attacker);
+    side("defenders", b->defender);
+    if (!b->debug.empty()) {
+        std::printf("  last tick damage breakdown:\n");
+        for (const BattleDebugLine& l : b->debug) {
+            std::printf("    div #%u base %.1f terrain x%.2f supply x%.2f planning +%.2f commander "
+                        "+%.2f exp +%.2f -> %.1f vs defence %.1f = dmg %.2f (org %.2f str %.3f)\n",
+                        l.division.v, l.base_attack, l.terrain_mod, l.supply_mod, l.planning_mod,
+                        l.commander_mod, l.experience_mod, l.final_attack, l.enemy_defense, l.damage,
+                        l.org_damage, l.strength_damage);
+        }
+    }
 }
 
 }  // namespace
@@ -286,6 +477,12 @@ int main(int argc, char** argv) {
                 game.log.records.size());
 
     if (opt.summary) print_country_summary(game);
+    if (!opt.inspect_country.empty()) inspect_country(game, opt.inspect_country);
+    if (opt.inspect_province != 0) inspect_province(game, ProvinceId(static_cast<uint32_t>(opt.inspect_province)));
+    if (opt.inspect_supply != 0) inspect_supply(game, ProvinceId(static_cast<uint32_t>(opt.inspect_supply)));
+    if (!opt.inspect_battle.empty()) {
+        inspect_battle(game, BattleId(static_cast<uint32_t>(std::strtoul(opt.inspect_battle.c_str(), nullptr, 10))));
+    }
     if (opt.hashes) std::printf("\n%s", hash_report(game).c_str());
     print_metrics(game);
 

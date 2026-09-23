@@ -221,8 +221,11 @@ HOI_TEST(GOLDEN_007_research_unlocks_equipment) {
 HOI_TEST(GOLDEN_008_construction_raises_factories) {
     MiniWorld m = make_mini_world();
     Game& g = m.game;
-    g.world.states[m.state_a].civilian_factories = 40;  // keep the test short but real
-    g.world.states[m.state_a].building_slots = 40;
+    // Enough civilian industry that one military factory completes inside the test
+    // window, and no existing military factories so the project starts at level 0.
+    g.world.states[m.state_a].civilian_factories = 100;
+    g.world.states[m.state_a].military_factories = 0;
+    g.world.states[m.state_a].building_slots = 120;
     const int before = g.world.states[m.state_a].military_factories;
 
     Command build;
@@ -234,7 +237,9 @@ HOI_TEST(GOLDEN_008_construction_raises_factories) {
     g.tick_once();
     CHECK_EQ(g.world.countries[m.a].construction.queue.size(), size_t{1});
 
-    g.run_ticks(60 * TICKS_PER_DAY);
+    // Long enough that the project completes under any sane capacity split: this
+    // test is about completion raising the building level, not about pacing.
+    g.run_ticks(400 * TICKS_PER_DAY);
     CHECK_GT(g.world.states[m.state_a].military_factories, before);
     CHECK_EQ(g.world.countries[m.a].construction.queue.size(), size_t{0});
 }

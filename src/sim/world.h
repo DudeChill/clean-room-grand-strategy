@@ -62,6 +62,7 @@ struct State {
     int civilian_factories = 0;
     int military_factories = 0;
     int dockyards = 0;
+    int synthetic_refineries = 0;  // produce oil and rubber without imports
     int building_slots = 0;
     double manpower_pool = 0.0;  // recruitable manpower residing in this state
     bool impassable = false;

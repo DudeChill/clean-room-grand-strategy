@@ -30,11 +30,13 @@ prepare() {
   mkdir -p "$dist/$name"
   install -Dm755 build/game "$dist/$name/game"
   install -Dm755 build/genmap "$dist/$name/genmap"
-  cp -r data web docs README.md ARCHITECTURE.md ROADMAP.md "$dist/$name/"
-  cp docs/reviews/*.md "$dist/$name/docs/reviews/" 2>/dev/null || true
+  cp -r data web docs src tests tools scripts "$dist/$name/"
+  cp README.md ARCHITECTURE.md ROADMAP.md TODO.md DEVLOG.md LICENSE CMakeLists.txt \
+     "$dist/$name/"
+  rm -rf "$dist/$name"/docs/benchmarks/*.save "$dist/$name"/docs/benchmarks/*.log
   tar -C "$dist" -czf "$dist/$name.tar.gz" "$name"
   sha256sum "$dist/$name.tar.gz" > "$dist/$name.tar.gz.sha256"
-  echo "packaged $dist/$name.tar.gz"
+  echo "packaged $dist/$name.tar.gz ($(stat -c %s "$dist/$name.tar.gz") bytes)"
 }
 
 publish() {

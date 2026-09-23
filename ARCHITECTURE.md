@@ -91,12 +91,20 @@ Resource allocation is deterministic: countries in ascending id, lines in
 ```
 civ_output_per_hour = civilian_factories * ic_per_civilian/24 * (1 + ConstructionSpeed)
                      * (1 - consumer_goods_ratio)
-project cost        = base_cost * level_scaling^(current_level) * (1 - ConstructionSpeed applied at spend time)
+project cost        = base_cost * (1 + (construction_level_scaling - 1) * existing_level)
 ```
 
-Projects progress in queue order with the remaining capacity each hour. On
-completion the building level increases in the target state/province and the
-project is removed.
+Cost grows linearly with the levels already present in the target (1.0, 1.25, 1.5, …
+for `construction_level_scaling = 1.25`). An exponential curve was tried first and
+made late levels in large states unreachable within a campaign. The cost is stamped
+onto the project when the command is accepted, so `phase_industry` never recomputes
+it; data (`BuildingDef::base_cost`) wins over the constants table.
+
+Projects progress in queue order with the capacity left after consumer goods. Each
+project may draw at most `max_factories_per_project` civilian factories (15 in data),
+so a full queue builds several things at once instead of everything on the head
+project — this is what makes construction visible inside a campaign. On completion the
+building level increases in the target state/province and the project is removed.
 
 ### 5.3 Research
 

@@ -36,6 +36,7 @@ inline EquipmentId add_equipment(Content& c, const std::string& key, EquipmentCa
     e.manpower = 100.0;
     e.supply_use = 0.5;
     const EquipmentId id(static_cast<uint32_t>(c.equipment.size()));
+    e.id = id;  // content definitions carry their own id; nothing else may guess it
     c.equipment.push_back(e);
     c.equipment_by_key[key] = id;
     return id;
@@ -235,9 +236,6 @@ inline MiniWorld make_mini_world(bool at_war = false, int province_count = 6) {
     for (int i = 0; i + 1 < province_count; ++i) {
         link_provinces(w, m.provinces[static_cast<size_t>(i)],
                        m.provinces[static_cast<size_t>(i + 1)]);
-    }
-    for (ProvinceId pid : m.provinces) {
-        w.states[w.provinces[pid].state].provinces.size();
     }
 
     m.tmpl = g.content.template_id("infantry_template");

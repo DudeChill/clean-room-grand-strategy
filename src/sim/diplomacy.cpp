@@ -16,6 +16,7 @@
 #include "core/math.h"
 #include "data/content.h"
 #include "game/game.h"
+#include "sim/combat.h"
 
 namespace hoi {
 namespace {
@@ -28,6 +29,7 @@ constexpr double kWarRelationCeiling = -50.0;
 constexpr double kPostWarRelationBaseline = -25.0;
 constexpr double kWarUpkeepPoliticalPowerPerDay = 0.25;
 constexpr double kIndustryLossThreshold = 0.70;  // factories lost before capitulation
+constexpr double kFactionRelationFloor = 25.0;   // joining a faction warms relations
 
 // Occupation model.
 constexpr double kResistanceGrowthPerDay = 0.50;
@@ -50,13 +52,29 @@ bool country_alive(const World& w, CountryId c) {
     return cc != nullptr && cc->alive;
 }
 
-const Faction* faction_of(const World& w, CountryId c) {
+// The faction record a country belongs to (by Country::faction), or nullptr.
+const Faction* faction_record(const World& w, CountryId c) {
     const Country* cc = w.country(c);
     if (cc == nullptr || cc->faction == 0) return nullptr;
     for (const Faction& f : w.factions) {
         if (f.id == cc->faction) return &f;
     }
     return nullptr;
+}
+
+Faction* faction_record(World& w, uint32_t faction_id) {
+    if (faction_id == 0) return nullptr;
+    for (Faction& f : w.factions) {
+        if (f.id == faction_id) return &f;
+    }
+    return nullptr;
+}
+
+// Faction members are kept in ascending country id so every consumer that walks the
+// list (coalitions, co-belligerence, save order) sees a stable order.
+void insert_member(Faction& f, CountryId c) {
+    const auto it = std::lower_bound(f.members.begin(), f.members.end(), c);
+    if (it == f.members.end() || *it != c) f.members.insert(it, c);
 }
 
 bool in_war(const World& w, CountryId c) {
@@ -81,8 +99,8 @@ void refresh_at_war(World& w, CountryId c) {
     }
     std::sort(live.begin(), live.end());
     live.erase(std::unique(live.begin(), live.end()), live.end());
+    cc->at_war = !live.empty();  // read before the move: a moved-from vector is empty
     cc->wars = std::move(live);
-    cc->at_war = !live.empty();
 }
 
 // Everyone who joins `root`'s side when it goes to war: itself, its puppets, its
@@ -97,7 +115,7 @@ std::vector<CountryId> coalition(const World& w, CountryId root) {
     if (rc != nullptr) {
         for (CountryId p : rc->puppets) push(p);
         push(rc->overlord);
-        if (const Faction* f = faction_of(w, root)) {
+        if (const Faction* f = faction_record(w, root)) {
             for (CountryId m : f->members) push(m);
         }
     }
@@ -326,6 +344,72 @@ bool countries_at_war(const World& w, CountryId a, CountryId b) {
     return found;
 }
 
+uint32_t faction_of(const World& w, CountryId leader) {
+    if (!leader.valid()) return 0;
+    for (const Faction& f : w.factions) {
+        if (f.leader == leader) return f.id;
+    }
+    return 0;
+}
+
+bool join_faction(Game& g, CountryId who, CountryId faction_leader) {
+    World& w = g.world;
+    if (!who.valid() || !faction_leader.valid() || who == faction_leader) return false;
+    Country* joiner = w.country(who);
+    const Country* lead = w.country(faction_leader);
+    if (joiner == nullptr || !joiner->alive) return false;
+    if (lead == nullptr || !lead->alive) return false;
+    if (joiner->faction != 0) return false;              // already in a faction
+    if (joiner->ideology != lead->ideology) return false;  // only like-minded join
+    if (countries_at_war(w, who, faction_leader)) return false;
+
+    const uint32_t id = faction_of(w, faction_leader);
+    Faction* faction = faction_record(w, id);
+    if (faction == nullptr) return false;
+
+    insert_member(*faction, who);
+    joiner->faction = id;
+    // Membership is a warm relationship with the leader at minimum.
+    Relation& r = w.relation(who, faction_leader);
+    if (r.value < kFactionRelationFloor) r.value = kFactionRelationFloor;
+
+    g.log_event("faction", joiner->tag + " joins faction of " + lead->tag, who);
+    return true;
+}
+
+bool leave_faction(Game& g, CountryId who) {
+    World& w = g.world;
+    Country* member = w.country(who);
+    if (member == nullptr || !member->alive) return false;
+    const uint32_t id = member->faction;
+    if (id == 0) return false;
+    Faction* faction = faction_record(w, id);
+    if (faction == nullptr) {
+        member->faction = 0;  // dangling reference: repair rather than fail
+        return false;
+    }
+
+    faction->members.erase(std::remove(faction->members.begin(), faction->members.end(), who),
+                           faction->members.end());
+    member->faction = 0;
+    std::string text = member->tag + " leaves faction";
+    if (faction->leader == who) {
+        // The lowest-id remaining member takes over; an empty faction ceases to exist.
+        const std::vector<CountryId> ids = faction->members;
+        if (ids.empty()) {
+            w.factions.erase(std::remove_if(w.factions.begin(), w.factions.end(),
+                                            [id](const Faction& f) { return f.id == id; }),
+                             w.factions.end());
+        } else {
+            faction->leader = *std::min_element(ids.begin(), ids.end());
+            const Country* successor = w.country(faction->leader);
+            text += "; " + std::string(successor != nullptr ? successor->tag : "?") + " leads";
+        }
+    }
+    g.log_event("faction", text, who);
+    return true;
+}
+
 std::vector<CountryId> co_belligerents(const World& w, CountryId c) {
     std::vector<CountryId> out;
     if (!c.valid()) return out;
@@ -338,7 +422,7 @@ std::vector<CountryId> co_belligerents(const World& w, CountryId c) {
             if (p.country != c) out.push_back(p.country);
         }
     });
-    if (const Faction* f = faction_of(w, c)) {
+    if (const Faction* f = faction_record(w, c)) {
         for (CountryId m : f->members) {
             if (m != c) out.push_back(m);
         }
@@ -411,7 +495,11 @@ void capitulate(Game& g, CountryId loser, CountryId winner) {
     w.divisions.for_each([&](DivisionId did, const Division& d) {
         if (d.country == loser) doomed_divisions.push_back(did);
     });
-    for (DivisionId did : doomed_divisions) w.divisions.destroy(did);
+    for (DivisionId did : doomed_divisions) {
+        Division* d = w.division(did);
+        if (d != nullptr && d->battle.valid()) detach_from_battle(g, *d);
+        w.divisions.destroy(did);
+    }
     std::vector<ArmyId> doomed_armies;
     w.armies.for_each([&](ArmyId aid, const Army& a) {
         if (a.country == loser) doomed_armies.push_back(aid);
@@ -423,8 +511,18 @@ void capitulate(Game& g, CountryId loser, CountryId winner) {
     });
     for (CharacterId cid : doomed_characters) w.characters.destroy(cid);
 
-    // Wars: the loser stops fighting. A war with an empty side is over for everyone.
+    // Wars: the loser stops fighting. Its roster entry is kept as the historical
+    // record of the war (the auditor requires both sides to stay populated, and it
+    // inspects ended wars too), but a war with no living participant left on either
+    // side is over for everyone.
     std::vector<CountryId> to_refresh;
+    auto side_has_living_participant = [&](const std::vector<WarParticipant>& side) {
+        for (const WarParticipant& p : side) {
+            if (p.country == loser) continue;  // leaving play in this call
+            if (country_alive(w, p.country)) return true;
+        }
+        return false;
+    };
     const std::vector<WarId> loser_wars = l->wars;
     for (WarId wid : loser_wars) {
         War* war = w.war(wid);
@@ -435,20 +533,22 @@ void capitulate(Game& g, CountryId loser, CountryId winner) {
         for (const WarParticipant& p : war->defenders) {
             if (p.country != loser) to_refresh.push_back(p.country);
         }
-        auto drop = [loser](std::vector<WarParticipant>& list) {
-            list.erase(std::remove_if(list.begin(), list.end(),
-                                      [&](const WarParticipant& p) { return p.country == loser; }),
-                       list.end());
-        };
-        drop(war->attackers);
-        drop(war->defenders);
-        if (war->attackers.empty() || war->defenders.empty()) war->active = false;
+        if (!side_has_living_participant(war->attackers) ||
+            !side_has_living_participant(war->defenders)) {
+            war->active = false;
+        }
     }
     l->wars.clear();
     l->at_war = false;
     std::sort(to_refresh.begin(), to_refresh.end());
     to_refresh.erase(std::unique(to_refresh.begin(), to_refresh.end()), to_refresh.end());
     for (CountryId c : to_refresh) refresh_at_war(w, c);
+
+    // Industry stands down: a defeated country must not hold production assignments or
+    // a construction queue, or the "assigned factories <= controlled factories"
+    // invariant breaks for a country that controls nothing.
+    l->lines.clear();
+    l->construction.queue.clear();
 
     // Puppets are released: a state without an overlord may be picked up by whoever
     // wins the peace, but no puppet is inherited silently. A released puppet that was
@@ -483,7 +583,7 @@ void capitulate(Game& g, CountryId loser, CountryId winner) {
     l->training.clear();
     l->alive = false;
 
-    std::string text = win->tag + " annexes " + l->tag;
+    std::string text = win->tag + " annexes " + l->tag + "; industry stands down";
     g.log_event("capitulation", text, loser);
 }
 
@@ -563,7 +663,9 @@ bool offer_peace(Game& g, WarId war_id, CountryId proposer) {
     // Post-war relations: peace is cold, not friendly, and any other war between the
     // same pair still keeps them formally at war.
     for (CountryId at : attacker_ids) {
+        if (!country_alive(w, at)) continue;
         for (CountryId def : defender_ids) {
+            if (!country_alive(w, def)) continue;
             Relation& r = w.relation(at, def);
             r.at_war = countries_at_war(w, at, def);
             r.value = clamp(r.value, kPostWarRelationBaseline, 25.0);
@@ -625,7 +727,31 @@ void phase_diplomacy(Game& g) {
         }
     }
 
-    // 3. Capitulation, once per day. Occupation is owned by phase_territory (phase 5)
+    // 3. No war may stay active without a living participant on both sides: a war
+    //    whose side has been wiped out or removed from play is closed here, dropped
+    //    from every participant's war list and logged. (The participant rosters are
+    //    kept as the historical record of the war; nothing empties them, so an ended
+    //    war still names both sides. An empty roster would be a bug in whoever created
+    //    the war and is reported by the auditor.)
+    for (WarId wid : active_wars) {
+        War* war = w.war(wid);
+        if (war == nullptr || !war->active) continue;
+        auto has_living = [&](const std::vector<WarParticipant>& side) {
+            for (const WarParticipant& p : side) {
+                if (country_alive(w, p.country)) return true;
+            }
+            return false;
+        };
+        if (has_living(war->attackers) && has_living(war->defenders)) continue;
+        war->active = false;
+        const std::vector<CountryId> members = participants(*war, true);
+        const std::vector<CountryId> others = participants(*war, false);
+        for (CountryId c : members) refresh_at_war(w, c);
+        for (CountryId c : others) refresh_at_war(w, c);
+        g.log_event("war", "war ended: no belligerents left on one side", war->aggressor);
+    }
+
+    // 4. Capitulation, once per day. Occupation is owned by phase_territory (phase 5)
     //    and must not be applied twice per tick (see phase_occupation).
     if (w.tick % static_cast<Tick>(TICKS_PER_DAY) == 0) {
         std::vector<CountryId> fighting;
@@ -639,7 +765,7 @@ void phase_diplomacy(Game& g) {
         }
     }
 
-    // 4. AI peace offers: only from a side that has decisively won, and only for a
+    // 5. AI peace offers: only from a side that has decisively won, and only for a
     //    country the AI actually plays.
     if (w.tick % static_cast<Tick>(TICKS_PER_DAY) == 0) {
         for (WarId wid : active_wars) {
@@ -663,9 +789,12 @@ void phase_occupation(Game& g, CountryId country) {
     // Called once per country per tick by phase_territory (phase 5). phase_diplomacy
     // deliberately does not call it: a second caller would double the daily rates.
     World& w = g.world;
+    const Country* holder = w.country(country);
+    if (holder == nullptr || !holder->alive) return;  // nobody occupies for a dead state
     const double hour_fraction = 1.0 / static_cast<double>(TICKS_PER_DAY);
     w.states.for_each([&](StateId, State& s) {
         if (s.controller != country) return;
+        if (!s.owner.valid()) return;  // unowned/neutral ground: nobody to occupy for
         const double population = state_population(w, s);
         if (state_is_core(s, country)) {
             // Own ground: the occupation model decays back to zero and asks for no

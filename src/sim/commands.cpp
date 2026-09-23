@@ -63,7 +63,7 @@ int current_building_level(const World& w, BuildingKind kind, StateId state, Pro
             case BuildingKind::CivilianFactory: return s->civilian_factories;
             case BuildingKind::MilitaryFactory: return s->military_factories;
             case BuildingKind::Dockyard: return s->dockyards;
-            case BuildingKind::SyntheticRefinery: return 0;  // not yet modelled per state
+            case BuildingKind::SyntheticRefinery: return s->synthetic_refineries;
             default: return 0;
         }
     }
@@ -84,22 +84,31 @@ int current_building_level(const World& w, BuildingKind kind, StateId state, Pro
 double building_cost(const Content& content, BuildingKind kind, int existing_level) {
     const SimConstants& k = content.constants;
     double base = 0.0;
-    switch (kind) {
-        case BuildingKind::CivilianFactory:
-        case BuildingKind::MilitaryFactory:
-        case BuildingKind::Dockyard: base = k.construction_cost_factory; break;
-        case BuildingKind::Infrastructure: base = k.construction_cost_infrastructure; break;
-        case BuildingKind::Railway: base = k.construction_cost_railway; break;
-        case BuildingKind::SupplyHub: base = k.construction_cost_supply_hub; break;
-        case BuildingKind::AirBase: base = k.construction_cost_air_base; break;
-        case BuildingKind::NavalBase: base = k.construction_cost_naval_base; break;
-        case BuildingKind::Fort: base = k.construction_cost_fort; break;
-        case BuildingKind::Radar: base = k.construction_cost_radar; break;
-        case BuildingKind::SyntheticRefinery: base = k.construction_cost_synthetic; break;
-        default: base = 4000.0; break;
+    // Data wins when it defines a cost; the constants table is the fallback so that
+    // a mod can retune costs without touching the engine.
+    if (const BuildingDef* def = find_building(content, kind); def && def->base_cost > 0.0) {
+        base = def->base_cost;
+    } else {
+        switch (kind) {
+            case BuildingKind::CivilianFactory:
+            case BuildingKind::MilitaryFactory:
+            case BuildingKind::Dockyard: base = k.construction_cost_factory; break;
+            case BuildingKind::Infrastructure: base = k.construction_cost_infrastructure; break;
+            case BuildingKind::Railway: base = k.construction_cost_railway; break;
+            case BuildingKind::SupplyHub: base = k.construction_cost_supply_hub; break;
+            case BuildingKind::AirBase: base = k.construction_cost_air_base; break;
+            case BuildingKind::NavalBase: base = k.construction_cost_naval_base; break;
+            case BuildingKind::Fort: base = k.construction_cost_fort; break;
+            case BuildingKind::Radar: base = k.construction_cost_radar; break;
+            case BuildingKind::SyntheticRefinery: base = k.construction_cost_synthetic; break;
+            default: base = 4000.0; break;
+        }
     }
-    double scale = 1.0;
-    for (int i = 0; i < existing_level; ++i) scale *= k.construction_level_scaling;
+    // Cost grows linearly with the number of levels already present:
+    // cost = base * (1 + (level_scaling - 1) * existing_level). An exponential
+    // curve made late levels in a large state unreachable for every AI at once.
+    const double scale =
+        1.0 + (k.construction_level_scaling - 1.0) * static_cast<double>(existing_level);
     return base * scale;
 }
 
@@ -405,7 +414,9 @@ CommandResult do_create_army(Game& g, const Command& cmd) {
     a.country = cmd.country;
     a.name = cmd.text;
     ArmyId id = g.world.armies.create(a);
+    g.world.armies[id].id = id;
     g.world.countries[cmd.country].armies.push_back(id);
+    g.log_event("army", "army '" + a.name + "' formed", cmd.country);
     return CommandResult::Applied;
 }
 
@@ -513,6 +524,8 @@ const char* command_type_name(CommandType t) {
         case CommandType::AssignGeneral: return "assign_general";
         case CommandType::DeclareWar: return "declare_war";
         case CommandType::OfferPeace: return "offer_peace";
+        case CommandType::JoinFaction: return "join_faction";
+        case CommandType::LeaveFaction: return "leave_faction";
         case CommandType::SetLaw: return "set_law";
         case CommandType::SetTradePolicy: return "set_trade_policy";
         case CommandType::SetStance: return "set_stance";
@@ -551,6 +564,16 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (!equipment_unlocked(g, cmd.country, cmd.equipment)) {
                 return CommandResult::PrerequisitesMissing;
             }
+            // The factory budget is enforced here as well as in application, so a
+            // validated command is always one that changes state.
+            int others = 0;
+            for (const auto& line : c->lines) {
+                if (line.equipment == cmd.equipment && line.factories > 0) continue;
+                others += line.factories;
+            }
+            int civ = 0, mil = 0, dock = 0;
+            count_factories(g.world, cmd.country, &civ, &mil, &dock);
+            if (others + cmd.value > mil) return CommandResult::InsufficientResources;
             return CommandResult::Applied;
         }
         case CommandType::RemoveProductionLine: {
@@ -567,6 +590,10 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             const BuildingKind kind = static_cast<BuildingKind>(cmd.value);
             const BuildingDef* def = find_building(g.content, kind);
             if (!def) return CommandResult::PrerequisitesMissing;
+            // Anti-air only affects air raids, and air warfare does not exist yet
+            // (discrepancy AIR-002). Refusing the order is honest; accepting it would
+            // create a building with no gameplay effect.
+            if (kind == BuildingKind::AntiAir) return CommandResult::PrerequisitesMissing;
             if (!building_unlocked(g, cmd.country, def->key)) return CommandResult::PrerequisitesMissing;
             if (static_cast<int>(c->construction.queue.size()) >= c->construction.max_queue_size) {
                 return CommandResult::QueueFull;
@@ -722,6 +749,22 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (!participant) return CommandResult::NotOwner;
             return CommandResult::Applied;
         }
+        case CommandType::JoinFaction: {
+            const Country* leader = g.world.country(cmd.target_country);
+            if (!leader || !leader->alive) return CommandResult::UnknownEntity;
+            if (leader->id == cmd.country) return CommandResult::InvalidTarget;
+            if (c->faction != 0) return CommandResult::InvalidValue;
+            if (leader->ideology != c->ideology) return CommandResult::PrerequisitesMissing;
+            if (g.world.at_war(cmd.country, cmd.target_country)) return CommandResult::AtWar;
+            if (faction_of(g.world, cmd.target_country) == 0) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            return CommandResult::Applied;
+        }
+        case CommandType::LeaveFaction: {
+            if (c->faction == 0) return CommandResult::InvalidValue;
+            return CommandResult::Applied;
+        }
         case CommandType::SetLaw: {
             const LawDef* law = g.content.law(cmd.text);
             if (!law) return CommandResult::UnknownEntity;
@@ -782,6 +825,12 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::AssignGeneral: return do_assign_general(g, cmd);
         case CommandType::DeclareWar: return do_declare_war(g, cmd);
         case CommandType::OfferPeace: return do_offer_peace(g, cmd);
+        case CommandType::JoinFaction:
+            return join_faction(g, cmd.country, cmd.target_country) ? CommandResult::Applied
+                                                                   : CommandResult::PrerequisitesMissing;
+        case CommandType::LeaveFaction:
+            return leave_faction(g, cmd.country) ? CommandResult::Applied
+                                                 : CommandResult::PrerequisitesMissing;
         case CommandType::SetLaw: return do_set_law(g, cmd);
         case CommandType::SetTradePolicy: return do_set_trade_policy(g, cmd);
         case CommandType::SetStance: return do_set_stance(g, cmd);
@@ -800,9 +849,13 @@ void phase_commands(Game& g) {
     std::vector<Command> pending;
     pending.swap(g.queue.pending);
     for (const Command& cmd : pending) {
-        const CommandResult result = validate_command(g, cmd);
-        if (result == CommandResult::Applied) {
-            apply_command(g, cmd);
+        const CommandResult validation = validate_command(g, cmd);
+        // The log records what actually happened: a command that validated but was
+        // refused in application (state changed between the two, or an application
+        // rule is stricter) is recorded with its real result.
+        CommandResult result = validation;
+        if (validation == CommandResult::Applied) {
+            result = apply_command(g, cmd);
         }
         g.log.record(g.world.tick, cmd, result);
     }

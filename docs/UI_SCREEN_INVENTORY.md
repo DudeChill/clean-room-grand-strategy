@@ -18,7 +18,9 @@ control maps to a command; nothing in the client mutates gameplay state directly
 | Diplomacy panel | Wars and relations | active wars with sides, country table (factories, divisions, war status), laws with cost and enactment | declare war, enact law | `DeclareWar`, `SetLaw` | – | no relation values, no faction management, no peace UI |
 | Log panel | Event stream | last 80 world events with tick and kind | scroll | `/api/state` events | – | no filtering |
 | Alerts (left) | Actionable situations | idle research slot, unassigned factories, unassigned divisions, ready divisions, resource-short lines | click to jump to the relevant panel | derived from authoritative state each snapshot | – | no alert dismissal or severity ordering |
-| Selection panel | Selected province and its units | province stats plus divisions present with org/strength | click a division to select for orders | snapshot + command API | – | no supply route display (data exists in the model) |
+| Selection panel | Selected province and its units | province stats plus divisions present with org/strength | click a division to select for orders | snapshot + command API | – | no multi-province selection |
+| Battle detail | Live battle breakdown | attackers/defenders with org, strength, supply, entrenchment, planning; per-side soft/hard/defence/breakthrough/armour/piercing totals; progress; terrain, river, encirclement; last-tick damage decomposition per division | none (inspection) | `/api/battle?id=N` (reads `Battle::debug`) | – | no historical battle log |
+| Supply detail | Why a province is supplied or not | controller, supply level, delivered capacity per hour, bottleneck province, the route with per-step capacity, and each division's supply/fuel | none (inspection) | `/api/supply?province=N` (reads `explain_supply_route`) | – | no map overlay of the route itself |
 
 ## Server endpoints
 
@@ -30,5 +32,7 @@ control maps to a command; nothing in the client mutates gameplay state directly
 | `/api/command` | POST | validated command submission (returns ok/error with the rejection reason) |
 | `/api/time` | POST | pause and speed |
 | `/api/save` | POST | save the session |
+| `/api/battle?id=N` | GET | battle detail including per-division state, side totals and the last-tick damage breakdown |
+| `/api/supply?province=N` | GET | supply route with per-step capacity, delivered amount, bottleneck and garrison supply/fuel |
 | `/api/meta` | GET | seed, scenario, player, pause state, hash report |
 | `/api/hashes` | GET | subsystem hash report as text (determinism checking from the browser) |

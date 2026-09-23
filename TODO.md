@@ -44,8 +44,13 @@ done condition. No open-ended items.
 * [ ] **SUPPLY-001: motorisation** - army motorisation level consuming trucks to
   extend hub radius.
 * [ ] **AI-001: naval and air layers** - AI builds and uses fleets and air wings.
-* [ ] **AI-002: AI recovery behaviour** - explicit responses to encirclement, fuel or
-  equipment shortage, capital threat.
+* [ ] **AI-008** explicit AI crisis recovery behaviour: posture scoring reacts to force
+  ratios; no dedicated recovery planning.
+* [ ] **AI-009** AI aggression tuning: one observer year of the shipped scenario yields
+  31 wars and 3 capitulations. Acceptance: with default constants a 2-year observer run
+  produces 4-10 wars, at least two peace settlements, and no country eliminated before
+  year 2; the tuned constants and their measurements go into
+  `docs/mechanics/ai_scoring.md` and `docs/benchmarks/history.tsv`.
 
 ## Tooling / process
 

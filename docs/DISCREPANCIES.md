@@ -10,6 +10,7 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | ID | Severity | Subsystem | Reference behaviour | Current behaviour | Status |
 |---|---|---|---|---|---|
 | AIR-001 | BLOCKER | Air | Air wings, missions, superiority, CAS, losses | No air simulation at all | OPEN |
+| AIR-002 | MINOR | Air | Anti-air buildings damage raiders | Anti-air construction is refused with `PrerequisitesMissing` rather than creating a building with no effect | OPEN |
 | NAV-001 | BLOCKER | Naval | Ships, task forces, detection, missions | No naval simulation at all | OPEN |
 | POL-001 | BLOCKER | Politics | Focus trees drive national progression | No focus system | OPEN |
 | POL-002 | MAJOR | Politics | Events and decisions with triggers/options | No event/decision scripting | OPEN |
@@ -27,7 +28,8 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | LOG-008 | MINOR | Logistics | Rail damage and repair | Railway level is static after construction | OPEN |
 | MAP-008 | MINOR | Map | Rivers as graph edges with crossing penalties | Marsh is used as a crossing proxy | OPEN |
 | IND-010 | MINOR | Industry | Factory conversion, dismantling, repair of damage | Damage and repair do not exist yet | OPEN |
-| IND-011 | MINOR | Industry | Synthetic refineries and anti-air buildings | Buildable placeholders with no gameplay effect | OPEN |
+| IND-011 | MINOR | Industry | Synthetic refineries produce oil and rubber | Implemented: each refinery level adds daily oil and rubber production | CLOSED (effects); anti-air remains gated (AIR-002) |
+| IND-012 | MINOR | Industry | Ship and convoy lines draw on dockyard capacity as a separate pool | Lines producing ships/convoys draw dockyard industrial capacity but are still charged against the military factory pool in command validation, in the release rule and in the auditor | OPEN (fix with the naval milestone: one shared "pool for category" rule in validation, industry and the invariant) |
 | RES-005 | MINOR | Research | Doctrines and research bonus categories | Technologies are flat with modifiers | OPEN |
 | COU-005 | MINOR | Country | Fuel as a nationally distributed stock | Fuel is produced, stored and drawn in division order | OPEN |
 | IND-006 | MODERATE | Industry | Consumer goods modelled per factory assignment | Modelled as a capacity share (ratio) | OPEN |
