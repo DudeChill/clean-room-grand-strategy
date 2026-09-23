@@ -60,7 +60,36 @@
 
     {"key": "aircraft_design", "name": "Aircraft Design", "category": "air",
      "year": 1936, "cost_days": 100.0,
+     "modifiers": {}},
+
+    {"key": "fighter_airframe", "name": "Fighter Airframe", "category": "air",
+     "year": 1936, "cost_days": 100.0,
+     "prerequisites": ["aircraft_design"],
      "unlock_equipment": ["fighter_1"],
+     "modifiers": {}},
+
+    {"key": "cas_airframe", "name": "Close Air Support Airframe", "category": "air",
+     "year": 1936, "cost_days": 100.0,
+     "prerequisites": ["aircraft_design"],
+     "unlock_equipment": ["cas_1"],
+     "modifiers": {}},
+
+    {"key": "bomber_airframe", "name": "Bomber Airframe", "category": "air",
+     "year": 1936, "cost_days": 120.0,
+     "prerequisites": ["aircraft_design"],
+     "unlock_equipment": ["tactical_bomber_1"],
+     "modifiers": {}},
+
+    {"key": "improved_fighter_airframe", "name": "Improved Fighter Airframe",
+     "category": "air", "year": 1940, "cost_days": 150.0,
+     "prerequisites": ["fighter_airframe"],
+     "unlock_equipment": ["fighter_2"],
+     "modifiers": {}},
+
+    {"key": "improved_cas_airframe", "name": "Improved Close Air Support Airframe",
+     "category": "air", "year": 1940, "cost_days": 150.0,
+     "prerequisites": ["cas_airframe"],
+     "unlock_equipment": ["cas_2"],
      "modifiers": {}},
 
     {"key": "basic_naval_design", "name": "Basic Naval Design", "category": "naval",

@@ -43,7 +43,9 @@ struct TempData {
 
 const char* kConstants = R"({
   "ic_per_military_factory": 9.0,
-  "research_base_days": 80.0
+  "research_base_days": 80.0,
+  "air_base_capacity_per_level": 250.0,
+  "air_cas_effect": 0.30
 })";
 
 const char* kEquipment = R"({
@@ -122,6 +124,11 @@ HOI_TEST(content_loads_all_files) {
     CHECK_NEAR(content.constants.research_base_days, 80.0, 1e-12);
     CHECK_NEAR(content.constants.ic_per_civilian_factory, 5.0, 1e-12);
 
+    // Air constants load by key; keys absent from the file keep their default.
+    CHECK_NEAR(content.constants.air_base_capacity_per_level, 250.0, 1e-12);
+    CHECK_NEAR(content.constants.air_cas_effect, 0.30, 1e-12);
+    CHECK_NEAR(content.constants.air_sortie_hours, 6.0, 1e-12);
+
     // Equipment by key, archetype validation, resource costs.
     const EquipmentId eq = content.equipment_id("infantry_equipment_1");
     CHECK(eq.valid());
@@ -176,6 +183,49 @@ HOI_TEST(content_loads_all_files) {
     // Four battalions (three line, one support) at 1000 persons each.
     CHECK_NEAR(tmpl->manpower, 4000.0, 1e-12);
     CHECK_GT(tmpl->combat_width, 0.0);
+}
+
+HOI_TEST(content_reads_air_stats_and_rejects_negative) {
+    TempData tmp;
+    write_standard(tmp);
+    tmp.write("equipment.json", R"({
+      "equipment": [
+        {"key": "fighter_1", "name": "Fighter I", "category": "aircraft",
+         "air_attack": 12.0, "air_defence": 8.0, "ground_attack": 24.0,
+         "agility": 40.0, "range": 3.0},
+        {"key": "bad_plane", "name": "Bad", "category": "aircraft",
+         "air_defence": -1.0, "ground_attack": -2.0, "agility": -3.0, "range": -4.0}
+      ]
+    })");
+
+    Content content;
+    std::string err;
+    CHECK(load_content(tmp.root, &content, &err));
+
+    const EquipmentDef* ok = content.equipment_def(content.equipment_id("fighter_1"));
+    CHECK(ok != nullptr);
+    CHECK_NEAR(ok->air_attack, 12.0, 1e-12);
+    CHECK_NEAR(ok->air_defence, 8.0, 1e-12);
+    CHECK_NEAR(ok->ground_attack, 24.0, 1e-12);
+    CHECK_NEAR(ok->agility, 40.0, 1e-12);
+    CHECK_NEAR(ok->range, 3.0, 1e-12);
+
+    // Negative air statistics are reported by name and clamped to zero so the
+    // invalid value can never reach the simulation.
+    const EquipmentDef* bad = content.equipment_def(content.equipment_id("bad_plane"));
+    CHECK(bad != nullptr);
+    CHECK_NEAR(bad->air_defence, 0.0, 1e-12);
+    CHECK_NEAR(bad->ground_attack, 0.0, 1e-12);
+    CHECK_NEAR(bad->agility, 0.0, 1e-12);
+    CHECK_NEAR(bad->range, 0.0, 1e-12);
+    for (const char* field : {"air_defence", "ground_attack", "agility", "range"}) {
+        bool reported = false;
+        const std::string needle = std::string("bad_plane: negative ") + field;
+        for (const std::string& e : content.load_errors) {
+            if (e.find(needle) != std::string::npos) reported = true;
+        }
+        CHECK(reported);
+    }
 }
 
 HOI_TEST(content_rejects_duplicate_equipment_key) {

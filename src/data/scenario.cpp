@@ -235,6 +235,9 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         prov.population = p["population"].as_double(0.0);
         prov.supply_hub = p["supply_hub"].as_bool(false);
         prov.railway_level = static_cast<int>(p["railway_level"].as_int(0));
+        // Air base level is a province attribute; the scenario can also raise it
+        // below (the capital and largest-industrial-state guarantees).
+        prov.air_base = static_cast<int>(p["air_base"].as_int(0));
         const Json& resources = p["resources"];
         if (resources.is_object()) {
             for (const auto& item : resources.object_items()) {
@@ -545,6 +548,58 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
         }
     }
 
+    // ---- air bases -------------------------------------------------------
+    // A province may declare an air base level directly in the map. On top of any
+    // declared levels, every country is guaranteed a usable air arm at scenario
+    // start: its capital province hosts at least a level-2 air base, and the
+    // province of its largest industrial state at least a level-1 base. Both are
+    // derived from data (capital_state and the factories placed above), so any
+    // scenario with a capital and industry gets the same treatment and wings can be
+    // formed from the first tick.
+    {
+        auto best_province_of = [&](const State& state) {
+            ProvinceId best;
+            int best_vp = -1;
+            double best_pop = -1.0;
+            for (ProvinceId pid : state.provinces) {
+                const Province* prov = world->provinces.try_get(pid);
+                if (prov == nullptr || prov->is_sea) continue;
+                const bool better =
+                    prov->victory_points > best_vp ||
+                    (prov->victory_points == best_vp && prov->population > best_pop) ||
+                    (prov->victory_points == best_vp && prov->population == best_pop &&
+                     (!best.valid() || pid.v < best.v));
+                if (better) {
+                    best_vp = prov->victory_points;
+                    best_pop = prov->population;
+                    best = pid;
+                }
+            }
+            return best;
+        };
+        world->countries.for_each([&](CountryId cid, const Country& country) {
+            const State* capital = world->states.try_get(country.capital);
+            if (capital != nullptr) {
+                Province* p = world->provinces.try_get(best_province_of(*capital));
+                if (p != nullptr && p->air_base < 2) p->air_base = 2;
+            }
+            StateId largest;
+            int largest_factories = -1;
+            world->states.for_each([&](StateId sid, const State& state) {
+                if (state.owner != cid) return;
+                if (state.total_factories() > largest_factories) {
+                    largest_factories = state.total_factories();
+                    largest = sid;
+                }
+            });
+            const State* big = world->states.try_get(largest);
+            if (big != nullptr) {
+                Province* p = world->provinces.try_get(best_province_of(*big));
+                if (p != nullptr && p->air_base < 1) p->air_base = 1;
+            }
+        });
+    }
+
     // ---- starting research, laws, stockpile -------------------------------
     for (size_t i = 0; i < jcountries.size(); ++i) {
         const Json& c = jcountries[i];
@@ -718,6 +773,82 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
             }
         }
         country.armies.push_back(army_id);
+    }
+
+    // ---- starting air wings ----------------------------------------------
+    // A country may list starting wings. Aircraft are drawn from the country's
+    // stockpile exactly as CreateAirWing does (through the same stockpile draw), so
+    // a wing is never created with planes that do not exist.
+    for (size_t i = 0; i < jcountries.size(); ++i) {
+        const Json& c = jcountries[i];
+        const CountryId cid = by_tag.at(c["tag"].as_string());
+        Country& country = world->countries[cid];
+        const Json& jwings = c["wings"];
+        if (!jwings.is_array()) continue;
+        for (size_t k = 0; k < jwings.size(); ++k) {
+            const Json& wj = jwings[k];
+            const std::string eq_key = wj["equipment"].as_string();
+            const EquipmentId eq = content.equipment_id(eq_key);
+            const EquipmentDef* def = content.equipment_def(eq);
+            if (def == nullptr || def->is_archetype ||
+                def->category != EquipmentCategory::Aircraft) {
+                warnings.push_back(scenario_path + ": country " + country.tag +
+                                   ": wing equipment " + eq_key +
+                                   " is not an aircraft model");
+                continue;
+            }
+            const std::string pk = wj["province"].as_string();
+            auto pit = index.provinces.find(pk);
+            const Province* base =
+                pit == index.provinces.end() ? nullptr : world->provinces.try_get(pit->second);
+            if (base == nullptr || base->is_sea || base->controller != cid) {
+                warnings.push_back(scenario_path + ": country " + country.tag +
+                                   ": wing base " + pk + " is not controlled by it");
+                continue;
+            }
+            const int want = static_cast<int>(wj["planes"].as_int(0));
+            if (want <= 0) {
+                warnings.push_back(scenario_path + ": country " + country.tag +
+                                   ": wing has non-positive planes");
+                continue;
+            }
+            // Draw the aircraft from the stockpile (the same operation
+            // reinforce_air_wing performs for a command-created wing).
+            int delivered = want;
+            if (eq.v < country.equipment_stockpile.size()) {
+                const double stock = country.equipment_stockpile[eq.v];
+                if (stock < static_cast<double>(delivered)) {
+                    delivered = static_cast<int>(stock);
+                }
+                country.equipment_stockpile[eq.v] = stock - delivered;
+            } else {
+                delivered = 0;
+            }
+            if (delivered <= 0) {
+                warnings.push_back(scenario_path + ": country " + country.tag +
+                                   ": no " + eq_key + " in stockpile for a starting wing");
+                continue;
+            }
+            if (delivered < want) {
+                warnings.push_back(scenario_path + ": country " + country.tag +
+                                   ": only " + std::to_string(delivered) + " of " +
+                                   std::to_string(want) + " " + eq_key +
+                                   " available for a starting wing");
+            }
+            AirWing wing;
+            wing.country = cid;
+            wing.equipment = eq;
+            wing.base = pit->second;
+            wing.region = base->region;
+            wing.max_planes = want;
+            wing.planes = delivered;
+            wing.mission = AirMission::AirSuperiority;
+            wing.name =
+                def->name + " wing " + std::to_string(country.wings.size() + 1);
+            const AirWingId id = world->air_wings.create(wing);
+            world->air_wings[id].id = id;
+            country.wings.push_back(id);
+        }
     }
 
     // ---- puppets and overlords --------------------------------------------

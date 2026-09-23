@@ -44,11 +44,18 @@ time has passed.
 * emergent encirclement, supply debugger with route and bottleneck
 * fuel production, storage and consumption by motorised/armoured formations
 
-## 0.6 Air & Naval (not started)
+## 0.6 Air & Naval (air reached, naval not started)
 
-* air wings, air bases, range, missions, sorties, detection, losses
-* ships, task forces, fleets, sea regions, detection, positioning, screening
-* naval invasion workflow end to end
+Air (reached in v0.2.0):
+
+* air wings, bases, range, missions, sorties, losses and replacements
+* air control per region feeding land combat, CAS, strategic bombing, logistics
+  strike
+* anti-air defence; AI air layer; client air panel and overlay
+
+Naval (open, discrepancy NAV-001): ships, task forces, sea regions, detection,
+positioning, screening, convoy raiding/escort, naval invasion. Specification:
+`docs/mechanics/naval_warfare.md`.
 
 ## 0.7 Politics, Diplomacy & Occupation (in progress)
 

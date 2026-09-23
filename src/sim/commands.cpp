@@ -17,6 +17,7 @@
 #include "core/math.h"
 #include "data/content.h"
 #include "game/game.h"
+#include "sim/air.h"
 #include "sim/combat.h"
 #include "sim/diplomacy.h"
 #include "sim/industry.h"
@@ -76,6 +77,7 @@ int current_building_level(const World& w, BuildingKind kind, StateId state, Pro
         case BuildingKind::AirBase: return p->air_base;
         case BuildingKind::NavalBase: return p->naval_base;
         case BuildingKind::Radar: return p->radar;
+        case BuildingKind::AntiAir: return p->anti_air;
         case BuildingKind::Fort: return p->fort_level;
         default: return 0;
     }
@@ -502,6 +504,51 @@ CommandResult do_motorize_supply(Game& g, const Command& cmd) {
     return CommandResult::Applied;
 }
 
+CommandResult do_create_air_wing(Game& g, const Command& cmd) {
+    World& w = g.world;
+    Country& c = w.countries[cmd.country];
+    const EquipmentDef* def = g.content.equipment_def(cmd.equipment);
+    AirWing wing;
+    wing.country = cmd.country;
+    wing.equipment = cmd.equipment;
+    wing.base = cmd.province;
+    const Province* base = w.province(cmd.province);
+    wing.region = base ? base->region : RegionId{};
+    wing.max_planes = std::max(1, cmd.value);
+    wing.planes = 0;  // filled from the stockpile immediately below
+    wing.mission = AirMission::AirSuperiority;
+    wing.name = std::string(def ? def->name : "Air") + " wing " + std::to_string(c.wings.size() + 1);
+    const AirWingId id = w.air_wings.create(wing);
+    AirWing* created = w.air_wings.try_get(id);
+    if (!created) return CommandResult::QueueFull;
+    c.wings.push_back(id);
+    reinforce_air_wing(g, *created);
+    g.log_event("air", "wing '" + created->name + "' formed", cmd.country);
+    return CommandResult::Applied;
+}
+
+CommandResult do_deploy_air_wing(Game& g, const Command& cmd) {
+    AirWing* wing = g.world.wing(cmd.wing);
+    if (!wing) return CommandResult::UnknownEntity;
+    wing->base = cmd.province;
+    const Province* p = g.world.province(cmd.province);
+    if (p) wing->region = p->region;
+    return CommandResult::Applied;
+}
+
+CommandResult do_set_air_mission(Game& g, const Command& cmd) {
+    AirWing* wing = g.world.wing(cmd.wing);
+    if (!wing) return CommandResult::UnknownEntity;
+    wing->mission = static_cast<AirMission>(cmd.value);
+    wing->region = cmd.region;
+    return CommandResult::Applied;
+}
+
+CommandResult do_disband_air_wing(Game& g, const Command& cmd) {
+    disband_air_wing(g, cmd.wing);
+    return CommandResult::Applied;
+}
+
 }  // namespace
 
 const char* command_type_name(CommandType t) {
@@ -526,6 +573,10 @@ const char* command_type_name(CommandType t) {
         case CommandType::OfferPeace: return "offer_peace";
         case CommandType::JoinFaction: return "join_faction";
         case CommandType::LeaveFaction: return "leave_faction";
+        case CommandType::CreateAirWing: return "create_air_wing";
+        case CommandType::DeployAirWing: return "deploy_air_wing";
+        case CommandType::SetAirMission: return "set_air_mission";
+        case CommandType::DisbandAirWing: return "disband_air_wing";
         case CommandType::SetLaw: return "set_law";
         case CommandType::SetTradePolicy: return "set_trade_policy";
         case CommandType::SetStance: return "set_stance";
@@ -590,10 +641,6 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             const BuildingKind kind = static_cast<BuildingKind>(cmd.value);
             const BuildingDef* def = find_building(g.content, kind);
             if (!def) return CommandResult::PrerequisitesMissing;
-            // Anti-air only affects air raids, and air warfare does not exist yet
-            // (discrepancy AIR-002). Refusing the order is honest; accepting it would
-            // create a building with no gameplay effect.
-            if (kind == BuildingKind::AntiAir) return CommandResult::PrerequisitesMissing;
             if (!building_unlocked(g, cmd.country, def->key)) return CommandResult::PrerequisitesMissing;
             if (static_cast<int>(c->construction.queue.size()) >= c->construction.max_queue_size) {
                 return CommandResult::QueueFull;
@@ -765,6 +812,53 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (c->faction == 0) return CommandResult::InvalidValue;
             return CommandResult::Applied;
         }
+        case CommandType::CreateAirWing: {
+            const EquipmentDef* def = g.content.equipment_def(cmd.equipment);
+            if (!def || def->is_archetype) return CommandResult::UnknownEntity;
+            if (def->category != EquipmentCategory::Aircraft) return CommandResult::InvalidTarget;
+            if (!equipment_unlocked(g, cmd.country, cmd.equipment)) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            const Province* base = g.world.province(cmd.province);
+            if (!base || base->is_sea || base->controller != cmd.country) {
+                return CommandResult::NotOwner;
+            }
+            if (base->air_base <= 0) return CommandResult::PrerequisitesMissing;
+            if (cmd.value < 10 || cmd.value > 1000) return CommandResult::InvalidValue;
+            if (planes_stationed_at(g, cmd.province) + cmd.value > air_base_capacity(g, cmd.province)) {
+                return CommandResult::QueueFull;
+            }
+            return CommandResult::Applied;
+        }
+        case CommandType::DeployAirWing: {
+            const AirWing* wing = g.world.wing(cmd.wing);
+            if (!wing || wing->country != cmd.country) return CommandResult::UnknownEntity;
+            const Province* base = g.world.province(cmd.province);
+            if (!base || base->is_sea || base->controller != cmd.country) {
+                return CommandResult::NotOwner;
+            }
+            if (base->air_base <= 0) return CommandResult::PrerequisitesMissing;
+            if (planes_stationed_at(g, cmd.province) + wing->max_planes >
+                air_base_capacity(g, cmd.province)) {
+                return CommandResult::QueueFull;
+            }
+            return CommandResult::Applied;
+        }
+        case CommandType::SetAirMission: {
+            const AirWing* wing = g.world.wing(cmd.wing);
+            if (!wing || wing->country != cmd.country) return CommandResult::UnknownEntity;
+            if (cmd.value <= 0 || cmd.value >= static_cast<int>(AirMission::Count)) {
+                return CommandResult::InvalidValue;
+            }
+            if (!g.world.regions.alive(cmd.region)) return CommandResult::UnknownEntity;
+            if (!wing_can_reach(g, *wing, cmd.region)) return CommandResult::InvalidTarget;
+            return CommandResult::Applied;
+        }
+        case CommandType::DisbandAirWing: {
+            const AirWing* wing = g.world.wing(cmd.wing);
+            if (!wing || wing->country != cmd.country) return CommandResult::UnknownEntity;
+            return CommandResult::Applied;
+        }
         case CommandType::SetLaw: {
             const LawDef* law = g.content.law(cmd.text);
             if (!law) return CommandResult::UnknownEntity;
@@ -831,6 +925,10 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::LeaveFaction:
             return leave_faction(g, cmd.country) ? CommandResult::Applied
                                                  : CommandResult::PrerequisitesMissing;
+        case CommandType::CreateAirWing: return do_create_air_wing(g, cmd);
+        case CommandType::DeployAirWing: return do_deploy_air_wing(g, cmd);
+        case CommandType::SetAirMission: return do_set_air_mission(g, cmd);
+        case CommandType::DisbandAirWing: return do_disband_air_wing(g, cmd);
         case CommandType::SetLaw: return do_set_law(g, cmd);
         case CommandType::SetTradePolicy: return do_set_trade_policy(g, cmd);
         case CommandType::SetStance: return do_set_stance(g, cmd);
@@ -929,9 +1027,11 @@ void serialize_command(ByteWriter& w, const Command& c) {
     w.u32(c.province.v);
     w.u32(c.province_b.v);
     w.u32(c.state.v);
+    w.u32(c.region.v);
     w.u32(c.division.v);
     w.u32(c.army.v);
     w.u32(c.character.v);
+    w.u32(c.wing.v);
     w.u32(c.equipment.v);
     w.u32(c.template_id.v);
     w.u32(c.tech.v);
@@ -960,9 +1060,11 @@ Command deserialize_command(ByteReader& r) {
     r.u32(&c.province.v);
     r.u32(&c.province_b.v);
     r.u32(&c.state.v);
+    r.u32(&c.region.v);
     r.u32(&c.division.v);
     r.u32(&c.army.v);
     r.u32(&c.character.v);
+    r.u32(&c.wing.v);
     r.u32(&c.equipment.v);
     r.u32(&c.template_id.v);
     r.u32(&c.tech.v);

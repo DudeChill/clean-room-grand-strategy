@@ -213,6 +213,8 @@ bool apply_client_command(Game& g, const Json& payload, std::string* err) {
     cmd.character = CharacterId(id_field("character", INVALID_ID));
     cmd.target_country = CountryId(id_field("target_country", INVALID_ID));
     cmd.war = WarId(id_field("war", INVALID_ID));
+    cmd.wing = AirWingId(id_field("wing", INVALID_ID));
+    cmd.region = RegionId(id_field("region", INVALID_ID));
     if (payload.has("equipment")) {
         const Json& e = payload.at("equipment");
         if (e.is_string()) {
@@ -300,6 +302,7 @@ std::string map_static_json(const Game& g) {
         j.set("vp", Json(p.victory_points));
         j.set("infra", Json(p.infrastructure));
         j.set("hub", Json(p.supply_hub));
+        j.set("air_base", Json(p.air_base));
         Json adj = Json::array();
         for (ProvinceId a : p.adj) adj.push_back(Json(static_cast<uint32_t>(a.v)));
         j.set("adj", adj);
@@ -464,6 +467,51 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         factions.push_back(j);
     }
     root.set("factions", factions);
+
+    Json air_regions = Json::array();
+    w.regions.for_each([&](RegionId rid, const Region& r) {
+        if (r.is_sea) return;
+        Json j = Json::object();
+        j.set("id", Json(static_cast<uint32_t>(rid.v)));
+        j.set("name", Json(r.name));
+        Json control = Json::array();
+        for (const auto& entry : r.air_control) {
+            const Country* c = w.country(entry.first);
+            Json e = Json::object();
+            e.set("tag", Json(c ? c->tag : std::string("?")));
+            e.set("country", Json(static_cast<uint32_t>(entry.first.v)));
+            e.set("share", Json(entry.second));
+            control.push_back(e);
+        }
+        j.set("control", control);
+        air_regions.push_back(j);
+    });
+    root.set("air_regions", air_regions);
+
+    Json wings = Json::array();
+    w.air_wings.for_each([&](AirWingId wid, const AirWing& wing) {
+        Json j = Json::object();
+        j.set("id", Json(static_cast<uint32_t>(wid.v)));
+        j.set("country", Json(static_cast<uint32_t>(wing.country.v)));
+        const EquipmentDef* def = g.content.equipment_def(wing.equipment);
+        j.set("equipment", Json(def ? def->key : std::string("?")));
+        j.set("name", Json(wing.name));
+        j.set("planes", Json(wing.planes));
+        j.set("max_planes", Json(wing.max_planes));
+        j.set("base", Json(static_cast<uint32_t>(wing.base.valid() ? wing.base.v : 0)));
+        const Province* bp = w.province(wing.base);
+        j.set("base_name", Json(bp ? bp->name : std::string("")));
+        j.set("region", Json(static_cast<uint32_t>(wing.region.valid() ? wing.region.v : 0)));
+        const Region* rg = wing.region.valid() ? w.regions.try_get(wing.region) : nullptr;
+        j.set("region_name", Json(rg ? rg->name : std::string("")));
+        j.set("mission", Json(std::string(air_mission_name(wing.mission))));
+        j.set("mission_id", Json(static_cast<int>(wing.mission)));
+        j.set("efficiency", Json(wing.efficiency));
+        j.set("experience", Json(wing.experience));
+        j.set("losses", Json(wing.losses));
+        wings.push_back(j);
+    });
+    root.set("wings", wings);
 
     Json events = Json::array();
     const size_t event_start = g.events.size() > 200 ? g.events.size() - 200 : 0;
@@ -899,6 +947,7 @@ int run_server(Game& g, const ServerOptions& opts, volatile bool* stop) {
                     d.set("supply", Json(line.supply_mod));
                     d.set("commander", Json(line.commander_mod));
                     d.set("experience", Json(line.experience_mod));
+                    d.set("air", Json(line.air_mod));
                     d.set("final_attack", Json(line.final_attack));
                     d.set("enemy_defense", Json(line.enemy_defense));
                     d.set("damage", Json(line.damage));

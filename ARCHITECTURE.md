@@ -36,6 +36,7 @@ player input / AI  ->  Command  ->  validation  ->  simulation phases
 | 4 | combat | `sim/combat.cpp` | start battles, org/strength damage, retreats |
 | 5 | territory | `sim/territory.cpp` | control transfer, occupation, capitulation effects |
 | 6 | supply | `sim/supply.cpp` | supply network flow -> per-province and per-division supply |
+| 6b | air | `sim/air.cpp` | sorties, air combat, missions, losses, air control per region |
 | 7 | industry | `sim/industry.cpp` | resources, production lines, construction, stockpile |
 | 8 | research | `sim/research.cpp` | research progress, tech effects |
 | 9 | politics | `sim/politics.cpp` | PP, laws, stability, war support, manpower |
@@ -190,6 +191,27 @@ consumer_goods_ratio = consumer_goods_base + law effects - war effects (min 0.0)
 Per strategic region, re-evaluated daily: temperature from latitude proxy + season,
 then `RNG_WEATHER` decides rain/snow/mud/sandstorm using terrain and temperature.
 Effects: movement cost multiplier, combat attack penalty, air (later) and attrition.
+
+### 5.9 Air
+
+```
+base capacity(w, province) = province.air_base * air_base_capacity_per_level
+wing planes               += replacements drawn from the country's stockpile
+sorties(w)                = planes * efficiency / sortie_hours
+air combat(w, e)          = attack(w) * (1 - air_defence_share(e)) * agility(w) factor
+                            (one documented RNG_COMBAT draw per engagement)
+losses(w)                 = damage / durability
+efficiency(w)             = clamp01(planes / max_planes)                              (degrades with losses)
+air_control(region, c)    = sum over c's wings flying there of planes * efficiency * w(mission)
+                            divided by the same total for all countries present
+air_support(province)     = CAS term (attackers only) + superiority term (both sides),
+                            clamped, consumed by land combat as BattleDebugLine::air_mod
+```
+
+`phase_air` runs after `phase_supply` and before `phase_industry`, so aircraft losses
+become equipment demand in the same tick's industry step. Land combat reads the
+previous hour's air control (combat runs before air in the tick order) — that is
+intentional and documented at the call site.
 
 ## 6. Data formats
 

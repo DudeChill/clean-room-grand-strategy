@@ -137,6 +137,23 @@ function provinceColor(p) {
       const c = snap.controller[p.id];
       return c >= 0 ? countryColor(c) : '#2c333c';
     }
+    case 'air': {
+      // Green where the player's side controls the sky, red where the enemy does.
+      const p2 = p.region !== undefined ? App.airControl.get(p.region) : null;
+      const me = snap.player ? snap.player.id : -1;
+      let mine = 0, theirs = 0;
+      if (p2) {
+        for (const [country, share] of p2) {
+          if (country === me) mine += share;
+          else theirs += share;
+        }
+      }
+      const total = mine + theirs;
+      if (total <= 0.001) return p.sea ? (TERRAIN_COLORS[p.terrain] || '#20456b') : '#3a3f46';
+      const balance = (mine - theirs) / total;  // -1 enemy, +1 friendly
+      const t = (balance + 1) / 2;
+      return `rgb(${Math.round(200 * (1 - t) + 40 * t)},${Math.round(60 + 100 * t)},${Math.round(60 + 40 * t)})`;
+    }
     case 'front': {
       const c = snap.controller[p.id];
       let base = countryColor(c);
@@ -423,7 +440,7 @@ document.addEventListener('keydown', (e) => {
     renderLeft();
   }
   const tabKeys = { m: 'military', p: 'production', c: 'construction', r: 'research',
-                    d: 'diplomacy', l: 'log' };
+                    d: 'diplomacy', l: 'log', a: 'air' };
   const tab = tabKeys[e.key.toLowerCase()];
   if (tab && !e.ctrlKey && !e.metaKey) {
     App.tab = tab;
@@ -540,7 +557,7 @@ async function renderProvinceDetails(pid) {
     html += '<br><span class="dim">last tick</span> base ' + d.base_attack.toFixed(1) +
       ` × terrain ${d.terrain.toFixed(2)} × supply ${d.supply.toFixed(2)}` +
       ` + planning ${d.planning.toFixed(2)} + commander ${d.commander.toFixed(2)}` +
-      ` + exp ${d.experience.toFixed(2)} → ${d.final_attack.toFixed(1)} vs ` +
+      ` + exp ${d.experience.toFixed(2)} + air ${(d.air || 0).toFixed(2)} → ${d.final_attack.toFixed(1)} vs ` +
       `defense ${d.enemy_defense.toFixed(1)} = damage ${d.damage.toFixed(2)}` +
       ` (org ${d.org_damage.toFixed(2)}, str ${d.strength_damage.toFixed(3)})`;
   }
@@ -665,7 +682,8 @@ function constructionPanel() {
   const p = App.snap.player;
   const el = document.getElementById('panel-construction');
   const kinds = ['civilian_factory', 'military_factory', 'dockyard', 'infrastructure', 'railway',
-                 'supply_hub', 'air_base', 'naval_base', 'radar', 'fort', 'synthetic_refinery'];
+                 'supply_hub', 'air_base', 'naval_base', 'radar', 'fort', 'anti_air',
+                 'synthetic_refinery'];
   const mine = (App.snap.player.states || []).slice().sort((a, b) => a.name.localeCompare(b.name));
   let html = `<div class="section"><div class="row-actions">
     <select id="build-kind">${kinds.map((k) => `<option>${k}</option>`).join('')}</select>
@@ -686,7 +704,7 @@ function constructionPanel() {
     const state = Number(el.querySelector('#build-state').value);
     const kinds2 = { civilian_factory: 0, military_factory: 1, dockyard: 2, infrastructure: 3,
                      railway: 4, supply_hub: 5, air_base: 6, naval_base: 7, radar: 8, fort: 9,
-                     synthetic_refinery: 11 };
+                     anti_air: 10, synthetic_refinery: 11 };
     const payload = { type: 'start_construction', kind: kinds2[kindName], state, province: stateProvince(state) };
     if (await sendCommand(payload)) refresh();
   });
@@ -911,12 +929,96 @@ function logPanel() {
     `<div class="small">[${e.tick}] <b>${e.kind}</b> ${e.text}</div>`).join('') || '<div class="small">no events</div>';
 }
 
+function airPanel() {
+  const p = App.snap.player;
+  const el = document.getElementById('panel-air');
+  const wings = (App.snap.wings || []).filter((w) => w.country === p.id);
+  const regions = (App.snap.air_regions || []);
+  const regionName = (id) => {
+    const r = regions.find((x) => x.id === id);
+    return r ? r.name : `region ${id}`;
+  };
+
+  // Air bases the player controls, for the "form wing" form.
+  const bases = [];
+  for (const prov of App.map.provinces) {
+    if (prov.sea || !prov.air_base) continue;
+    if (App.snap.controller[prov.id] !== p.id) continue;
+    bases.push(prov);
+  }
+  const fighters = (App.snap.equipment_defs || []).filter((e) => e.category === 'aircraft');
+  const stock = p.stockpile || {};
+
+  let html = '<div class="section"><b>Form a wing</b><div class="row-actions">' +
+    `<select id="wing-equipment">${fighters.map((f) =>
+      `<option value="${f.key}">${f.name} (stock ${Math.round(stock[f.key] || 0)})</option>`).join('')}</select>` +
+    `<select id="wing-base">${bases.map((b) =>
+      `<option value="${b.id}">${b.name} (base ${b.air_base})</option>`).join('')}</select>` +
+    '<input id="wing-size" type="number" min="10" max="1000" value="100" style="width:70px" />' +
+    '<button id="create-wing">Form</button></div>' +
+    '<div class="small dim">a province needs an air base and free capacity; aircraft come from the stockpile</div></div>';
+
+  html += '<h3>Wings</h3><table>' +
+    '<tr><th>Wing</th><th>Model</th><th class="num">Planes</th><th class="num">Eff</th>' +
+    '<th class="num">Losses</th><th>Base / region</th><th>Mission</th><th></th></tr>';
+  for (const w of wings) {
+    const missions = ['none', 'air_superiority', 'interception', 'close_air_support',
+                      'strategic_bombing', 'logistics_strike', 'reconnaissance'];
+    const options = missions.map((m, i) =>
+      `<option value="${i}"${i === w.mission_id ? ' selected' : ''}>${m}</option>`).join('');
+    html += `<tr><td>${w.name}</td><td>${w.equipment}</td>` +
+      `<td class="num">${w.planes}/${w.max_planes}</td>` +
+      `<td class="num">${(w.efficiency * 100).toFixed(0)}%</td>` +
+      `<td class="num">${w.losses}</td>` +
+      `<td>${w.base_name}<br><span class="dim">${w.region_name}</span></td>` +
+      `<td><select data-mission="${w.id}">${options}</select></td>` +
+      `<td><button data-disband="${w.id}">×</button></td></tr>`;
+  }
+  if (wings.length === 0) html += '<tr><td colspan="8" class="dim">no wings</td></tr>';
+  html += '</table>';
+
+  html += '<h3>Contested regions</h3><table><tr><th>Region</th><th>Air control</th></tr>';
+  let contested = 0;
+  for (const r of regions) {
+    if (!r.control || r.control.length === 0) continue;
+    ++contested;
+    const bars = r.control.map((c) =>
+      `${c.tag} ${(c.share * 100).toFixed(0)}%`).join(' · ');
+    html += `<tr><td>${r.name}</td><td>${bars}</td></tr>`;
+  }
+  if (contested === 0) html += '<tr><td colspan="2" class="dim">no air activity</td></tr>';
+  html += '</table>';
+
+  el.innerHTML = html;
+
+  el.querySelector('#create-wing').addEventListener('click', async () => {
+    const equipment = el.querySelector('#wing-equipment').value;
+    const province = Number(el.querySelector('#wing-base').value);
+    const value = Number(el.querySelector('#wing-size').value);
+    if (await sendCommand({ type: 'create_air_wing', equipment, province, value })) refresh();
+  });
+  for (const sel of el.querySelectorAll('select[data-mission]')) {
+    sel.addEventListener('change', async () => {
+      const wing = Number(sel.dataset.mission);
+      const w = (App.snap.wings || []).find((x) => x.id === wing);
+      const region = w ? w.region : 0;
+      if (await sendCommand({ type: 'set_air_mission', wing, region, value: Number(sel.value) })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-disband]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'disband_air_wing', wing: Number(b.dataset.disband) })) refresh();
+    });
+  }
+}
+
 function renderPanels() {
   if (!App.snap || !App.snap.player) return;
   if (App.tab === 'production') productionPanel();
   if (App.tab === 'construction') constructionPanel();
   if (App.tab === 'research') researchPanel();
   if (App.tab === 'military') militaryPanel();
+  if (App.tab === 'air') airPanel();
   if (App.tab === 'diplomacy') diplomacyPanel();
   if (App.tab === 'log') logPanel();
 }
@@ -930,6 +1032,12 @@ async function refresh() {
   if (!snap || !snap.tick) return;
   const before = App.snap ? App.snap.tick : -1;
   App.snap = snap;
+  App.airControl = new Map();
+  for (const r of (snap.air_regions || [])) {
+    const m = new Map();
+    for (const entry of (r.control || [])) m.set(entry.country, entry.share);
+    App.airControl.set(r.id, m);
+  }
   renderTop();
   renderLeft();
   const now = Date.now();

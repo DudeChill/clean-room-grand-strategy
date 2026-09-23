@@ -76,7 +76,10 @@
         "field_artillery",
         "motorization",
         "light_armor",
-        "production_lines"
+        "production_lines",
+        "aircraft_design",
+        "fighter_airframe",
+        "cas_airframe"
       ],
       "production_lines": [
         {
@@ -105,7 +108,9 @@
         "support_equipment_1": 192,
         "artillery_1": 96,
         "motorized_1": 160,
-        "armor_1": 80
+        "armor_1": 80,
+        "fighter_1": 100,
+        "cas_1": 50
       },
       "laws": [
         "conscription_limited",
@@ -196,6 +201,18 @@
           "province": "p1118",
           "count": 1
         }
+      ],
+      "wings": [
+        {
+          "equipment": "fighter_1",
+          "province": "p2016",
+          "planes": 100
+        },
+        {
+          "equipment": "cas_1",
+          "province": "p2016",
+          "planes": 50
+        }
       ]
     },
     {
@@ -271,7 +288,9 @@
         "field_artillery",
         "basic_naval_design",
         "aircraft_design",
-        "construction_engineering"
+        "construction_engineering",
+        "fighter_airframe",
+        "cas_airframe"
       ],
       "production_lines": [
         {
@@ -296,7 +315,9 @@
         "support_equipment_1": 192,
         "artillery_1": 96,
         "destroyer_1": 40,
-        "convoy_1": 200
+        "convoy_1": 200,
+        "fighter_1": 100,
+        "cas_1": 50
       },
       "laws": [
         "conscription_extensive",
@@ -371,6 +392,18 @@
           "template": "garrison_division",
           "province": "p892",
           "count": 1
+        }
+      ],
+      "wings": [
+        {
+          "equipment": "fighter_1",
+          "province": "p122",
+          "planes": 100
+        },
+        {
+          "equipment": "cas_1",
+          "province": "p122",
+          "planes": 50
         }
       ]
     },

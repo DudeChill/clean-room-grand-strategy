@@ -12,12 +12,13 @@
 //   Map        geography: province store (adjacency, sea_adj, resources, grid
 //              coordinates, the supply cache fields supply_level/supply_source/
 //              supply_bottleneck), state store (factories, occupation counters),
-//              region store (weather)
+//              region store (weather, per-country air control)
 //   Countries  country identity and ownership bookkeeping (id, tag, name, alive,
 //              ideology, overlord, puppets, capital), equipment_stockpile,
 //              law_levels, the four Modifier sets, the per-resource
 //              produced/consumed/imported/exported aggregates, starting_factories,
-//              the general roster (Country::generals) and the character store
+//              the general roster (Country::generals), the air wing roster
+//              (Country::wings) and the character store
 //   Economy    the content snapshot - equipment, division templates, technologies,
 //              laws, buildings and SimConstants, i.e. every table the simulation
 //              reads - plus per country: production lines, construction queue,
@@ -27,7 +28,7 @@
 //              a file without help from data/; the derived key -> id maps are rebuilt
 //              on load instead of being stored twice
 //   Military   per country: division/army rosters and the training list; then the
-//              army store and the division store
+//              army store, the division store and the air wing store
 //   Battles    the battle store, including both sides, the debug breakdown lines
 //              and the last-tick markers
 //   Diplomacy  the war store, factions, the ordered relation map, and per country
@@ -292,6 +293,7 @@ void write_province(ByteWriter& w, const Province& p) {
     w.i32(p.air_base);
     w.i32(p.naval_base);
     w.i32(p.radar);
+    w.i32(p.anti_air);
     w.boolean(p.supply_hub);
     w.i32(p.railway_level);
     w.f64(p.population);
@@ -325,6 +327,7 @@ bool read_province(ByteReader& r, Province* p) {
     if (!r.boolean(&p->coastal) || !r.boolean(&p->is_sea)) return false;
     if (!r.i32(&p->victory_points) || !r.i32(&p->infrastructure) || !r.i32(&p->fort_level)) return false;
     if (!r.i32(&p->air_base) || !r.i32(&p->naval_base) || !r.i32(&p->radar)) return false;
+    if (!r.i32(&p->anti_air)) return false;
     if (!r.boolean(&p->supply_hub) || !r.i32(&p->railway_level)) return false;
     if (!r.f64(&p->population)) return false;
     if (!read_resources(r, p->resource_yield)) return false;
@@ -392,6 +395,14 @@ void write_region(ByteWriter& w, const Region& r) {
     w.boolean(r.snow);
     w.boolean(r.mud);
     w.boolean(r.sandstorm);
+    // Air control is derived each tick by the air phase, but it is authoritative
+    // between ticks and the land phase reads it: it is written in region order so
+    // the bytes are deterministic.
+    w.u32(static_cast<uint32_t>(r.air_control.size()));
+    for (const std::pair<CountryId, double>& e : r.air_control) {
+        w.u32(e.first.v);
+        w.f64(e.second);
+    }
 }
 
 bool read_region(ByteReader& r, Region* g) {
@@ -403,6 +414,16 @@ bool read_region(ByteReader& r, Region* g) {
     if (!read_ids(r, &g->provinces)) return false;
     if (!r.f64(&g->temperature)) return false;
     if (!r.boolean(&g->rain) || !r.boolean(&g->snow) || !r.boolean(&g->mud) || !r.boolean(&g->sandstorm)) return false;
+    uint32_t n = 0;
+    if (!read_count(r, 12, &n)) return false;  // country id + share
+    g->air_control.clear();
+    g->air_control.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t country = INVALID_ID;
+        double share = 0.0;
+        if (!r.u32(&country) || !r.f64(&share)) return false;
+        g->air_control.emplace_back(CountryId(country), share);
+    }
     return true;
 }
 
@@ -445,6 +466,10 @@ void write_equipment(ByteWriter& w, const EquipmentDef& e) {
     w.f64(e.soft_attack);
     w.f64(e.hard_attack);
     w.f64(e.air_attack);
+    w.f64(e.air_defence);
+    w.f64(e.ground_attack);
+    w.f64(e.agility);
+    w.f64(e.range);
     w.f64(e.defense);
     w.f64(e.breakthrough);
     w.f64(e.armor);
@@ -471,6 +496,8 @@ bool read_equipment(ByteReader& r, EquipmentDef* e) {
     if (!r.i32(&e->year)) return false;
     if (!r.str(&e->archetype)) return false;
     if (!r.f64(&e->soft_attack) || !r.f64(&e->hard_attack) || !r.f64(&e->air_attack)) return false;
+    if (!r.f64(&e->air_defence) || !r.f64(&e->ground_attack) || !r.f64(&e->agility)) return false;
+    if (!r.f64(&e->range)) return false;
     if (!r.f64(&e->defense) || !r.f64(&e->breakthrough) || !r.f64(&e->armor)) return false;
     if (!r.f64(&e->piercing) || !r.f64(&e->hardness) || !r.f64(&e->reliability)) return false;
     if (!r.f64(&e->speed) || !r.f64(&e->max_strength) || !r.f64(&e->organization)) return false;
@@ -553,16 +580,24 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
         k.construction_cost_factory, k.construction_cost_infrastructure, k.construction_cost_railway,
         k.construction_cost_supply_hub, k.construction_cost_air_base, k.construction_cost_naval_base,
         k.construction_cost_fort, k.construction_cost_radar, k.construction_cost_synthetic,
-        k.construction_level_scaling, k.research_base_days, k.research_year_penalty,
-        k.research_speed_base, k.manpower_growth_per_year_fraction, k.recruitable_base,
-        k.base_hours_per_province, k.min_division_speed, k.river_crossing_penalty,
+        k.construction_level_scaling, k.max_factories_per_project, k.research_base_days,
+        k.research_year_penalty, k.research_speed_base, k.manpower_growth_per_year_fraction,
+        k.recruitable_base, k.base_hours_per_province, k.min_division_speed, k.river_crossing_penalty,
         k.combat_width_base, k.damage_scale, k.org_damage_share, k.strength_damage_share,
         k.armor_advantage_multiplier, k.armor_disadvantage_multiplier, k.org_recovery_base,
         k.entrenchment_per_day, k.planning_per_day, k.planning_max_attack_bonus,
         k.battle_retreat_org_threshold, k.max_battles_per_province, k.supply_hub_radius,
         k.supply_range_penalty, k.supply_demand_per_width, k.supply_rail_bonus_per_level,
-        k.supply_infrastructure_bonus_per_level, k.fuel_demand_per_day, k.political_power_per_day,
-        k.stability_drift, k.war_support_drift, k.weather_change_chance};
+        k.supply_infrastructure_bonus_per_level, k.fuel_demand_per_day,
+        k.air_base_capacity_per_level, k.air_sortie_hours, k.air_cas_effect,
+        k.air_superiority_effect, k.air_bombing_industry_damage, k.air_logistics_strike_damage,
+        k.air_anti_air_bombing_reduction, k.air_anti_air_combat_loss_factor, k.air_combat_scale,
+        k.air_aircraft_durability, k.air_agility_weight, k.air_combat_defence_floor,
+        k.air_combat_roll_base, k.air_experience_per_combat_hour, k.air_experience_per_mission_hour,
+        k.air_cas_organisation_damage, k.air_cas_strength_damage, k.air_bombing_power_unit,
+        k.air_logistics_power_unit, k.air_support_min_modifier, k.air_support_max_modifier,
+        k.air_mission_weight_contested, k.air_mission_weight_support,
+        k.political_power_per_day, k.stability_drift, k.war_support_drift, k.weather_change_chance};
     w.u32(static_cast<uint32_t>(sizeof(values) / sizeof(values[0])));
     for (double v : values) w.f64(v);
 }
@@ -570,8 +605,8 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
 bool read_constants(ByteReader& r, SimConstants* k) {
     uint32_t n = 0;
     if (!read_count(r, 8, &n)) return false;
-    if (n != 54) return false;  // a different count means a different SimConstants layout
-    double v[54] = {0.0};
+    if (n != 78) return false;  // a different count means a different SimConstants layout
+    double v[78] = {0.0};
     for (uint32_t i = 0; i < n; ++i) {
         if (!r.f64(&v[i])) return false;
     }
@@ -599,36 +634,60 @@ bool read_constants(ByteReader& r, SimConstants* k) {
     k->construction_cost_radar = v[21];
     k->construction_cost_synthetic = v[22];
     k->construction_level_scaling = v[23];
-    k->research_base_days = v[24];
-    k->research_year_penalty = v[25];
-    k->research_speed_base = v[26];
-    k->manpower_growth_per_year_fraction = v[27];
-    k->recruitable_base = v[28];
-    k->base_hours_per_province = v[29];
-    k->min_division_speed = v[30];
-    k->river_crossing_penalty = v[31];
-    k->combat_width_base = v[32];
-    k->damage_scale = v[33];
-    k->org_damage_share = v[34];
-    k->strength_damage_share = v[35];
-    k->armor_advantage_multiplier = v[36];
-    k->armor_disadvantage_multiplier = v[37];
-    k->org_recovery_base = v[38];
-    k->entrenchment_per_day = v[39];
-    k->planning_per_day = v[40];
-    k->planning_max_attack_bonus = v[41];
-    k->battle_retreat_org_threshold = v[42];
-    k->max_battles_per_province = v[43];
-    k->supply_hub_radius = v[44];
-    k->supply_range_penalty = v[45];
-    k->supply_demand_per_width = v[46];
-    k->supply_rail_bonus_per_level = v[47];
-    k->supply_infrastructure_bonus_per_level = v[48];
-    k->fuel_demand_per_day = v[49];
-    k->political_power_per_day = v[50];
-    k->stability_drift = v[51];
-    k->war_support_drift = v[52];
-    k->weather_change_chance = v[53];
+    k->max_factories_per_project = v[24];
+    k->research_base_days = v[25];
+    k->research_year_penalty = v[26];
+    k->research_speed_base = v[27];
+    k->manpower_growth_per_year_fraction = v[28];
+    k->recruitable_base = v[29];
+    k->base_hours_per_province = v[30];
+    k->min_division_speed = v[31];
+    k->river_crossing_penalty = v[32];
+    k->combat_width_base = v[33];
+    k->damage_scale = v[34];
+    k->org_damage_share = v[35];
+    k->strength_damage_share = v[36];
+    k->armor_advantage_multiplier = v[37];
+    k->armor_disadvantage_multiplier = v[38];
+    k->org_recovery_base = v[39];
+    k->entrenchment_per_day = v[40];
+    k->planning_per_day = v[41];
+    k->planning_max_attack_bonus = v[42];
+    k->battle_retreat_org_threshold = v[43];
+    k->max_battles_per_province = v[44];
+    k->supply_hub_radius = v[45];
+    k->supply_range_penalty = v[46];
+    k->supply_demand_per_width = v[47];
+    k->supply_rail_bonus_per_level = v[48];
+    k->supply_infrastructure_bonus_per_level = v[49];
+    k->fuel_demand_per_day = v[50];
+    k->air_base_capacity_per_level = v[51];
+    k->air_sortie_hours = v[52];
+    k->air_cas_effect = v[53];
+    k->air_superiority_effect = v[54];
+    k->air_bombing_industry_damage = v[55];
+    k->air_logistics_strike_damage = v[56];
+    k->air_anti_air_bombing_reduction = v[57];
+    k->air_anti_air_combat_loss_factor = v[58];
+    k->air_combat_scale = v[59];
+    k->air_aircraft_durability = v[60];
+    k->air_agility_weight = v[61];
+    k->air_combat_defence_floor = v[62];
+    k->air_combat_roll_base = v[63];
+    k->air_experience_per_combat_hour = v[64];
+    k->air_experience_per_mission_hour = v[65];
+    k->air_cas_organisation_damage = v[66];
+    k->air_cas_strength_damage = v[67];
+    k->air_bombing_power_unit = v[68];
+    k->air_logistics_power_unit = v[69];
+    k->air_support_min_modifier = v[70];
+    k->air_support_max_modifier = v[71];
+    k->air_mission_weight_contested = v[72];
+    k->air_mission_weight_support = v[73];
+    k->political_power_per_day = v[74];
+    k->stability_drift = v[75];
+    k->war_support_drift = v[76];
+    k->weather_change_chance = v[77];
     return true;
 }
 
@@ -927,6 +986,46 @@ bool read_division(ByteReader& r, Division* d) {
     return r.u64(&d->created_tick);
 }
 
+// Air wings are entities like divisions: their id is their store slot, so every field
+// is written and the store payload carries the alive flags.
+void write_air_wing(ByteWriter& w, const AirWing& a) {
+    write_id(w, a.id);
+    write_id(w, a.country);
+    write_id(w, a.equipment);
+    w.str(a.name);
+    w.i32(a.planes);
+    w.i32(a.max_planes);
+    write_id(w, a.base);
+    write_id(w, a.region);
+    write_enum(w, a.mission);
+    w.f64(a.efficiency);
+    w.f64(a.experience);
+    w.i32(a.losses);
+    w.u64(a.last_sortie);
+}
+
+bool read_air_wing(ByteReader& r, AirWing* a) {
+    uint32_t id = INVALID_ID;
+    uint32_t country = INVALID_ID;
+    uint32_t equipment = INVALID_ID;
+    if (!r.u32(&id)) return false;
+    a->id = AirWingId(id);
+    if (!r.u32(&country) || !r.u32(&equipment)) return false;
+    a->country = CountryId(country);
+    a->equipment = EquipmentId(equipment);
+    if (!r.str(&a->name)) return false;
+    if (!r.i32(&a->planes) || !r.i32(&a->max_planes)) return false;
+    uint32_t base = INVALID_ID;
+    uint32_t region = INVALID_ID;
+    if (!r.u32(&base) || !r.u32(&region)) return false;
+    a->base = ProvinceId(base);
+    a->region = RegionId(region);
+    if (!read_enum(r, &a->mission, static_cast<int>(AirMission::Count))) return false;
+    if (!r.f64(&a->efficiency) || !r.f64(&a->experience)) return false;
+    if (!r.i32(&a->losses)) return false;
+    return r.u64(&a->last_sortie);
+}
+
 void write_army(ByteWriter& w, const Army& a) {
     write_id(w, a.id);
     write_id(w, a.country);
@@ -1008,6 +1107,7 @@ void write_debug_line(ByteWriter& w, const BattleDebugLine& d) {
     w.f64(d.supply_mod);
     w.f64(d.commander_mod);
     w.f64(d.experience_mod);
+    w.f64(d.air_mod);
     w.f64(d.final_attack);
     w.f64(d.enemy_defense);
     w.f64(d.damage);
@@ -1021,6 +1121,7 @@ bool read_debug_line(ByteReader& r, BattleDebugLine* d) {
     d->division = DivisionId(division);
     if (!r.f64(&d->base_attack) || !r.f64(&d->planning_mod) || !r.f64(&d->terrain_mod)) return false;
     if (!r.f64(&d->supply_mod) || !r.f64(&d->commander_mod) || !r.f64(&d->experience_mod)) return false;
+    if (!r.f64(&d->air_mod)) return false;
     if (!r.f64(&d->final_attack) || !r.f64(&d->enemy_defense) || !r.f64(&d->damage)) return false;
     if (!r.f64(&d->org_damage) || !r.f64(&d->strength_damage)) return false;
     return true;
@@ -1167,6 +1268,7 @@ void write_country_core(ByteWriter& w, const Country& c) {
     write_modifiers(w, c.law_modifiers);
     write_modifiers(w, c.national_modifiers);
     write_ids(w, c.generals);
+    write_ids(w, c.wings);
     w.i32(c.starting_factories);
     write_resources(w, c.resources_produced);
     write_resources(w, c.resources_consumed);
@@ -1195,6 +1297,7 @@ bool read_country_core(ByteReader& r, Country* c) {
     if (!read_modifiers(r, &c->law_modifiers)) return false;
     if (!read_modifiers(r, &c->national_modifiers)) return false;
     if (!read_ids(r, &c->generals)) return false;
+    if (!read_ids(r, &c->wings)) return false;
     if (!r.i32(&c->starting_factories)) return false;
     if (!read_resources(r, c->resources_produced)) return false;
     if (!read_resources(r, c->resources_consumed)) return false;
@@ -1627,6 +1730,7 @@ void serialize_subsystem(const Game& g, Subsystem s, ByteWriter* out) {
             });
             write_store(w, g.world.armies, write_army);
             write_store(w, g.world.divisions, write_division);
+            write_store(w, g.world.air_wings, write_air_wing);
             break;
         }
 
@@ -1718,7 +1822,8 @@ bool deserialize_subsystem(Game& g, Subsystem s, ByteReader* in) {
                 if (!read_country_military(r, c)) return false;
             }
             if (!read_store(r, g.world.armies, read_army)) return false;
-            return read_store(r, g.world.divisions, read_division);
+            if (!read_store(r, g.world.divisions, read_division)) return false;
+            return read_store(r, g.world.air_wings, read_air_wing);
         }
 
         case Subsystem::Battles:

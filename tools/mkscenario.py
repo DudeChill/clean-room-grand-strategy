@@ -271,14 +271,24 @@ DEFAULT_LINES = [("infantry_equipment_1", 0.50), ("support_equipment_1", 0.18),
 
 TECHS = {
     "VEL": ["infantry_weapons", "support_weapons", "field_artillery", "motorization",
-            "light_armor", "production_lines"],
+            "light_armor", "production_lines",
+            "aircraft_design", "fighter_airframe", "cas_airframe"],
     "KOR": ["infantry_weapons", "support_weapons", "field_artillery",
-            "basic_naval_design", "aircraft_design", "construction_engineering"],
+            "basic_naval_design", "aircraft_design", "construction_engineering",
+            "fighter_airframe", "cas_airframe"],
     "THA": ["infantry_weapons", "field_artillery", "production_lines"],
     "SUD": ["infantry_weapons", "support_weapons", "field_artillery", "production_lines"],
 }
 DEFAULT_TECHS = ["infantry_weapons", "support_weapons", "field_artillery",
                  "construction_engineering", "production_lines"]
+
+# Starting air arm: the two largest powers field a fighter wing (100 planes) and a
+# CAS wing (50 planes) based on their capital, with the aircraft already in the
+# stockpile the loader draws them from.
+AIR_POWERS = {
+    "VEL": {"fighter_1": 100, "cas_1": 50},
+    "KOR": {"fighter_1": 100, "cas_1": 50},
+}
 
 LAW = {"VEL": ("conscription_limited", "economy_civilian", 0.62, 0.35),
        "KOR": ("conscription_extensive", "economy_partial_mobilization", 0.55, 0.55),
@@ -403,11 +413,18 @@ for tag, name, ideology in COUNTRIES:
         stock["destroyer_1"] = 40
         stock["convoy_1"] = 200
 
+    # Aircraft for the starting wings live in the stockpile; the loader draws them
+    # out when it creates the wings.
+    wings = []
+    for model, planes in AIR_POWERS.get(tag, {}).items():
+        stock[model] = stock.get(model, 0) + planes
+        wings.append({"equipment": model, "province": sources[tag], "planes": planes})
+
     law, economy, stability, war_support = LAW.get(
         tag, ("conscription_limited" if len(state_list) % 2 == 0 else
               "conscription_volunteer", "economy_civilian", 0.52, 0.30))
 
-    out["countries"].append({
+    entry = {
         "tag": tag,
         "name": name,
         "ideology": ideology,
@@ -424,7 +441,10 @@ for tag, name, ideology in COUNTRIES:
         "stability": stability,
         "war_support": war_support,
         "divisions": divisions,
-    })
+    }
+    if wings:
+        entry["wings"] = wings
+    out["countries"].append(entry)
 
 with open(OUT, "w") as f:
     json.dump(out, f, indent=2, sort_keys=False)

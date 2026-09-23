@@ -753,3 +753,199 @@ HOI_TEST(ai_military_layer_forms_armies_for_idle_divisions) {
                  static_cast<int>(CommandResult::Applied));
     }
 }
+
+// ============================================================= air ============
+
+namespace {
+
+// Gives country A an air capability: a fighter model unlocked by a completed tech,
+// an air base at the capital and on the frontier, and aircraft in the stockpile.
+// Aircraft are added last, so every vector sized before this call is grown here.
+EquipmentId add_air_capability(Fixture& f) {
+    Content& ct = f.g.content;
+    const EquipmentId fighter = add_equipment(ct, "fighter_1", "fighter",
+                                              EquipmentCategory::Aircraft, 1936, 10.0, 0.0, 0.0,
+                                              false);
+    ct.equipment[fighter.v].air_attack = 12.0;
+    ct.equipment[fighter.v].air_defence = 6.0;
+    ct.equipment[fighter.v].agility = 20.0;
+    ct.equipment[fighter.v].range = 5.0;  // strategic-region hops
+    const TechId tech = add_tech(ct, "aircraft_design", "air", 1936, {"fighter_1"},
+                                 ModifierKind::Count, 0.0);
+
+    f.g.world.province(f.cap_a)->air_base = 2;
+    f.g.world.province(f.front_a)->air_base = 2;
+
+    Country* a = f.g.world.country(f.a);
+    a->research.completed.push_back(tech);
+    a->equipment_stockpile.resize(ct.equipment.size(), 0.0);
+    a->equipment_stockpile[fighter.v] = 400.0;
+    return fighter;
+}
+
+// Puts one under-strength wing of `model` on the map for country A at `base`.
+AirWingId add_wing(Game& g, CountryId country, EquipmentId model, ProvinceId base, int planes,
+                   int max_planes) {
+    AirWing wing;
+    wing.country = country;
+    wing.equipment = model;
+    wing.base = base;
+    const Province* p = g.world.province(base);
+    wing.region = p ? p->region : RegionId{};
+    wing.planes = planes;
+    wing.max_planes = max_planes;
+    wing.mission = AirMission::AirSuperiority;
+    const AirWingId id = g.world.air_wings.create(wing);
+    g.world.air_wings[id].id = id;
+    g.world.country(country)->wings.push_back(id);
+    return id;
+}
+
+}  // namespace
+
+// A country with aircraft in its stockpile and an air base forms a wing and gives it
+// a valid mission, all through commands the command system accepts.
+HOI_TEST(ai_forms_air_wings_and_assigns_missions) {
+    Fixture f;
+    build_world(f);
+    add_air_capability(f);
+
+    int creates = 0;
+    int missions = 0;
+    bool mission_region_valid = false;
+    for (int tick = 0; tick < 30 * TICKS_PER_DAY; ++tick) {
+        f.g.queue.clear();
+        phase_ai(f.g);
+
+        CommandQueue fresh;
+        for (Command& c : f.g.queue.pending) fresh.push(std::move(c));
+        f.g.queue.clear();
+        for (const Command& cmd : fresh.pending) {
+            CHECK(cmd.country == f.a);  // the player's country never receives orders
+            CHECK_EQ(validate_command(f.g, cmd), CommandResult::Applied);
+            CHECK_EQ(apply_command(f.g, cmd), CommandResult::Applied);
+            if (cmd.type == CommandType::CreateAirWing) ++creates;
+            if (cmd.type == CommandType::SetAirMission) {
+                ++missions;
+                if (cmd.region.valid()) mission_region_valid = true;
+            }
+        }
+        f.g.world.tick += 1;
+        f.g.ticks_run = f.g.world.tick;
+    }
+
+    CHECK_GT(creates, 0);
+    CHECK_GT(missions, 0);
+    CHECK(mission_region_valid);
+
+    // The wing that was ordered into existence is real, manned from the stockpile.
+    const Country* a = f.g.world.country(f.a);
+    CHECK_GT(a->wings.size(), 0u);
+    const AirWing* wing = f.g.world.wing(a->wings.front());
+    CHECK(wing != nullptr);
+    CHECK(wing->planes >= 50);
+    CHECK(wing->mission != AirMission::None);
+}
+
+// A country with no aircraft must not conjure wings out of nothing - neither when it
+// has an air base but no aircraft model to build, nor when aircraft exist in the
+// world but the country controls no air base.
+HOI_TEST(ai_issues_no_air_commands_without_aircraft) {
+    {
+        Fixture f;
+        build_world(f);
+        f.g.world.province(f.cap_a)->air_base = 2;  // a base with nothing to fly
+
+        for (int tick = 0; tick < 30 * TICKS_PER_DAY; ++tick) {
+            f.g.queue.clear();
+            phase_ai(f.g);
+            CHECK_EQ(count_commands(f.g.queue, CommandType::CreateAirWing), 0);
+            CHECK_EQ(count_commands(f.g.queue, CommandType::SetAirMission), 0);
+            phase_commands(f.g);
+            f.g.world.tick += 1;
+            f.g.ticks_run = f.g.world.tick;
+        }
+        CHECK_EQ(f.g.world.country(f.a)->wings.size(), 0u);
+    }
+    {
+        Fixture f;
+        build_world(f);
+        const EquipmentId model = add_air_capability(f);
+        (void)model;
+        // No air base anywhere: there is nowhere to station a wing.
+        f.g.world.province(f.cap_a)->air_base = 0;
+        f.g.world.province(f.front_a)->air_base = 0;
+
+        for (int tick = 0; tick < 30 * TICKS_PER_DAY; ++tick) {
+            f.g.queue.clear();
+            phase_ai(f.g);
+            CHECK_EQ(count_commands(f.g.queue, CommandType::CreateAirWing), 0);
+            phase_commands(f.g);
+            f.g.world.tick += 1;
+            f.g.ticks_run = f.g.world.tick;
+        }
+        CHECK_EQ(f.g.world.country(f.a)->wings.size(), 0u);
+    }
+}
+
+// Aircraft are producible: with an air base the country opens a line for the model
+// its wings would use, otherwise no aircraft model can ever reach the stockpile and
+// the wings above could never be manned.
+HOI_TEST(ai_opens_a_production_line_for_aircraft) {
+    Fixture f;
+    build_world(f);
+    const EquipmentId model = add_air_capability(f);
+
+    f.g.queue.clear();
+    ai_production_layer(f.g, *f.g.world.country(f.a));
+
+    bool opened = false;
+    for (const Command& c : f.g.queue.pending) {
+        if (c.type != CommandType::SetProductionLine) continue;
+        if (c.equipment == model) opened = true;
+        CHECK_EQ(validate_command(f.g, c), CommandResult::Applied);
+    }
+    CHECK(opened);
+}
+
+// A wing whose base is captured is rebased to a friendly air base, or disbanded when
+// the country controls no air base at all.
+HOI_TEST(ai_rebases_or_disbands_a_wing_whose_base_is_lost) {
+    {
+        Fixture f;
+        build_world(f);
+        const EquipmentId model = add_air_capability(f);
+        add_wing(f.g, f.a, model, f.cap_a, 80, 100);
+        // The capital falls; the frontier base remains.
+        f.g.world.province(f.cap_a)->controller = f.b;
+
+        ai_military_layer(f.g, *f.g.world.country(f.a));
+
+        CHECK_EQ(count_commands(f.g.queue, CommandType::DeployAirWing), 1);
+        CHECK_EQ(count_commands(f.g.queue, CommandType::DisbandAirWing), 0);
+        const Command* rebase = nullptr;
+        for (const Command& c : f.g.queue.pending) {
+            if (c.type == CommandType::DeployAirWing) rebase = &c;
+        }
+        CHECK(rebase != nullptr);
+        CHECK_EQ(validate_command(f.g, *rebase), CommandResult::Applied);
+        CHECK_EQ(apply_command(f.g, *rebase), CommandResult::Applied);
+        const AirWing* wing = f.g.world.wing(f.g.world.country(f.a)->wings.front());
+        CHECK(wing != nullptr);
+        CHECK_EQ(wing->base, f.front_a);
+    }
+    {
+        Fixture f;
+        build_world(f);
+        const EquipmentId model = add_air_capability(f);
+        add_wing(f.g, f.a, model, f.cap_a, 80, 100);
+        // Every air base is lost: the wing has nowhere to go.
+        f.g.world.province(f.cap_a)->controller = f.b;
+        f.g.world.province(f.front_a)->controller = f.b;
+
+        ai_military_layer(f.g, *f.g.world.country(f.a));
+
+        CHECK_EQ(count_commands(f.g.queue, CommandType::DisbandAirWing), 1);
+        CHECK_EQ(count_commands(f.g.queue, CommandType::DeployAirWing), 0);
+    }
+}

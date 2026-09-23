@@ -17,12 +17,13 @@ Honest, evidence-based status lives in `docs/PARITY_MATRIX.md`. There is no
 percentage-complete figure anywhere in this repository: only per-feature states
 (`NOT_IMPLEMENTED` … `VALIDATED`) with the evidence that justifies each one.
 
-Current milestone: **0.4 Land Warfare / 0.5 Logistics**.
+Current milestone: **0.6 Air warfare reached** (land warfare, economy, logistics,
+air) — naval warfare is the next blocker.
 
-Measured on the shipped scenario (2,275 provinces, 332 states, 10 countries, 79
-divisions, all AI-controlled): `world audit: OK`, ~2.6 ms per simulated hour
-(p95 13 ms) on a 4-core N100, and identical world hashes across repeated runs with
-the same seed. Re-run it yourself:
+Measured on the shipped scenario (2,275 provinces, 332 states, 10 countries, air
+wings and ~80 divisions at start, all AI-controlled): `world audit: OK`, ~5.9 ms per
+simulated hour in a full year of AI war (484 divisions, 23 wars), and identical world
+hashes across repeated runs with the same seed. Re-run it yourself:
 
 ```sh
 build/game --days 3 --audit --summary --hashes
@@ -67,6 +68,10 @@ What you can do in the client:
 * **Military**: train divisions from templates, deploy them, form armies, assign
   generals, set front/offensive/fallback/garrison orders, stances and motorisation.
   Click a division to select it, then click a province to order a move.
+* **Air**: form wings from stockpiled aircraft at air bases, assign air superiority,
+  interception, CAS, strategic bombing, logistics strike or reconnaissance over a
+  strategic region, watch air control per region, and see the air term in the battle
+  damage breakdown.
 * **Diplomacy**: declare war, join a faction, enact laws; watch wars, factions and
   country strength.
 * **Details**: selecting a province shows the live battle breakdown (per division

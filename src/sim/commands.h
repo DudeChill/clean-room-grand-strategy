@@ -39,6 +39,10 @@ enum class CommandType : uint8_t {
     OfferPeace,
     JoinFaction,        // join an existing faction led by `target_country`
     LeaveFaction,
+    CreateAirWing,      // form a wing of `value` planes of `equipment` at `province`
+    DeployAirWing,      // rebase a wing to `province`
+    SetAirMission,      // wing flies `value` (AirMission) in `region`
+    DisbandAirWing,
     SetLaw,
     SetTradePolicy,
     SetStance,             // aggressive / defensive / garrison posture for an army
@@ -59,9 +63,11 @@ struct Command {
     ProvinceId province;
     ProvinceId province_b;
     StateId state;
+    RegionId region;
     DivisionId division;
     ArmyId army;
     CharacterId character;
+    AirWingId wing;
     EquipmentId equipment;
     TemplateId template_id;
     TechId tech;

@@ -127,13 +127,23 @@ implemented.
 
 ## 8. Air warfare
 
-* [ ] Air wings as entities with base, model, mission, region
-* [ ] Missions: superiority, interception, CAS, strategic bombing, logistics strike,
-      naval strike, port strike, recon, transport
-* [ ] Sorties, detection, interception, mission efficiency
-* [ ] Air superiority affecting land combat and movement
-* [ ] Aircraft losses and replacement
-* [ ] Air bases with capacity and range
+* [x] Air wings as entities with base, model, mission, region, planes, efficiency,
+      experience and losses
+* [x] Missions: air superiority, interception, CAS, strategic bombing, logistics
+      strike, reconnaissance
+* [x] Sorties, air combat between hostile wings, losses and replacement from the
+      equipment stockpile
+* [x] Air control per strategic region, derived from the wings actually flying
+* [x] Air superiority and CAS modifying land combat (`BattleDebugLine::air_mod`)
+* [x] Strategic bombing reducing state factories; logistics strike cutting railway
+      levels
+* [x] Air bases with capacity, range checks per mission, displacement when a base is
+      lost
+* [x] Anti-air building level reducing bombing damage and raising attacker losses
+* [ ] Detection model (no detection roll, no radar effect) — discrepancy AIR-003
+* [ ] Sortie fuel consumption and pilot manpower — discrepancy AIR-004
+* [ ] Reconnaissance revealing enemy dispositions (needs fog of war) — AIR-005
+* [ ] Naval strike and port strike missions (need the naval milestone)
 
 ## 9. Naval warfare
 

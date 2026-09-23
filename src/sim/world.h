@@ -39,6 +39,7 @@ struct Province {
     int air_base = 0;
     int naval_base = 0;
     int radar = 0;
+    int anti_air = 0;  // anti-air level: reduces damage from bombing missions
     bool supply_hub = false;
     int railway_level = 0;  // 0..5
     double population = 0.0;
@@ -77,7 +78,7 @@ struct State {
     }
 };
 
-struct Region {  // strategic region: weather + future air/naval grouping
+struct Region {  // strategic region: weather + air operations grouping
     RegionId id;
     std::string name;
     bool is_sea = false;
@@ -88,6 +89,40 @@ struct Region {  // strategic region: weather + future air/naval grouping
     bool snow = false;
     bool mud = false;
     bool sandstorm = false;
+    // Air control per country, written by the air phase (derived, single writer).
+    std::vector<std::pair<CountryId, double>> air_control;
+};
+
+// ----------------------------------------------------------------- air -------
+
+enum class AirMission : uint8_t {
+    None = 0,
+    AirSuperiority,
+    Interception,
+    CloseAirSupport,
+    StrategicBombing,
+    LogisticsStrike,
+    Reconnaissance,
+    Count
+};
+
+const char* air_mission_name(AirMission m);
+bool air_mission_is_offensive(AirMission m);
+
+struct AirWing {
+    AirWingId id;
+    CountryId country;
+    EquipmentId equipment;  // aircraft model
+    std::string name;
+    int planes = 0;      // aircraft currently in the wing
+    int max_planes = 100;  // wing establishment
+    ProvinceId base;     // air base province
+    RegionId region;     // mission region
+    AirMission mission = AirMission::None;
+    double efficiency = 1.0;  // sortie efficiency 0..1
+    double experience = 0.0;
+    int losses = 0;
+    Tick last_sortie = 0;
 };
 
 // ------------------------------------------------------------ economy state --
@@ -257,6 +292,7 @@ struct BattleDebugLine {
     double supply_mod = 0.0;
     double commander_mod = 0.0;
     double experience_mod = 0.0;
+    double air_mod = 0.0;  // additive air support (CAS + superiority) contribution
     double final_attack = 0.0;
     double enemy_defense = 0.0;
     double damage = 0.0;
@@ -361,6 +397,7 @@ struct Country {
     std::vector<ArmyId> armies;
     std::vector<TemplateId> templates;
     std::vector<CharacterId> generals;
+    std::vector<AirWingId> wings;                    // air wings this country fields
     std::vector<TrainingDivision> training;  // divisions being trained (off-map)
     std::vector<WarId> wars;
     uint32_t faction = 0;  // 0 = none
@@ -412,6 +449,7 @@ struct World {
     Store<Battle> battles;
     Store<War> wars;
     Store<Character> characters;
+    Store<AirWing> air_wings;
 
     std::vector<Faction> factions;
     // Relations keyed by ordered pair (low id first) for deterministic iteration.
@@ -440,6 +478,8 @@ struct World {
     [[nodiscard]] const Character* character(CharacterId id) const {
         return characters.try_get(id);
     }
+    [[nodiscard]] AirWing* wing(AirWingId id) { return air_wings.try_get(id); }
+    [[nodiscard]] const AirWing* wing(AirWingId id) const { return air_wings.try_get(id); }
 
     [[nodiscard]] CountryId province_owner(ProvinceId id) const {
         const Province* p = province(id);

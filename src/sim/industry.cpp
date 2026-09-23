@@ -167,6 +167,8 @@ int project_current_level(const World& w, const ConstructionProject& p) {
             return pr->naval_base;
         case BuildingKind::Radar:
             return pr->radar;
+        case BuildingKind::AntiAir:
+            return pr->anti_air;
         case BuildingKind::Fort:
             return pr->fort_level;
         default:
@@ -190,15 +192,8 @@ enum class ProjectStatus { Ready, Blocked, Invalid };
 
 // Blocked projects stay queued and consume no capacity (their block, e.g. a full
 // building-slot row, can clear later). Invalid projects are pruned: the target is
-// gone, the kind has no representable state, or the level is already at maximum.
+// gone, or the level is already at the maximum the content allows.
 ProjectStatus project_status(const World& w, const Content& content, const ConstructionProject& p) {
-    if (p.kind == BuildingKind::AntiAir) {
-        // Air warfare does not exist yet (discrepancy AIR-002), so the command layer
-        // rejects anti-air projects and Province has no field for them. A project
-        // that still reaches here (hand-written save, script) is pruned rather than
-        // left to accumulate capacity forever.
-        return ProjectStatus::Invalid;
-    }
     if (is_state_scope(p.kind)) {
         const State* s = w.state(p.state);
         if (!s) return ProjectStatus::Invalid;
@@ -289,16 +284,19 @@ bool complete_project(Game& g, Country& c, const ConstructionProject& p) {
             pr->radar = wanted;
             break;
         }
+        case BuildingKind::AntiAir: {
+            Province* pr = w.province(p.province);
+            if (!pr) return false;
+            pr->anti_air = wanted;
+            break;
+        }
         case BuildingKind::Fort: {
             Province* pr = w.province(p.province);
             if (!pr) return false;
             pr->fort_level = wanted;
             break;
         }
-        case BuildingKind::AntiAir:
         case BuildingKind::Count:
-            // Anti-air has no world field (AIR-002); project_status() prunes it, so
-            // reaching here means the project was rebuilt between the two calls.
             return false;
     }
     HOI_DEBUG("construction: country %u completed %s project (level %d)", c.id.raw(),

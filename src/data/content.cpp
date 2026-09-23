@@ -125,6 +125,40 @@ SimConstants SimConstants::from_json(const Json& j) {
     c.synthetic_rubber_per_refinery_per_day =
         num("synthetic_rubber_per_refinery_per_day", c.synthetic_rubber_per_refinery_per_day);
 
+    c.air_base_capacity_per_level =
+        num("air_base_capacity_per_level", c.air_base_capacity_per_level);
+    c.air_sortie_hours = num("air_sortie_hours", c.air_sortie_hours);
+    c.air_cas_effect = num("air_cas_effect", c.air_cas_effect);
+    c.air_superiority_effect = num("air_superiority_effect", c.air_superiority_effect);
+    c.air_bombing_industry_damage =
+        num("air_bombing_industry_damage", c.air_bombing_industry_damage);
+    c.air_logistics_strike_damage =
+        num("air_logistics_strike_damage", c.air_logistics_strike_damage);
+    c.air_anti_air_bombing_reduction =
+        num("air_anti_air_bombing_reduction", c.air_anti_air_bombing_reduction);
+    c.air_anti_air_combat_loss_factor =
+        num("air_anti_air_combat_loss_factor", c.air_anti_air_combat_loss_factor);
+    c.air_combat_scale = num("air_combat_scale", c.air_combat_scale);
+    c.air_aircraft_durability = num("air_aircraft_durability", c.air_aircraft_durability);
+    c.air_agility_weight = num("air_agility_weight", c.air_agility_weight);
+    c.air_combat_defence_floor = num("air_combat_defence_floor", c.air_combat_defence_floor);
+    c.air_combat_roll_base = num("air_combat_roll_base", c.air_combat_roll_base);
+    c.air_experience_per_combat_hour =
+        num("air_experience_per_combat_hour", c.air_experience_per_combat_hour);
+    c.air_experience_per_mission_hour =
+        num("air_experience_per_mission_hour", c.air_experience_per_mission_hour);
+    c.air_cas_organisation_damage =
+        num("air_cas_organisation_damage", c.air_cas_organisation_damage);
+    c.air_cas_strength_damage = num("air_cas_strength_damage", c.air_cas_strength_damage);
+    c.air_bombing_power_unit = num("air_bombing_power_unit", c.air_bombing_power_unit);
+    c.air_logistics_power_unit = num("air_logistics_power_unit", c.air_logistics_power_unit);
+    c.air_support_min_modifier = num("air_support_min_modifier", c.air_support_min_modifier);
+    c.air_support_max_modifier = num("air_support_max_modifier", c.air_support_max_modifier);
+    c.air_mission_weight_contested =
+        num("air_mission_weight_contested", c.air_mission_weight_contested);
+    c.air_mission_weight_support =
+        num("air_mission_weight_support", c.air_mission_weight_support);
+
     c.construction_cost_factory = num("construction_cost_factory", c.construction_cost_factory);
     c.construction_cost_infrastructure =
         num("construction_cost_infrastructure", c.construction_cost_infrastructure);
@@ -184,6 +218,17 @@ SimConstants SimConstants::from_json(const Json& j) {
     c.war_support_drift = num("war_support_drift", c.war_support_drift);
 
     c.weather_change_chance = num("weather_change_chance", c.weather_change_chance);
+
+    // Air.
+    c.air_base_capacity_per_level =
+        num("air_base_capacity_per_level", c.air_base_capacity_per_level);
+    c.air_sortie_hours = num("air_sortie_hours", c.air_sortie_hours);
+    c.air_cas_effect = num("air_cas_effect", c.air_cas_effect);
+    c.air_superiority_effect = num("air_superiority_effect", c.air_superiority_effect);
+    c.air_bombing_industry_damage =
+        num("air_bombing_industry_damage", c.air_bombing_industry_damage);
+    c.air_logistics_strike_damage =
+        num("air_logistics_strike_damage", c.air_logistics_strike_damage);
     return c;
 }
 
@@ -262,6 +307,22 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             def.soft_attack = e["soft_attack"].as_double(def.soft_attack);
             def.hard_attack = e["hard_attack"].as_double(def.hard_attack);
             def.air_attack = e["air_attack"].as_double(def.air_attack);
+            // Air statistics. A negative value is a data error: it is reported and
+            // clamped to zero so invalid state can never reach the simulation.
+            auto non_negative = [&](const char* field, double* dst) {
+                const double raw = e.has(field) ? e[field].as_double(*dst) : *dst;
+                if (raw < 0.0) {
+                    errors.push_back(f_equipment + ":" + key + ": negative " + field +
+                                     " (" + std::to_string(raw) + ")");
+                    *dst = 0.0;
+                } else {
+                    *dst = raw;
+                }
+            };
+            non_negative("air_defence", &def.air_defence);
+            non_negative("ground_attack", &def.ground_attack);
+            non_negative("agility", &def.agility);
+            non_negative("range", &def.range);
             def.defense = e["defense"].as_double(def.defense);
             def.breakthrough = e["breakthrough"].as_double(def.breakthrough);
             def.armor = e["armor"].as_double(def.armor);

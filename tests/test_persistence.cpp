@@ -159,8 +159,9 @@ EquipmentId add_equipment(Content& c, const char* key, const char* name, Equipme
 }
 
 // Three countries (ALB/BRV/CDA) on eight provinces (seven land, one sea), two
-// regions, four states, one war, one faction, one battle, one army and two
-// divisions per country: enough to exercise every subsystem with real content.
+// regions, four states, one war, one faction, one battle, one army, two divisions
+// and one air wing per country: enough to exercise every subsystem with real
+// content.
 void build_world(Game* g) {
     g->seed = kSeed;
     g->scenario_path = "scenarios/persistence_test.json";
@@ -178,6 +179,31 @@ void build_world(Game* g) {
                                           8.0, 25.0, 6.0, 10.0, 4.0);
     const EquipmentId mot = add_equipment(c, "motorized_1", "Motorized Transport",
                                           EquipmentCategory::Motorized, 12.0, 2.0, 2.0, 15.0, 12.0);
+
+    // An aircraft model: the air slice serializes its statistics like any other
+    // equipment, and the wings below reference it by id.
+    EquipmentDef fighter;
+    fighter.id = EquipmentId(static_cast<uint32_t>(c.equipment.size()));
+    fighter.key = "fighter_1";
+    fighter.name = "Fighter I";
+    fighter.category = EquipmentCategory::Aircraft;
+    fighter.year = 1936;
+    fighter.archetype = "fighter";
+    fighter.air_attack = 18.0;
+    fighter.air_defence = 14.0;
+    fighter.ground_attack = 4.0;
+    fighter.agility = 20.0;
+    fighter.range = 3.0;
+    fighter.reliability = 0.9;
+    fighter.max_strength = 1.0;
+    fighter.build_cost = 24.0;
+    fighter.manpower = 5.0;
+    fighter.supply_use = 0.2;
+    fighter.fuel_use = 0.5;
+    fighter.resources[static_cast<int>(Resource::Aluminium)] = 3.0;
+    c.equipment.push_back(fighter);
+    c.equipment_by_key[fighter.key] = fighter.id;
+    const EquipmentId fighter_id = fighter.id;
 
     DivisionTemplate infantry;
     infantry.id = TemplateId(0);
@@ -283,6 +309,8 @@ void build_world(Game* g) {
         p->x = i * 3;
         p->y = i * 2;
         p->railway_level = i % 3;
+        p->air_base = (i % 3 == 0) ? 3 : 1;
+        p->anti_air = i % 2;
         p->supply_hub = (i == 2);
         p->fort_level = i == 4 ? 2 : 0;
         p->is_capital = (i == 0 || i == 3 || i == 5);
@@ -318,6 +346,10 @@ void build_world(Game* g) {
         Region* reg = w.regions.try_get(RegionId(static_cast<uint32_t>(state_of[i] < 2 ? 0 : 1)));
         reg->provinces.push_back(ProvinceId(static_cast<uint32_t>(i)));
     }
+    // Air control would otherwise be empty until the air phase runs: seed it so the
+    // round trip has to carry it even if this world never flies a sortie.
+    w.regions[RegionId(0)].air_control = {{CountryId(0), 0.6}, {CountryId(1), 0.4}};
+    w.regions[RegionId(1)].air_control = {{CountryId(1), 0.35}, {CountryId(2), 0.65}};
 
     struct CountrySetup {
         const char* tag;
@@ -456,6 +488,25 @@ void build_world(Game* g) {
             co->divisions.push_back(d->id);
             army->divisions.push_back(d->id);
         }
+
+        // One air wing per country. The wings are placed so no two hostile wings share
+        // a region (1 and 2 are not at war with each other), because the test wants
+        // them to survive the tick loop: the round trip must carry a live wing's
+        // planes, efficiency, experience, losses and last sortie tick.
+        AirWing* wing = add(w.air_wings);
+        wing->country = CountryId(i);
+        wing->equipment = fighter_id;
+        wing->name = std::string("1st Air Wing ") + setups[i].tag;
+        wing->planes = 60 + static_cast<int>(i) * 10;
+        wing->max_planes = 100;
+        wing->base = ProvinceId(static_cast<uint32_t>(setups[i].provinces[0]));
+        wing->region = RegionId(static_cast<uint32_t>(i == 1 ? 1 : 0));
+        wing->mission = AirMission::AirSuperiority;
+        wing->efficiency = 0.8 - 0.1 * i;
+        wing->experience = 0.05 * i;
+        wing->losses = static_cast<int>(i) * 3;
+        wing->last_sortie = 7 + i;
+        co->wings.push_back(wing->id);
     }
 
     Battle* battle = add(w.battles);
@@ -653,6 +704,10 @@ Fixture build_fixture() {
     require(save_replay(f.source, f.replay_path, &err), "save_replay", err);
     CHECK_GT(f.hash, 0u);
     CHECK_GT(f.log_count, 0u);
+    // The air slice must actually be exercised: a fixture whose wings did not survive
+    // the tick loop would serialise an empty store and prove nothing.
+    CHECK_GT(f.source.world.air_wings.size(), 0u);
+    CHECK(!f.source.world.regions[RegionId(0)].air_control.empty());
     return f;
 }
 
@@ -891,6 +946,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"province.air_base", +[](Game& g) { g.world.provinces.for_each([](ProvinceId, Province& p) { p.air_base += 1; }); }},
         {"province.naval_base", +[](Game& g) { g.world.provinces.for_each([](ProvinceId, Province& p) { p.naval_base += 1; }); }},
         {"province.radar", +[](Game& g) { g.world.provinces.for_each([](ProvinceId, Province& p) { p.radar += 1; }); }},
+        {"province.anti_air", +[](Game& g) { g.world.provinces.for_each([](ProvinceId, Province& p) { p.anti_air += 1; }); }},
         {"province.supply_hub", +[](Game& g) { g.world.provinces.for_each([](ProvinceId, Province& p) { p.supply_hub = !p.supply_hub; }); }},
         {"province.railway_level", +[](Game& g) { g.world.provinces.for_each([](ProvinceId, Province& p) { p.railway_level += 1; }); }},
         {"province.population", +[](Game& g) { g.world.provinces.for_each([](ProvinceId, Province& p) { p.population += 1.0; }); }},
@@ -931,6 +987,9 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"region.is_sea", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { r.is_sea = !r.is_sea; }); }},
         {"region.provinces", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { r.provinces.push_back(ProvinceId(6)); }); }},
         {"region.name", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { r.name += "x"; }); }},
+        {"region.air_control.size", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { r.air_control.push_back({CountryId(1), 0.25}); }); }},
+        {"region.air_control.country", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { for (auto& e : r.air_control) e.first = CountryId(2); }); }},
+        {"region.air_control.share", +[](Game& g) { g.world.regions.for_each([](RegionId, Region& r) { for (auto& e : r.air_control) e.second -= 0.05; }); }},
         {"country.tag", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.tag += "x"; }); }},
         {"country.name", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.name += "x"; }); }},
         {"country.alive", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.alive = !c.alive; }); }},
@@ -945,6 +1004,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"country.law_modifiers", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.law_modifiers.v[2] += 0.01; }); }},
         {"country.national_modifiers", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.national_modifiers.v[3] += 0.01; }); }},
         {"country.generals", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.generals.push_back(CharacterId(0)); }); }},
+        {"country.wings", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.wings.push_back(AirWingId(0)); }); }},
         {"country.starting_factories", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.starting_factories += 1; }); }},
         {"country.resources_produced", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.resources_produced[1] += 1.0; }); }},
         {"country.resources_consumed", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.resources_consumed[1] += 1.0; }); }},
@@ -1004,6 +1064,10 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"equipment.soft_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.soft_attack += 1.0; }},
         {"equipment.hard_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.hard_attack += 1.0; }},
         {"equipment.air_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.air_attack += 1.0; }},
+        {"equipment.air_defence", +[](Game& g) { for (auto& e : g.content.equipment) e.air_defence += 1.0; }},
+        {"equipment.ground_attack", +[](Game& g) { for (auto& e : g.content.equipment) e.ground_attack += 1.0; }},
+        {"equipment.agility", +[](Game& g) { for (auto& e : g.content.equipment) e.agility += 1.0; }},
+        {"equipment.range", +[](Game& g) { for (auto& e : g.content.equipment) e.range += 1.0; }},
         {"equipment.defense", +[](Game& g) { for (auto& e : g.content.equipment) e.defense += 1.0; }},
         {"equipment.breakthrough", +[](Game& g) { for (auto& e : g.content.equipment) e.breakthrough += 1.0; }},
         {"equipment.armor", +[](Game& g) { for (auto& e : g.content.equipment) e.armor += 1.0; }},
@@ -1090,6 +1154,18 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"army.order.started", +[](Game& g) { g.world.armies.for_each([](ArmyId, Army& a) { a.order.started += 1; }); }},
         {"army.stance", +[](Game& g) { g.world.armies.for_each([](ArmyId, Army& a) { a.stance = static_cast<uint8_t>(2); }); }},
         {"army.motorization", +[](Game& g) { g.world.armies.for_each([](ArmyId, Army& a) { a.motorization += 1; }); }},
+        {"wing.country", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.country = CountryId(2); }); }},
+        {"wing.equipment", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.equipment = EquipmentId(1); }); }},
+        {"wing.name", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.name += "x"; }); }},
+        {"wing.planes", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.planes += 1; }); }},
+        {"wing.max_planes", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.max_planes += 1; }); }},
+        {"wing.base", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.base = ProvinceId(5); }); }},
+        {"wing.region", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.region = RegionId(1); }); }},
+        {"wing.mission", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.mission = AirMission::LogisticsStrike; }); }},
+        {"wing.efficiency", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.efficiency -= 0.01; }); }},
+        {"wing.experience", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.experience += 0.01; }); }},
+        {"wing.losses", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.losses += 1; }); }},
+        {"wing.last_sortie", +[](Game& g) { g.world.air_wings.for_each([](AirWingId, AirWing& a) { a.last_sortie += 1; }); }},
         {"battle.province", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.province = ProvinceId(2); }); }},
         {"battle.start_tick", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.start_tick += 1; }); }},
         {"battle.attacker.divisions", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.attacker.divisions.push_back(DivisionId(1)); }); }},
@@ -1110,6 +1186,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"battle.debug", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.debug.push_back(BattleDebugLine{}); }); }},
         {"battle.debug.division", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { for (auto& d : b.debug) d.division = DivisionId(2); }); }},
         {"battle.debug.attack_mods", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { for (auto& d : b.debug) { d.planning_mod += 1.0; d.terrain_mod += 1.0; d.supply_mod += 1.0; d.commander_mod += 1.0; d.experience_mod += 1.0; } }); }},
+        {"battle.debug.air_mod", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { for (auto& d : b.debug) d.air_mod += 1.0; }); }},
         {"battle.debug.damage", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { for (auto& d : b.debug) { d.base_attack += 1.0; d.final_attack += 1.0; d.enemy_defense += 1.0; d.damage += 1.0; d.org_damage += 1.0; d.strength_damage += 1.0; } }); }},
         {"battle.last_tick", +[](Game& g) { g.world.battles.for_each([](BattleId, Battle& b) { b.last_tick += 1; }); }},
         {"war.attackers", +[](Game& g) { g.world.wars.for_each([](WarId, War& w) { w.attackers.push_back(WarParticipant{CountryId(2), 1.0, 2.0, 0.3}); }); }},
@@ -1207,6 +1284,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         &SimConstants::construction_cost_radar,
         &SimConstants::construction_cost_synthetic,
         &SimConstants::construction_level_scaling,
+        &SimConstants::max_factories_per_project,
         &SimConstants::research_base_days,
         &SimConstants::research_year_penalty,
         &SimConstants::research_speed_base,
@@ -1233,11 +1311,48 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         &SimConstants::supply_rail_bonus_per_level,
         &SimConstants::supply_infrastructure_bonus_per_level,
         &SimConstants::fuel_demand_per_day,
+        &SimConstants::air_base_capacity_per_level,
+        &SimConstants::air_sortie_hours,
+        &SimConstants::air_cas_effect,
+        &SimConstants::air_superiority_effect,
+        &SimConstants::air_bombing_industry_damage,
+        &SimConstants::air_logistics_strike_damage,
+        &SimConstants::air_anti_air_bombing_reduction,
+        &SimConstants::air_anti_air_combat_loss_factor,
+        &SimConstants::air_combat_scale,
+        &SimConstants::air_aircraft_durability,
+        &SimConstants::air_agility_weight,
+        &SimConstants::air_combat_defence_floor,
+        &SimConstants::air_combat_roll_base,
+        &SimConstants::air_experience_per_combat_hour,
+        &SimConstants::air_experience_per_mission_hour,
+        &SimConstants::air_cas_organisation_damage,
+        &SimConstants::air_cas_strength_damage,
+        &SimConstants::air_bombing_power_unit,
+        &SimConstants::air_logistics_power_unit,
+        &SimConstants::air_support_min_modifier,
+        &SimConstants::air_support_max_modifier,
+        &SimConstants::air_mission_weight_contested,
+        &SimConstants::air_mission_weight_support,
         &SimConstants::political_power_per_day,
         &SimConstants::stability_drift,
         &SimConstants::war_support_drift,
         &SimConstants::weather_change_chance,
     };
+    // Drift guard: SimConstants is a plain struct, so nothing forces a new field to be
+    // added here and to write_constants. The Economy payload ends with the flat
+    // constants record (a count followed by one double per member), so the count the
+    // serializer actually wrote is compared with this table.
+    constexpr size_t constant_count = sizeof(constant_members) / sizeof(constant_members[0]);
+    static_assert(constant_count == 78,
+                  "SimConstants changed: update constant_members and save.cpp write/read_constants");
+    ByteWriter economy;
+    serialize_subsystem(f.source, Subsystem::Economy, &economy);
+    const std::vector<uint8_t>& economy_bytes = economy.data();
+    const size_t constants_bytes = 4 + 8 * constant_count;
+    CHECK_GT(economy_bytes.size(), constants_bytes);
+    CHECK_EQ(peek_u32(economy_bytes, economy_bytes.size() - constants_bytes),
+             static_cast<uint32_t>(constant_count));
     for (double SimConstants::*member : constant_members) {
         Game mutated = f.source;
         mutated.content.constants.*member += 1.0;

@@ -3,6 +3,7 @@
 //
 // Worlds are hand-built (no scenario loading) so each case is exact.
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -494,4 +495,87 @@ HOI_TEST(military_destroyed_division_leaves_no_dangling_battle_refs) {
     CHECK(g.world.division(def2) == nullptr);
     for (DivisionId did : attackers) CHECK(g.world.divisions.alive(did));
     expect_clean_audit(g);
+}
+
+// Air support integration: compute_side_values folds the region's air control into
+// each side's attack value as an additive modifier and records the term in
+// BattleDebugLine::air_mod. Region::air_control is set directly here; the wing-based
+// derivation of that value is covered by test_air.cpp. This test only pins the
+// land-combat consumer.
+HOI_TEST(military_air_support_modifies_attack) {
+    BaseWorld w;
+    Game& g = w.g;
+    const RegionId rg = add_region(g.world, "front");
+    add_war(g.world, w.a, w.b);
+    const StateId sa = add_state(g.world, "sa", w.a);
+    const StateId sb = add_state(g.world, "sb", w.b);
+    const ProvinceId p = add_province(g.world, "p", Terrain::Plains, sb, w.b, 0);
+    const ProvinceId q = add_province(g.world, "q", Terrain::Plains, sa, w.a, 0);
+    g.world.province(p)->region = rg;
+    g.world.province(q)->region = rg;
+    link(g.world, p, q);
+
+    const DivisionId atk = add_division(g, w.a, w.infantry, q);
+    const DivisionId def = add_division(g, w.b, w.infantry, p);
+    const BattleId bid = start_battle(g, p, w.a, w.b, {atk}, {def});
+    const Battle* battle = g.world.battle(bid);
+    CHECK(battle != nullptr);
+
+    std::vector<BattleDebugLine> dbg;
+    const SideCombatValues base_atk =
+        compute_side_values(g, *battle, battle->attacker.divisions, true, &dbg);
+    const SideCombatValues base_def =
+        compute_side_values(g, *battle, battle->defender.divisions, false, &dbg);
+    CHECK_EQ(dbg.size(), 1u);
+    // Nobody flies: the air term is exactly zero and does not disturb the chain.
+    CHECK_NEAR(dbg[0].air_mod, 0.0, 1e-12);
+    CHECK_GT(base_atk.soft_attack, 0.0);
+    CHECK_NEAR(base_atk.soft_attack, base_def.soft_attack, 1e-12);
+
+    Region* r = g.world.regions.try_get(rg);
+    CHECK(r != nullptr);
+
+    // Side A owns the sky: its lead country fights with a positive air term, the
+    // defender (facing enemy superiority) with a negative one.
+    r->air_control = {{w.a, 1.0}};
+    const SideCombatValues friendly_atk =
+        compute_side_values(g, *battle, battle->attacker.divisions, true, &dbg);
+    const double atk_air = dbg[0].air_mod;
+    const SideCombatValues enemy_def =
+        compute_side_values(g, *battle, battle->defender.divisions, false, &dbg);
+    const double def_air = dbg[0].air_mod;
+
+    CHECK_GT(atk_air, 0.0);
+    CHECK_LT(def_air, 0.0);
+    CHECK(atk_air <= 1.0);  // clamped band
+    CHECK_GT(friendly_atk.soft_attack, base_atk.soft_attack);
+    CHECK_LT(enemy_def.soft_attack, base_def.soft_attack);
+
+    // final_attack carries the whole chain: the attack gain is exactly
+    // base_attack * air_mod * terrain * supply * organisation, every factor visible
+    // in the same debug line.
+    const Division* ad = g.world.division(atk);
+    const double org_factor =
+        ad->organization / std::max(1e-9, ad->max_organization);
+    const double scale = dbg[0].terrain_mod * dbg[0].supply_mod * org_factor;
+    CHECK_GT(scale, 0.0);
+    CHECK_NEAR(friendly_atk.soft_attack - base_atk.soft_attack,
+               dbg[0].base_attack * atk_air * scale, 1e-9);
+
+    // Inverse: the enemy owns the sky, so side A's own air term turns negative.
+    r->air_control = {{w.b, 1.0}};
+    const SideCombatValues dominated_atk =
+        compute_side_values(g, *battle, battle->attacker.divisions, true, &dbg);
+    CHECK_LT(dbg[0].air_mod, 0.0);
+    CHECK_LT(dominated_atk.soft_attack, base_atk.soft_attack);
+
+    // And with friendly air presence in the region the term is positive again.
+    r->air_control = {{w.a, 0.6}, {w.b, 0.2}};
+    const SideCombatValues contested_atk =
+        compute_side_values(g, *battle, battle->attacker.divisions, true, &dbg);
+    CHECK_GT(dbg[0].air_mod, 0.0);
+    CHECK_GT(contested_atk.soft_attack, base_atk.soft_attack);
+
+    for (const BattleDebugLine& line : dbg) CHECK(std::isfinite(line.air_mod));
+    CHECK(std::isfinite(friendly_atk.soft_attack) && std::isfinite(dominated_atk.soft_attack));
 }

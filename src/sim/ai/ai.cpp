@@ -40,6 +40,7 @@
 #include "core/math.h"
 #include "data/content.h"
 #include "game/game.h"
+#include "sim/air.h"
 #include "sim/diplomacy.h"
 #include "sim/industry.h"
 #include "sim/map.h"
@@ -142,6 +143,17 @@ constexpr double kOrderForceWeight = 40.0;
 constexpr double kOrderSupplyWeight = 20.0;
 constexpr double kOrderFrontWeight = 10.0;
 constexpr double kOrderCapitalThreatWeight = 40.0;
+
+// Air (planned from the military layer, which owns the front line and the posture
+// the air plan depends on). Aircraft are production planning too: kProdAirReserve is
+// the stockpile a country with an air base keeps on hand so a wing can be formed.
+constexpr int kAirMinWingSize = 50;       // smallest wing worth forming
+constexpr int kAirWingEstablishment = 100;  // preferred wing size
+constexpr int kAirMaxWings = 6;           // wings a country forms without more demand
+constexpr int kAirReservePlanes = 60;     // aircraft kept in the stockpile
+constexpr double kAirContestedThreshold = 1.0;  // enemy planes that make a region contested
+constexpr double kAirModelAirWeight = 1.0;   // air-to-air value of a model's stats
+constexpr double kAirModelGroundWeight = 0.5;  // ground-attack value of a model's stats
 
 // Diplomacy.
 constexpr double kDipFactionThreat = 35.0;
@@ -1030,6 +1042,31 @@ bool factory_producible(EquipmentCategory c) {
     return c != EquipmentCategory::Ship && c != EquipmentCategory::Convoy;
 }
 
+// Combat value of an airframe. Fighters live on air attack and agility, CAS on
+// ground attack; both are worth something, so one blended score picks the model the
+// country should standardise on.
+double aircraft_combat_score(const EquipmentDef& d) {
+    return (d.air_attack + d.agility * 0.5) * kAirModelAirWeight +
+           (d.ground_attack + d.air_attack * 0.5) * kAirModelGroundWeight;
+}
+
+// Best aircraft model the country may actually build (unlocked, not an archetype).
+EquipmentId best_aircraft_model(const Game& g, CountryId country) {
+    EquipmentId best;
+    double best_score = 0.0;
+    for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+        const EquipmentDef& d = g.content.equipment[i];
+        if (d.is_archetype || d.category != EquipmentCategory::Aircraft) continue;
+        if (!equipment_unlocked(g, country, EquipmentId(i))) continue;
+        const double s = aircraft_combat_score(d);
+        if (!best.valid() || s > best_score) {
+            best = EquipmentId(i);
+            best_score = s;
+        }
+    }
+    return best;
+}
+
 double efficiency_of_line(const Country& c, EquipmentId eq) {
     for (const ProductionLine& line : c.lines) {
         if (line.equipment == eq) return clamp01(line.efficiency);
@@ -1085,6 +1122,31 @@ void ai_production_layer(Game& g, Country& c) {
         for (const BattalionSlot& b : td->battalions) {
             if (!b.equipment.valid() || b.equipment.v >= need.size()) continue;
             need[b.equipment.v] += static_cast<double>(b.count) * kProdTemplateBaseline;
+        }
+    }
+
+    // Air demand. Division templates never mention aircraft and
+    // compute_equipment_demand only walks divisions, so without an explicit term an
+    // aircraft model can never reach a production line: wings draw replacements from
+    // the stockpile, but nothing would build them. Wings ask for replacements, and a
+    // country with an air base keeps a reserve so a wing can actually be formed.
+    {
+        for (AirWingId wid : c.wings) {
+            const AirWing* wing = w.wing(wid);
+            if (!wing || !wing->equipment.valid() || wing->equipment.v >= need.size()) continue;
+            const int missing = wing->max_planes - wing->planes;
+            if (missing > 0) need[wing->equipment.v] += static_cast<double>(missing);
+        }
+        bool has_air_base = false;
+        w.provinces.for_each([&](ProvinceId, const Province& p) {
+            if (has_air_base) return;
+            if (!p.is_sea && p.air_base > 0 && p.controller == c.id) has_air_base = true;
+        });
+        if (has_air_base) {
+            const EquipmentId model = best_aircraft_model(g, c.id);
+            if (model.valid() && model.v < need.size()) {
+                need[model.v] += static_cast<double>(kAirReservePlanes);
+            }
         }
     }
 
@@ -1171,24 +1233,35 @@ void ai_production_layer(Game& g, Country& c) {
     targets.resize(static_cast<size_t>(line_count));
 
     // ---- factories proportional to need -------------------------------------
+    // Every chosen model gets one factory first (line_count <= mil guarantees they
+    // all fit), then the remainder is split by need with the largest-remainder
+    // method. The split is deterministic (ties fall to the lower index) and, unlike
+    // a plain floor with a one-factory minimum, never asks for more factories than
+    // the country owns - which would silently drop the highest-need line when the
+    // batch was applied.
     double need_sum = 0.0;
     for (const ProdTarget& t : targets) need_sum += t.need;
-    std::vector<int> want(targets.size(), 1);
-    {
-        int assigned = 0;
+    std::vector<int> want(targets.size(), 0);
+    for (size_t i = 0; i < targets.size(); ++i) want[i] = 1;
+    const int leftover = mil - static_cast<int>(targets.size());
+    if (leftover > 0) {
+        std::vector<double> frac(targets.size(), 0.0);
+        int given = 0;
         for (size_t i = 0; i < targets.size(); ++i) {
-            const double share = safe_div(targets[i].need, need_sum);
-            int f = static_cast<int>(std::floor(static_cast<double>(mil) * share));
-            f = std::max(1, std::min(f, mil));
-            want[i] = f;
-            assigned += f;
+            const double exact =
+                static_cast<double>(leftover) * safe_div(targets[i].need, need_sum);
+            const int base = static_cast<int>(std::floor(exact));
+            want[i] += base;
+            given += base;
+            frac[i] = exact - static_cast<double>(base);
         }
-        // The rounding remainder goes to the highest-need target first, which keeps
-        // the split deterministic and monotone in need.
-        int leftover = mil - assigned;
-        for (size_t i = 0; i < targets.size() && leftover > 0; ++i) {
-            want[i] += 1;
-            --leftover;
+        for (int rem = leftover - given; rem > 0; --rem) {
+            size_t pick = 0;
+            for (size_t i = 1; i < frac.size(); ++i) {
+                if (frac[i] > frac[pick]) pick = i;
+            }
+            want[pick] += 1;
+            frac[pick] = -1.0;  // never picked twice in one pass
         }
     }
 
@@ -1322,7 +1395,215 @@ bool side_has(const std::vector<WarParticipant>& side, CountryId c) {
     return false;
 }
 
+// Best controlled air base to fly from. `needed` planes must fit in the base's free
+// capacity, given `stationed` planes already committed to each province (live wings
+// plus the commands this run has already queued). The base whose region is closest
+// to `target` wins, ties falling to the lowest province id; a base with a land path
+// to the target beats one without. Invalid id when the country controls no usable
+// air base. Linear in provinces and wings: the caller precomputes `stationed` once.
+ProvinceId pick_air_base(const Game& g, const Country& c, RegionId target, int needed,
+                         const std::vector<int>& stationed) {
+    const World& w = g.world;
+    if (needed < 1) needed = 1;
+    ProvinceId best;
+    int best_hops = 0;
+    w.provinces.for_each([&](ProvinceId pid, const Province& p) {
+        if (p.is_sea || p.air_base <= 0 || p.controller != c.id) return;
+        const int committed = pid.v < stationed.size() ? stationed[pid.v] : 0;
+        if (air_base_capacity(g, pid) - committed < needed) return;
+        const int hops = target.valid() ? region_distance_hops(g, p.region, target) : 0;
+        if (!best.valid()) {
+            best = pid;
+            best_hops = hops;
+            return;
+        }
+        const bool reachable = hops >= 0;
+        const bool best_reachable = best_hops >= 0;
+        if (reachable && !best_reachable) {
+            best = pid;
+            best_hops = hops;
+        } else if (reachable == best_reachable && reachable && hops < best_hops) {
+            best = pid;
+            best_hops = hops;
+        }
+    });
+    return best;
+}
+
 }  // namespace
+
+// Air plan, run from the military layer (the same schedule and the same front line
+// the army uses). Every decision goes through the command system, and each one
+// leaves an AiReason in the military layer's log with its numeric factors.
+void ai_air_layer(Game& g, Country& c) {
+    const World& w = g.world;
+    if (!c.alive) return;
+
+    const bool war = at_war_state(c);
+    const uint8_t posture = posture_of(g.ai, c.id);
+    const std::vector<ProvinceId> front = compute_front_line(w, c.id);
+    const ProvinceId capital = capital_province(w, c.id);
+
+    // The region the air force operates in: the front while at war, the home region
+    // otherwise (and while a war has no front to speak of).
+    RegionId target_region;
+    const Province* anchor = (war && !front.empty()) ? w.province(front.front()) : nullptr;
+    if (!anchor) anchor = w.province(capital);
+    if (anchor) target_region = anchor->region;
+
+    // The region an offensive army is pushing into: the first (lowest-id) hostile
+    // province across the front. CAS flies over the enemy side of the line, not just
+    // over our own.
+    RegionId offensive_region;
+    if (war && !front.empty()) {
+        const Province* fp = w.province(front.front());
+        if (fp) {
+            for (ProvinceId n : fp->adj) {
+                const Province* np = w.province(n);
+                if (!np || np->is_sea || terrain_is_water(np->terrain)) continue;
+                if (!hostile_pair(w, c.id, np->controller)) continue;
+                offensive_region = np->region;
+                break;
+            }
+        }
+    }
+
+    // Public wing store: enemy planes in the target region and our own tally.
+    int enemy_planes_here = 0;
+    int own_wings = 0;
+    for (AirWingId wid : c.wings) {
+        const AirWing* wing = w.wing(wid);
+        if (!wing) continue;
+        ++own_wings;
+    }
+
+    // Planes committed per province: live wings now, plus the moves and formations
+    // this run decides below, so a batch of orders stays feasible when it is applied
+    // in order (two wings must not be told they fit in the same free space).
+    std::vector<int> stationed(w.provinces.capacity() + 1, 0);
+    w.air_wings.for_each([&](AirWingId, const AirWing& x) {
+        if (x.base.valid() && x.base.v < stationed.size()) stationed[x.base.v] += x.planes;
+    });
+    if (target_region.valid()) {
+        w.air_wings.for_each([&](AirWingId, const AirWing& wing) {
+            if (wing.country == c.id) return;
+            if (!hostile_pair(w, c.id, wing.country)) return;
+            if (wing.region != target_region) return;
+            enemy_planes_here += wing.planes;
+        });
+    }
+
+    // (c) The mission the force should fly. A contested sky is settled first; with
+    // the sky ours an offensive army gets close air support and a defensive one
+    // intercepts whatever crosses the line.
+    AirMission desired = AirMission::AirSuperiority;
+    const char* desired_name = "air_superiority";
+    if (war) {
+        if (enemy_planes_here > 0) {
+            desired = AirMission::AirSuperiority;
+            desired_name = "air_superiority_contested";
+        } else if (posture == 2) {
+            desired = AirMission::CloseAirSupport;
+            desired_name = "close_air_support";
+        } else {
+            desired = AirMission::Interception;
+            desired_name = "interception";
+        }
+    }
+
+    // CAS flies where the army is attacking; every other mission flies the front
+    // region (or home, at peace).
+    RegionId mission_region = target_region;
+    if (desired == AirMission::CloseAirSupport && offensive_region.valid()) {
+        mission_region = offensive_region;
+    }
+
+    // (d) Move or remove a wing whose base is gone, then set its mission.
+    for (AirWingId wid : c.wings) {
+        const AirWing* wing = w.wing(wid);
+        if (!wing) continue;
+        const Province* base = w.province(wing->base);
+        const bool base_lost = !base || base->controller != c.id;
+        if (base_lost) {
+            const ProvinceId rebase =
+                pick_air_base(g, c, wing->region, wing->max_planes, stationed);
+            Command move = make_command(CommandType::DeployAirWing, c.id);
+            move.wing = wid;
+            move.province = rebase;
+            if (rebase.valid() && rebase != wing->base && push_if_valid(g, std::move(move))) {
+                if (wing->base.v < stationed.size()) stationed[wing->base.v] -= wing->planes;
+                if (rebase.v < stationed.size()) stationed[rebase.v] += wing->planes;
+                record_reason(g, AiLayer::Military, "rebase_wing", 30.0,
+                              {{"planes", static_cast<double>(wing->planes)},
+                               {"wing_max", static_cast<double>(wing->max_planes)}});
+                continue;
+            }
+            Command drop = make_command(CommandType::DisbandAirWing, c.id);
+            drop.wing = wid;
+            if (push_if_valid(g, std::move(drop))) {
+                record_reason(g, AiLayer::Military, "disband_wing_base_lost", 40.0,
+                              {{"planes", static_cast<double>(wing->planes)}, {"no_base", 1.0}});
+            }
+            continue;
+        }
+
+        const double stock = wing->equipment.valid() &&
+                                     wing->equipment.v < c.equipment_stockpile.size()
+                                 ? c.equipment_stockpile[wing->equipment.v]
+                                 : 0.0;
+        if (wing->planes <= 0 && stock < static_cast<double>(kAirMinWingSize)) {
+            Command drop = make_command(CommandType::DisbandAirWing, c.id);
+            drop.wing = wid;
+            if (push_if_valid(g, std::move(drop))) {
+                record_reason(g, AiLayer::Military, "disband_wing_depleted", 20.0,
+                              {{"planes", 0.0}, {"stockpile", stock}});
+            }
+            continue;
+        }
+
+        if (wing->mission == desired && wing->region == mission_region) continue;
+        Command cmd = make_command(CommandType::SetAirMission, c.id);
+        cmd.wing = wid;
+        cmd.region = mission_region;
+        cmd.value = static_cast<int32_t>(desired);
+        if (!push_if_valid(g, std::move(cmd))) continue;
+        record_reason(g, AiLayer::Military, desired_name, 25.0,
+                      {{"planes", static_cast<double>(wing->planes)},
+                       {"enemy_planes", static_cast<double>(enemy_planes_here)},
+                       {"posture", static_cast<double>(posture)},
+                       {"war", war ? 1.0 : 0.0}});
+    }
+
+    // (b) Form a wing when the country has aircraft to fill one and an air base with
+    // room. The mission is set on the next run, once the command has applied.
+    if (own_wings + pending_commands(g, CommandType::CreateAirWing, c.id) >= kAirMaxWings) return;
+    const EquipmentId model = best_aircraft_model(g, c.id);
+    if (!model.valid()) return;
+    const double stock =
+        model.v < c.equipment_stockpile.size() ? c.equipment_stockpile[model.v] : 0.0;
+    if (stock < static_cast<double>(kAirMinWingSize)) return;
+
+    const ProvinceId base = pick_air_base(g, c, mission_region, kAirMinWingSize, stationed);
+    if (!base.valid()) return;
+    const int committed = base.v < stationed.size() ? stationed[base.v] : 0;
+    const int free = air_base_capacity(g, base) - committed;
+    const int size =
+        clamp(std::min({kAirWingEstablishment, free, static_cast<int>(stock)}),
+              kAirMinWingSize, free);
+    if (size < kAirMinWingSize) return;
+
+    Command cmd = make_command(CommandType::CreateAirWing, c.id);
+    cmd.province = base;
+    cmd.equipment = model;
+    cmd.value = size;
+    if (!push_if_valid(g, std::move(cmd))) return;
+    if (base.v < stationed.size()) stationed[base.v] += size;
+    record_reason(g, AiLayer::Military, "form_wing", 35.0,
+                  {{"planes", static_cast<double>(size)},
+                   {"stockpile", stock},
+                   {"free_capacity", static_cast<double>(free)},
+                   {"war", war ? 1.0 : 0.0}});
+}
 
 void ai_military_layer(Game& g, Country& c) {
     const World& w = g.world;
@@ -1692,6 +1973,11 @@ void ai_military_layer(Game& g, Country& c) {
             ++moves;
         });
     }
+
+    // ---- (e) air ---------------------------------------------------------
+    // Air planning rides the military layer: it needs the same front line and the
+    // posture just decided above, and it acts through the same command queue.
+    ai_air_layer(g, c);
 }
 
 // ============================================================= diplomacy =====

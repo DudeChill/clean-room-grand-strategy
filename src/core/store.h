@@ -26,6 +26,7 @@ struct Army;
 struct Battle;
 struct War;
 struct Character;
+struct AirWing;
 
 template <typename T>
 struct EntityTag {
@@ -67,6 +68,10 @@ struct EntityTag<War> {
 template <>
 struct EntityTag<Character> {
     using Type = CharacterId;
+};
+template <>
+struct EntityTag<AirWing> {
+    using Type = AirWingId;
 };
 
 template <typename T>

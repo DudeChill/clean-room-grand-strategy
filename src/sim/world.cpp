@@ -47,6 +47,30 @@ const char* building_kind_name(BuildingKind k) {
     }
 }
 
+const char* air_mission_name(AirMission m) {
+    switch (m) {
+        case AirMission::None: return "none";
+        case AirMission::AirSuperiority: return "air_superiority";
+        case AirMission::Interception: return "interception";
+        case AirMission::CloseAirSupport: return "close_air_support";
+        case AirMission::StrategicBombing: return "strategic_bombing";
+        case AirMission::LogisticsStrike: return "logistics_strike";
+        case AirMission::Reconnaissance: return "reconnaissance";
+        default: return "unknown";
+    }
+}
+
+bool air_mission_is_offensive(AirMission m) {
+    switch (m) {
+        case AirMission::CloseAirSupport:
+        case AirMission::StrategicBombing:
+        case AirMission::LogisticsStrike:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool World::at_war(CountryId a, CountryId b) const {
     if (!a.valid() || !b.valid() || a == b) return false;
     bool result = false;

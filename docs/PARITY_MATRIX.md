@@ -65,7 +65,15 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | LOG-005 | Fuel distribution | FUNCTIONAL | LOW | yes | yes | yes | unit |
 | LOG-006 | Ports and overseas supply | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | LOG-007 | Motorisation effect | PROTOTYPE | LOW | yes | yes | yes | - |
-| AIR-xxx | Air warfare (all items) | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| AIR-001 | Air wings, bases, missions, air combat | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
+| AIR-002 | Air superiority feeding land combat | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
+| AIR-003 | CAS into land battles | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
+| AIR-004 | Strategic bombing and logistics strike | FUNCTIONAL | LOW | part | yes | yes | unit |
+| AIR-005 | Air control per region | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
+| AIR-006 | Anti-air defence | FUNCTIONAL | LOW | yes | yes | yes | unit |
+| AIR-007 | Air detection model | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| AIR-008 | Air fuel and pilot manpower | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| AIR-009 | Reconnaissance / fog of war | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | NAV-xxx | Naval warfare (all items) | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | POL-001 | Focus trees | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | POL-002 | Events | NOT_IMPLEMENTED | LOW | - | - | - | - |

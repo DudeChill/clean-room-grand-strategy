@@ -3,6 +3,66 @@
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /
 NEW DISCREPANCIES / PERFORMANCE / TEST RESULTS / NEXT PRIORITY.
 
+## 2026-09-23 — v0.2.0 air warfare (AIR-001 closed)
+
+IMPLEMENTED
+* Air wings as real entities: aircraft model, planes versus establishment, base,
+  mission region, mission, efficiency, experience, cumulative losses.
+* Missions: air superiority, interception, CAS, strategic bombing, logistics strike,
+  reconnaissance.
+* Air combat between hostile wings in a region with documented loss and experience
+  models; losses become replacement demand drawn from the equipment stockpile.
+* Air control per strategic region derived from the wings flying there, feeding land
+  combat as an additive term (`BattleDebugLine::air_mod`, shown in the client battle
+  detail).
+* CAS damages enemy divisions in the region's battles; strategic bombing reduces the
+  target state's factories; logistics strike cuts railway levels (and therefore supply
+  capacity); anti-air levels reduce both.
+* Wing displacement to the nearest friendly air base with capacity when a base is
+  lost, destruction when none exists.
+* Aircraft content: fighter/CAS/tactical-bomber archetypes with 1936 and 1940 models,
+  an air technology tree, guaranteed capital air bases, starting wings for the two
+  largest powers.
+* Client: Air tab (form, mission, disband, air-control per contested region), an
+  air-control map overlay, and the air term in the battle damage breakdown.
+* AI air layer (on the military cadence): aircraft production demand, wing formation
+  at the base nearest the operating region, superiority/CAS/interception assignment
+  by posture, rebasing and disbanding lost or depleted wings, with scored reasons.
+* 23 air tuning constants live in `data/common/constants.json` rather than in code.
+
+FIXED
+* Anti-air is a real building again (AIR-002 closed): `Province::anti_air` reduces
+  bombing and logistics-strike damage and raises attacker losses over defended ground.
+* `SimConstants` serialization fell behind the struct (60 of 78 fields): saves and
+  `world_hash()` were reading past what was written, which segfaulted the hash oracle.
+  All 78 fields are serialized in declaration order, with a test-time drift guard
+  (a named table of every constant plus a count assertion) so it cannot recur silently.
+* The AI production layer could not open an aircraft line at all, because aircraft
+  need was derived only from divisions and templates never field aircraft; it now adds
+  wing replacements plus a reserve, and its factory split uses largest-remainder
+  allocation so it can never assign more factories than the country controls.
+* `Store::create` auto-assigns a payload's `id`, `military_destroy_division` detaches
+  from battles, and `military_prune_battles` closes the loop (all from the v0.1.0 gate
+  work, re-verified here).
+
+PERFORMANCE
+* Air phase: 0.005 ms/tick in the shipped scenario, 0.033 ms/tick for a synthetic
+  500-wing world. One year of AI war (484 divisions, 23 wars) costs 5.9 ms per
+  simulated hour on average.
+
+TEST RESULTS
+* `hoi_tests`: 136 passed, 0 failed (24 of them air-specific).
+* `scripts/verify.sh`: 8 checks passed, 0 failed.
+* 365-day observer run with air: `world audit: OK`.
+
+NEW DISCREPANCIES
+* AIR-003 (no air detection model or radar effect), AIR-004 (no sortie fuel or pilot
+  manpower), AIR-005 (reconnaissance has nothing to reveal without fog of war).
+
+NEXT PRIORITY
+* Naval warfare per `docs/mechanics/naval_warfare.md` (NAV-001, BLOCKER), then focus
+  trees/events/decisions, then trade and convoys.
+
 ## 2026-09-23 — v0.1.0 release gate green
 
 VALIDATED (with evidence packets under docs/evidence/)

@@ -97,6 +97,31 @@ struct SimConstants {
     double supply_infrastructure_bonus_per_level = 0.05;
     double fuel_demand_per_day = 0.02;      // share of division fuel_use per hour scale
 
+    // Air.
+    double air_base_capacity_per_level = 200.0;  // planes a level-1 air base hosts
+    double air_sortie_hours = 6.0;               // hours per sortie cycle
+    double air_cas_effect = 0.25;                // max additive land-attack bonus from CAS
+    double air_superiority_effect = 0.20;        // max additive bonus from air control
+    double air_bombing_industry_damage = 0.02;   // factories damaged per bombing hour
+    double air_logistics_strike_damage = 0.05;   // railway level damaged per strike hour
+    double air_anti_air_bombing_reduction = 0.15;  // damage cut per anti-air level: 1/(1+r*aa)
+    double air_anti_air_combat_loss_factor = 0.10;  // extra air-combat losses per AA level
+    double air_combat_scale = 0.6;              // attack strength -> hourly aircraft damage
+    double air_aircraft_durability = 10.0;      // damage absorbed per aircraft
+    double air_agility_weight = 0.25;           // agility advantage multiplier in air combat
+    double air_combat_defence_floor = 20.0;     // floor term in the defence-share denominator
+    double air_combat_roll_base = 0.5;          // randomness = base + next_double() (0.5..1.5)
+    double air_experience_per_combat_hour = 0.002;
+    double air_experience_per_mission_hour = 0.0005;
+    double air_cas_organisation_damage = 0.05;  // org damage per unit of CAS power
+    double air_cas_strength_damage = 0.02;      // HP damage per unit of CAS power
+    double air_bombing_power_unit = 10.0;       // strike power per factory-hour
+    double air_logistics_power_unit = 50.0;     // strike power per rail-level-hour
+    double air_support_min_modifier = -0.25;    // clamp low for air_support_modifier
+    double air_support_max_modifier = 0.50;     // clamp high for air_support_modifier
+    double air_mission_weight_contested = 1.0;  // air-control weight: superiority/interception
+    double air_mission_weight_support = 0.5;    // air-control weight: CAS/bombing/logistics/recon
+
     // Politics.
     double political_power_per_day = 2.0;
     double stability_drift = 0.01;

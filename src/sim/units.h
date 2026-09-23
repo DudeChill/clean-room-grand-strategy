@@ -72,6 +72,10 @@ struct EquipmentDef {
     double soft_attack = 0.0;
     double hard_attack = 0.0;
     double air_attack = 0.0;
+    double air_defence = 0.0;
+    double ground_attack = 0.0;  // damage dealt to land divisions (CAS, bombers)
+    double agility = 0.0;
+    double range = 0.0;  // strategic-region hops a wing can operate from its base
     double defense = 0.0;
     double breakthrough = 0.0;
     double armor = 0.0;

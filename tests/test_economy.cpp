@@ -771,13 +771,15 @@ HOI_TEST(synthetic_refinery_completion_adds_oil_and_rubber) {
     CHECK_NEAR(produced[OIL], 6.0, 1e-12);
 }
 
-HOI_TEST(anti_air_projects_are_pruned_safely) {
+HOI_TEST(anti_air_project_completes_and_raises_the_province_level) {
     Fixture f;
+    f.set_max_factories_per_project(7.0);
     const CountryId c = f.add_country("AAA");
     const StateId st = f.add_state(c, 10);
     const ProvinceId p = f.add_province(st, c, c, 3, 0.0, 0.0);
-    f.state(st)->civilian_factories = 10;
+    f.state(st)->civilian_factories = 50;
     f.country(c)->consumer_goods_ratio = 0.0;
+    f.add_building("anti_air", BuildingKind::AntiAir, 2000.0, 5);
 
     ConstructionProject project;
     project.kind = BuildingKind::AntiAir;
@@ -785,13 +787,50 @@ HOI_TEST(anti_air_projects_are_pruned_safely) {
     project.state = st;
     project.target_level = 1;
     f.country(c)->construction.queue.push_back(project);
-    f.advance_industry(48);
 
-    // Air warfare does not exist yet (AIR-002): the project is dropped instead of
-    // holding a queue slot and consuming capacity forever.
+    int hours = 0;
+    while (!f.country(c)->construction.queue.empty() && hours < 40000) {
+        f.advance_industry(1);
+        ++hours;
+    }
+    // Anti-air is a province building: completing it raises the level and nothing
+    // else, and the project leaves the queue.
     CHECK(f.country(c)->construction.queue.empty());
+    CHECK_EQ(f.province(p)->anti_air, 1);
     CHECK_EQ(f.province(p)->fort_level, 0);
     CHECK_EQ(f.province(p)->infrastructure, 3);
+    const SimConstants& k = f.g.content.constants;
+    const double rate = k.max_factories_per_project * k.ic_per_civilian_factory / 24.0;
+    CHECK_NEAR(static_cast<double>(hours), 2000.0 / rate, 1.0);
+
+    // The next level scales from the level already standing, and the content's
+    // maximum level still applies.
+    ConstructionProject second;
+    second.kind = BuildingKind::AntiAir;
+    second.province = p;
+    second.state = st;
+    second.target_level = 2;
+    f.country(c)->construction.queue.push_back(second);
+    f.advance_industry(1);
+    CHECK_NEAR(f.country(c)->construction.queue.front().cost,
+               2000.0 * (1.0 + (k.construction_level_scaling - 1.0)), 1e-9);
+    hours = 0;
+    while (!f.country(c)->construction.queue.empty() && hours < 40000) {
+        f.advance_industry(1);
+        ++hours;
+    }
+    CHECK_EQ(f.province(p)->anti_air, 2);
+
+    f.province(p)->anti_air = 5;  // at the data's maximum for anti-air
+    ConstructionProject third;
+    third.kind = BuildingKind::AntiAir;
+    third.province = p;
+    third.state = st;
+    third.target_level = 6;
+    f.country(c)->construction.queue.push_back(third);
+    f.advance_industry(1);
+    CHECK(f.country(c)->construction.queue.empty());
+    CHECK_EQ(f.province(p)->anti_air, 5);
 }
 
 // ------------------------------------------------------------------ 5.3 -----

@@ -21,6 +21,8 @@ void phase_combat(Game& g);
 void phase_territory(Game& g);
 // 6. Supply network flow, division supply/fuel levels.
 void phase_supply(Game& g);
+// 6b. Air operations: sorties, air combat, missions, losses and air control.
+void phase_air(Game& g);
 // 7. Resources, production lines, construction, consumer goods, stockpiles.
 void phase_industry(Game& g);
 // 8. Research progress and technology effect propagation.

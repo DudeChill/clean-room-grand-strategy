@@ -10,7 +10,10 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | ID | Severity | Subsystem | Reference behaviour | Current behaviour | Status |
 |---|---|---|---|---|---|
 | AIR-001 | BLOCKER | Air | Air wings, missions, superiority, CAS, losses | No air simulation at all | OPEN |
-| AIR-002 | MINOR | Air | Anti-air buildings damage raiders | Anti-air construction is refused with `PrerequisitesMissing` rather than creating a building with no effect | OPEN |
+| AIR-002 | MINOR | Air | Anti-air buildings damage raiders and reduce bombing damage | Implemented: `Province::anti_air` is a real building level and reduces strategic bombing and logistics strike damage on that province | CLOSED (air milestone) |
+| AIR-003 | MODERATE | Air | Detection depends on range, radar and aircraft detection profiles | Any hostile wing present in the region engages; there is no detection roll and no radar effect | OPEN |
+| AIR-004 | MINOR | Air | Sorties consume fuel and pilots are manpower | Wings have neither a fuel nor a manpower field, so sorties are not fuel-gated and pilots are not tracked | OPEN |
+| AIR-005 | MINOR | Air | Reconnaissance reveals enemy dispositions (fog of war) | The mission is legal and flies but reveals nothing, because the engine has no fog-of-war state | OPEN |
 | NAV-001 | BLOCKER | Naval | Ships, task forces, detection, missions | No naval simulation at all | OPEN |
 | POL-001 | BLOCKER | Politics | Focus trees drive national progression | No focus system | OPEN |
 | POL-002 | MAJOR | Politics | Events and decisions with triggers/options | No event/decision scripting | OPEN |

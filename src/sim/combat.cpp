@@ -18,6 +18,7 @@
 #include "core/math.h"
 #include "core/rng.h"
 #include "game/game.h"
+#include "sim/air.h"
 #include "sim/politics.h"
 #include "sim/units.h"
 #include "sim/world.h"
@@ -73,6 +74,12 @@ bool mil_same_side(const World& w, CountryId a, CountryId b) {
 namespace {
 
 constexpr size_t kMaxBattleDebugLines = 64;
+
+// Air support enters land combat as an additive attack modifier
+// (docs/mechanics/air_warfare.md: "Land combat consumes cas_bonus as an additive
+// attack modifier"). The band keeps a runaway air-control value from rewriting the
+// whole attack chain; realistic air_support_modifier values sit well inside it.
+constexpr double kMaxAirAttackModifier = 1.0;
 
 // Combat width per terrain (ARCHITECTURE 5.5).
 double terrain_combat_width(Terrain t) {
@@ -504,6 +511,19 @@ SideCombatValues compute_side_values(const Game& g, const Battle& b,
         if (reg) weather_penalty = std::max(0.0, weather_attack_penalty(*reg));
     }
 
+    // Air support for the whole side, from the air control in the battle's region.
+    // A coalition side is judged by its lead country (Battle::attacker_lead /
+    // defender_lead). phase_air runs after phase_combat in the same tick (game.cpp),
+    // so combat reads the previous hour's air control; that ordering is intended and
+    // must not be changed here.
+    double air_mod = 0.0;
+    if (g.world.province(b.province)) {
+        const CountryId air_country = attacker ? b.attacker_lead : b.defender_lead;
+        air_mod = air_support_modifier(g, air_country, b.province, attacker);
+    }
+    if (!std::isfinite(air_mod)) air_mod = 0.0;
+    air_mod = clamp(air_mod, -kMaxAirAttackModifier, kMaxAirAttackModifier);
+
     double armor_sum = 0.0;
     double piercing_sum = 0.0;
 
@@ -522,8 +542,8 @@ SideCombatValues compute_side_values(const Game& g, const Battle& b,
         const double attack_mod = mods.get(ModifierKind::DivisionAttack);
         const double org_factor =
             clamp01(safe_div(dp->organization, std::max(1e-9, s.max_organization)));
-        const double mult = (1.0 + attack_mod + planning_mod + experience_mod + commander -
-                             weather_penalty) *
+        const double mult = (1.0 + attack_mod + planning_mod + experience_mod + commander +
+                             air_mod - weather_penalty) *
                             terrain_mod * supply_mod * org_factor;
 
         const double base_attack =
@@ -556,8 +576,9 @@ SideCombatValues compute_side_values(const Game& g, const Battle& b,
             line.supply_mod = supply_mod;
             line.commander_mod = commander;
             line.experience_mod = experience_mod;
+            line.air_mod = air_mod;
             line.final_attack = base_attack * (1.0 + attack_mod + planning_mod + experience_mod +
-                                               commander - weather_penalty) *
+                                               commander + air_mod - weather_penalty) *
                                 terrain_mod * supply_mod * org_factor;
             debug->push_back(line);
         }
