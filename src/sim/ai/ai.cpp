@@ -2204,25 +2204,27 @@ void ai_naval_layer(Game& g, Country& c) {
     });
 
     // (e) invasion. Only start one when the country has transports, naval control in
-    // the crossing zone, and a hostile coast its troops can embark for; record the
-    // decision with every factor.
+    // the crossing zone, and a hostile coast its troops can embark for. When the army
+    // is not yet in a port, march it there first and launch only once it has arrived;
+    // the decision is recorded with every factor either way.
     if (has_port && war && !landing) {
-        const InvasionForce force = pick_invasion_force(g, c.id);
-        if (force.army.valid()) {
-            RegionId crossing;
-            int hops = 0;
-            const ProvinceId target = hostile_coast_from(g, c.id, force.origin, &crossing, &hops);
-            if (target.valid() && crossing.valid()) {
-                const double control = naval_control_share(g, c.id, crossing);
-                const double enemy = hostile_naval_control(g, c.id, crossing);
-                const double convoys = convoy_stock(c, g.content);
-                const double needed = g.content.constants.naval_invasion_convoys_per_division *
-                                      static_cast<double>(force.divisions);
-                if (control >= kNavalInvasionControlThreshold && control > enemy &&
-                    convoys >= needed) {
+        const InvasionSetup setup = plan_invasion(g, c.id);
+        if (setup.army.valid() && setup.port.valid() && setup.crossing.valid()) {
+            const double control = naval_control_share(g, c.id, setup.crossing);
+            const double enemy = hostile_naval_control(g, c.id, setup.crossing);
+            const double convoys = convoy_stock(c, g.content);
+            const double needed = g.content.constants.naval_invasion_convoys_per_division *
+                                  static_cast<double>(setup.divisions);
+            const bool ready = control >= kNavalInvasionControlThreshold && control > enemy &&
+                               convoys >= needed;
+            if (ready && setup.at_port) {
+                RegionId crossing;
+                int hops = 0;
+                const ProvinceId target = hostile_coast_from(g, c.id, setup.port, &crossing, &hops);
+                if (target.valid()) {
                     Command cmd = make_command(CommandType::LaunchNavalInvasion, c.id);
-                    cmd.army = force.army;
-                    cmd.province = force.origin;
+                    cmd.army = setup.army;
+                    cmd.province = setup.port;
                     cmd.province_b = target;
                     if (push_if_valid(g, std::move(cmd))) {
                         record_reason(g, AiLayer::Military, "launch_invasion",
@@ -2231,9 +2233,35 @@ void ai_naval_layer(Game& g, Country& c) {
                                        {"enemy_control", enemy},
                                        {"convoys", convoys},
                                        {"convoys_needed", needed},
-                                       {"divisions", static_cast<double>(force.divisions)},
+                                       {"divisions", static_cast<double>(setup.divisions)},
                                        {"sea_hops", static_cast<double>(hops)}});
                     }
+                }
+            } else if (ready) {
+                // The army is inland: march every division to the port. The invasion
+                // launches on a later run, once the army has actually arrived.
+                const Army* a = w.army(setup.army);
+                std::vector<DivisionId> divisions;
+                if (a) {
+                    divisions = a->divisions;
+                    std::sort(divisions.begin(), divisions.end());
+                }
+                int staged = 0;
+                for (DivisionId did : divisions) {
+                    if (staged >= kNavalStageMovesPerRun) break;
+                    const Division* d = w.division(did);
+                    if (!d || !d->location.valid() || d->location == setup.port) continue;
+                    if (d->moving || d->retreating || d->in_combat()) continue;
+                    Command cmd = make_command(CommandType::MoveDivision, c.id);
+                    cmd.division = did;
+                    cmd.province = setup.port;
+                    if (!push_if_valid(g, std::move(cmd))) continue;
+                    ++staged;
+                    record_reason(g, AiLayer::Military, "stage_invasion", 30.0,
+                                  {{"sea_hops", static_cast<double>(setup.hops)},
+                                   {"divisions", static_cast<double>(setup.divisions)},
+                                   {"convoys", convoys},
+                                   {"naval_control", control}});
                 }
             }
         }
