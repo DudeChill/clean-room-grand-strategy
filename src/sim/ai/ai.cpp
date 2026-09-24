@@ -171,6 +171,47 @@ constexpr double kNavalInvasionControlThreshold = 0.5;  // control share needed 
 constexpr int kNavalRangeHops = 3;             // sea zones a task force may work from port
 constexpr double kNavalDamagedStrength = 0.6;  // average strength that sends a force home
 constexpr int kNavalStageMovesPerRun = 4;      // divisions ordered to a port per run
+
+// A landing needs troops that can board now: an army whose divisions are locked in a
+// battle or already retreating cannot gather at the port and would stall the crossing.
+bool army_is_available_for_landing(const World& w, ArmyId army) {
+    const Army* a = w.army(army);
+    if (!a || a->divisions.empty()) return false;
+    for (DivisionId did : a->divisions) {
+        const Division* d = w.division(did);
+        if (!d) continue;
+        if (!d->location.valid()) return false;  // still training
+        if (d->in_combat() || d->retreating || d->moving) return false;
+    }
+    return true;
+}
+
+bool army_is_invading(const World& w, ArmyId army) {
+    if (!army.valid()) return false;
+    for (const NavalInvasion& inv : w.invasions) {
+        if (inv.army == army) return true;
+    }
+    return false;
+}
+
+// An army is committed to a landing when the crossing exists OR it has been given the
+// invasion order while its divisions march to the staging port. While committed it must
+// not be re-tasked: the front logic would otherwise pull staged divisions back out.
+bool army_is_committed(const World& w, ArmyId army) {
+    if (army_is_invading(w, army)) return true;
+    const Army* a = w.army(army);
+    return a != nullptr && a->order.kind == OrderKind::NavalInvasion;
+}
+
+// A division committed to a naval invasion must not be re-tasked by the army layer:
+// the crossing waits until the whole army has gathered at the staging port, so any
+// competing movement or army-level order would stall the operation forever.
+bool division_committed_to_invasion(const World& w, const Division& d) {
+    if (d.order == OrderKind::NavalInvasion) return true;
+    return army_is_committed(w, d.army);
+}
+
+
 constexpr double kNavalContestedControl = 0.01;  // enemy share that makes a zone contested
 constexpr double kNavalModelEscortSubWeight = 2.0;   // escort: anti-submarine weight
 constexpr double kNavalModelEscortDetectWeight = 1.0;  // escort: spotting weight
@@ -1278,6 +1319,7 @@ InvasionSetup plan_invasion(const Game& g, CountryId country) {
     for (ArmyId aid : armies) {
         const Army* a = w.army(aid);
         if (!a || a->divisions.empty() || army_invading(aid)) continue;
+        if (!army_is_available_for_landing(w, aid)) continue;
         const std::vector<DivisionId> divs = living_divisions(*a);
         for (DivisionId did : divs) {
             const Division* d = w.division(did);
@@ -1300,7 +1342,9 @@ InvasionSetup plan_invasion(const Game& g, CountryId country) {
     // ties keep the lowest port id, and the route length only breaks ties.
     for (ArmyId aid : armies) {
         const Army* a = w.army(aid);
-        if (!a || a->divisions.empty() || army_invading(aid)) continue;
+        if (!a || a->divisions.empty()) continue;
+        if (army_invading(aid)) continue;  // already crossing: not available for a new one
+        if (!army_is_available_for_landing(w, aid)) continue;
         const std::vector<DivisionId> divs = living_divisions(*a);
         if (divs.empty()) continue;
         ProvinceId stage_port;
@@ -2217,41 +2261,47 @@ void ai_naval_layer(Game& g, Country& c) {
                                   static_cast<double>(setup.divisions);
             const bool ready = control >= kNavalInvasionControlThreshold && control > enemy &&
                                convoys >= needed;
-            if (ready && setup.at_port) {
-                RegionId crossing;
-                int hops = 0;
-                const ProvinceId target = hostile_coast_from(g, c.id, setup.port, &crossing, &hops);
-                if (target.valid()) {
-                    Command cmd = make_command(CommandType::LaunchNavalInvasion, c.id);
-                    cmd.army = setup.army;
-                    cmd.province = setup.port;
-                    cmd.province_b = target;
-                    if (push_if_valid(g, std::move(cmd))) {
-                        record_reason(g, AiLayer::Military, "launch_invasion",
-                                      50.0 + control * 50.0,
+            if (ready) {
+                // Commit the army before marching: the invasion order is what keeps
+                // the front logic from pulling staged divisions back to the line.
+                const Army* committed = w.army(setup.army);
+                if (committed && committed->order.kind != OrderKind::NavalInvasion) {
+                    Command order = make_command(CommandType::SetDivisionOrder, c.id);
+                    order.army = setup.army;
+                    order.value = static_cast<int32_t>(OrderKind::NavalInvasion);
+                    if (push_if_valid(g, std::move(order))) {
+                        record_reason(g, AiLayer::Military, "commit_invasion", 35.0,
                                       {{"naval_control", control},
-                                       {"enemy_control", enemy},
-                                       {"convoys", convoys},
-                                       {"convoys_needed", needed},
-                                       {"divisions", static_cast<double>(setup.divisions)},
-                                       {"sea_hops", static_cast<double>(hops)}});
+                                       {"divisions", static_cast<double>(setup.divisions)}});
                     }
                 }
-            } else if (ready) {
-                // The army is inland: march every division to the port. The invasion
-                // launches on a later run, once the army has actually arrived.
+                // Stage every division that is not yet in the port, every run — a
+                // single division's arrival must not stop the rest of the army from
+                // gathering, or the crossing would wait for them forever.
                 const Army* a = w.army(setup.army);
                 std::vector<DivisionId> divisions;
                 if (a) {
                     divisions = a->divisions;
                     std::sort(divisions.begin(), divisions.end());
                 }
+                bool all_at_port = !divisions.empty();
                 int staged = 0;
                 for (DivisionId did : divisions) {
-                    if (staged >= kNavalStageMovesPerRun) break;
                     const Division* d = w.division(did);
-                    if (!d || !d->location.valid() || d->location == setup.port) continue;
-                    if (d->moving || d->retreating || d->in_combat()) continue;
+                    if (!d || !d->location.valid()) {
+                        all_at_port = false;
+                        continue;
+                    }
+                    if (d->location == setup.port) continue;
+                    all_at_port = false;
+                    if (staged >= kNavalStageMovesPerRun) continue;
+                    // Troops locked in a fight or already falling back cannot be pulled
+                    // out this run; they will be staged once they are free.
+                    if (d->retreating || d->in_combat()) continue;
+                    // Already on the way to the port: leave the march alone. Anything
+                    // else (including a march somewhere else) is redirected here, since
+                    // a committed army must gather at the port.
+                    if (!d->path.empty() && d->path.back() == setup.port) continue;
                     Command cmd = make_command(CommandType::MoveDivision, c.id);
                     cmd.division = did;
                     cmd.province = setup.port;
@@ -2262,6 +2312,32 @@ void ai_naval_layer(Game& g, Country& c) {
                                    {"divisions", static_cast<double>(setup.divisions)},
                                    {"convoys", convoys},
                                    {"naval_control", control}});
+                }
+
+                // Launch only when the whole army is actually in the port: the
+                // crossing waits for every division, so launching early would leave
+                // the operation stalled at the gather step.
+                if (all_at_port) {
+                    RegionId crossing;
+                    int hops = 0;
+                    const ProvinceId target =
+                        hostile_coast_from(g, c.id, setup.port, &crossing, &hops);
+                    if (target.valid()) {
+                        Command cmd = make_command(CommandType::LaunchNavalInvasion, c.id);
+                        cmd.army = setup.army;
+                        cmd.province = setup.port;
+                        cmd.province_b = target;
+                        if (push_if_valid(g, std::move(cmd))) {
+                            record_reason(g, AiLayer::Military, "launch_invasion",
+                                          50.0 + control * 50.0,
+                                          {{"naval_control", control},
+                                           {"enemy_control", enemy},
+                                           {"convoys", convoys},
+                                           {"convoys_needed", needed},
+                                           {"divisions", static_cast<double>(setup.divisions)},
+                                           {"sea_hops", static_cast<double>(hops)}});
+                        }
+                    }
                 }
             }
         }
@@ -2378,6 +2454,7 @@ void ai_military_layer(Game& g, Country& c) {
         for (ArmyId aid : c.armies) {
             const Army* a = w.army(aid);
             if (!a) continue;
+            if (army_is_committed(w, aid)) continue;  // the crossing owns this army
             if (static_cast<int>(a->divisions.size()) >= kMilDivisionsPerArmy) continue;
             if (!host.valid() || a->divisions.size() < host_size) {
                 host = aid;
@@ -2453,6 +2530,7 @@ void ai_military_layer(Game& g, Country& c) {
     for (ArmyId aid : c.armies) {
         const Army* a = w.army(aid);
         if (!a || a->divisions.empty()) continue;
+        if (army_is_committed(w, aid)) continue;  // the crossing owns this army's orders
         const uint8_t stance = !war ? 2 : (posture == 2 ? 0 : 1);
 
         if (a->order.kind != desired || a->order.line.empty()) {
@@ -2547,6 +2625,7 @@ void ai_military_layer(Game& g, Country& c) {
         std::vector<AttackOrder> orders;
         w.divisions.for_each([&](DivisionId did, const Division& d) {
             if (d.country != c.id || d.moving || d.retreating || d.in_combat()) return;
+            if (division_committed_to_invasion(w, d)) return;  // gathering for a landing
             if (!d.location.valid() || d.location.v >= best_target.size()) return;
             if (!best_target[d.location.v].valid()) return;
             AttackOrder o;
@@ -2608,6 +2687,7 @@ void ai_military_layer(Game& g, Country& c) {
         w.divisions.for_each([&](DivisionId did, const Division& d) {
             if (moves >= kMilMaxMovesPerRun) return;
             if (d.country != c.id || d.moving || d.retreating || d.in_combat()) return;
+            if (division_committed_to_invasion(w, d)) return;  // gathering for a landing
             if (!d.location.valid()) return;  // still training off-map
             if (std::find(front.begin(), front.end(), d.location) != front.end()) return;  // on the line
 

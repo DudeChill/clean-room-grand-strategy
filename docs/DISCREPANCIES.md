@@ -18,6 +18,7 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | NAV-008 | MINOR | Naval | Raiders interdict along the whole sea route to a port | Convoy raiding is detected in the destination port's sea zone only (no sea-route path enumeration) | OPEN |
 | NAV-009 | MINOR | Naval | Convoy losses deplete shipping progressively | The overseas supply gate is binary on convoy stock being non-zero, and convoy draw is proportional to port capacity rather than delivered throughput | OPEN |
 | NAV-010 | MINOR | Naval | AI stages armies at ports before invading | Closed in the naval milestone: the AI marches divisions to the invasion port and launches once they arrive | CLOSED |
+| NAV-011 | MINOR | Naval | An invading army gathers and crosses as a whole | AI staging is verified for a free army: it commits the army, marches its divisions and refuses to launch until they are in the port. Reproduced open case: when the AI assigns an additional engaged division to the staging army, that division cannot be pulled out of its battle, so the gather step waits and the crossing stalls (the AI now avoids committing such armies, but an assignment made before commitment can still race) | OPEN (reproduction in tests/test_ai.cpp, the avoided case is covered) |
 | POL-001 | BLOCKER | Politics | Focus trees drive national progression | No focus system | OPEN |
 | POL-002 | MAJOR | Politics | Events and decisions with triggers/options | No event/decision scripting | OPEN |
 | POL-003 | MAJOR | Politics | National spirits and advisors | Not modelled | OPEN |

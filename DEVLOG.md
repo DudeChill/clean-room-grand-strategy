@@ -3,6 +3,39 @@
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /
 NEW DISCREPANCIES / PERFORMANCE / TEST RESULTS / NEXT PRIORITY.
 
+## 2026-09-23 — v0.3.1: AI invasion staging (release-artifact correction)
+
+FIXED
+* **Release artifact corrected.** The v0.3.0 tarball was packaged after an agent had
+  landed additional AI staging code that was never covered by a test, so the artifact
+  and the tag disagreed. v0.3.1 is cut from a single tree that is gate-verified as a
+  whole, and the v0.3.0 release notes now point at it.
+* AI invasion staging had three real defects, all found by writing the missing test
+  (the reproduction is `ai_stages_an_inland_army_at_a_port_before_invading`):
+  1. staging stopped as soon as one division reached the port, so the rest of the army
+     was never marched;
+  2. the army layer kept re-tasking staged divisions, pulling them back to the front
+     (a `MoveDivision` clears the division's own order, so the guard now uses the
+     army-level invasion order, which is durable);
+  3. an army whose divisions were locked in a battle could be chosen for a landing and
+     would then wait forever at the gather step — army selection now requires a free
+     army, and a division already marching somewhere else is redirected to the port.
+* Added `staged_division_was_pulled_back` to the test as the regression guard for (2):
+  the failure it catches is invisible in the final state, since the army simply never
+  crosses.
+
+NEW DISCREPANCIES
+* NAV-011: an engaged division assigned to a staging army before commitment can still
+  stall the gather step; the AI now avoids committing such armies, and the race is
+  recorded with its reproduction.
+
+TEST RESULTS
+* `hoi_tests`: 170 passed, 0 failed (one more than v0.3.0).
+* Release gate re-run on the corrected tree: see `docs/reviews/v0.3.1.md`.
+
+NEXT PRIORITY
+* Focus trees (POL-001, last BLOCKER).
+
 ## 2026-09-23 — v0.3.0 naval warfare (NAV-001 and LOG-006 closed)
 
 IMPLEMENTED

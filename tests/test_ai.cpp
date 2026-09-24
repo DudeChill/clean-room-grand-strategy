@@ -23,6 +23,8 @@
 #include "sim/commands.h"
 #include "sim/navy.h"
 #include "sim/world.h"
+#include <algorithm>
+
 #include "test.h"
 
 namespace {
@@ -1212,6 +1214,68 @@ HOI_TEST(ai_does_not_invade_without_superiority) {
 
     CHECK_EQ(stats.invasions, 0);
     CHECK_EQ(f.g.world.invasions.size(), 0u);
+}
+
+// An army that starts inland must reach a staging port and stay there: the naval
+// layer commits the army (OrderKind::NavalInvasion) and marches its divisions, and the
+// army layer must not pull them back to the front while the crossing gathers.
+HOI_TEST(ai_stages_an_inland_army_at_a_port_before_invading) {
+    Fixture f;
+    build_world(f);
+    const NavalParts np = add_naval_capability(f);
+    World& w = f.g.world;
+
+    // Connect the port to the capital so the army has a real path to march, and keep
+    // every division of A in the rear: troops locked in a battle are legitimately not
+    // available for a landing.
+    w.province(np.port_a)->adj.push_back(f.cap_a);
+    w.province(f.cap_a)->adj.push_back(np.port_a);
+    for (DivisionId did : w.country(f.a)->divisions) {
+        Division* d = w.division(did);
+        if (d) {
+            d->location = f.cap_a;
+            d->previous_location = f.cap_a;
+        }
+    }
+
+    const ArmyId army = add_landing_army(f, f.cap_a);
+    const ProvinceId port = np.port_a;
+    seed_task_force(f.g, f.a, port, np.sea_region, np.destroyer, 8);
+
+    f.g.set_ai(f.a, true);
+    f.g.world.tick = 0;
+
+    bool invasion_seen = false;
+    bool army_committed = false;
+    bool staged_division_was_pulled_back = false;
+    std::vector<DivisionId> staged;
+    for (int tick = 0; tick < 30 * TICKS_PER_DAY; ++tick) {
+        f.g.tick_once();
+        const Army* a = w.army(army);
+        if (!a) continue;
+        if (a->order.kind == OrderKind::NavalInvasion) army_committed = true;
+        for (DivisionId did : a->divisions) {
+            const Division* d = w.division(did);
+            if (!d || !d->location.valid()) continue;
+            if (d->location == port) {
+                if (std::find(staged.begin(), staged.end(), did) == staged.end()) staged.push_back(did);
+            } else if (std::find(staged.begin(), staged.end(), did) != staged.end()) {
+                // It was in the port and left again: the army layer is fighting the
+                // staging, which would stall the crossing.
+                staged_division_was_pulled_back = true;
+            }
+        }
+        if (!w.invasions.empty()) {
+            invasion_seen = true;
+            break;
+        }
+    }
+
+    CHECK(army_committed);
+    CHECK(!staged.empty());
+    CHECK(!staged_division_was_pulled_back);
+    CHECK(invasion_seen);
+    CHECK(check_invariants(f.g).empty());
 }
 
 // Same scenario, same seed: the naval plan and the world it leaves behind are
