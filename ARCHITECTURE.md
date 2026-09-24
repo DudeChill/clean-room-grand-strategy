@@ -237,6 +237,36 @@ draws convoys from the owner's stockpile while it operates. Convoy raiding there
 starves an overseas theatre through the ordinary supply graph rather than through a
 special case.
 
+### 5.10a Equipment variants and replacement
+
+A battalion slot names one equipment *family*, not one exact model:
+
+* `slot_family` maps a slot's equipment to its family (`infantry_equipment` for
+  `infantry_equipment_1`, or the archetype's own key when the slot names an archetype).
+* `equipment_fits_slot` admits any model of that family the country may field -
+  researched, or one of its own designs. Locked models and other countries' designs are
+  refused, so a variant can never leak across a border.
+* `preferred_slot_model` decides which member a country issues, in this order:
+  (1) the member on a live production line that fits - a country fields what it builds;
+  (2) otherwise the fieldable member with stock, highest `equipment_stat_score` first;
+  (3) otherwise the highest-scoring fieldable member; (4) otherwise none. Rule 1 makes
+  the choice independent of the order in which phases run, which is what stops demand
+  from oscillating between an old and a new model while a line ramps up.
+* `phase_reinforcement` (after `phase_industry`, before the AI) is the replacement
+  mechanism: a division below full strength draws
+  `max(missing * 0.02, 0.25) * supply` per hour of the model the country issues for each
+  of its slot families, falling back to the family's stocked model when the preferred
+  model has nothing in the depot this hour. Supply gates it, so a cut-off division does
+  not refill - that is what makes encirclement bite. It adds no state: the save format and
+  the world hash layout are unchanged.
+* The training queue draws the same way (family-grouped, with the same fallback), so new
+  divisions and existing ones agree on what the army is equipped with.
+* Strength and manpower follow the definition actually consumed, as they always have; a
+  division may therefore hold several models of one family at once, and its template's
+  requirement is enforced against the family total.
+* Rounding: identical IEEE-754 double rules as every other formula here; drawing is
+  clamped to the missing amount, so no path can over-fill a slot.
+
 ### 5.11 Equipment designs
 
 A design is an equipment archetype plus a fitted component set. The rule is a pure

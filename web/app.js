@@ -619,6 +619,17 @@ function renderLeft() {
   for (const d of list) {
     const row = document.createElement('div');
     row.className = 'row' + (d.id === App.selectedDivision ? ' selected' : '');
+    // Selecting a division also shows the models it fields: a slot can be filled by
+    // several models of one family once newer variants reach the depot, and a player
+    // needs to see an upgrade land rather than infer it from strength.
+    if (d.id === App.selectedDivision && d.equipment) {
+      const gear = Object.entries(d.equipment).map(([k2, v]) => `${k2} ×${(v / 1).toFixed(0)}`).join(', ');
+      const info = document.createElement('div');
+      info.className = 'dim small';
+      info.style.paddingLeft = '14px';
+      info.textContent = gear || 'no equipment';
+      row.appendChild(info);
+    }
     row.innerHTML = `<span>${d.name} <span class="dim">${tagOf(d.country)}</span></span>` +
       `<span class="num">${d.org.toFixed(0)}/${d.max_org.toFixed(0)} · ${(d.strength * 100).toFixed(0)}%</span>`;
     row.addEventListener('click', (ev) => {

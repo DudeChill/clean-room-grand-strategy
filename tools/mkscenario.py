@@ -265,6 +265,56 @@ LINE_PRIORITY = {
 DEFAULT_LINES = [("infantry_equipment_1", 0.30), ("support_equipment_1", 0.10),
                  ("artillery_1", 0.25), ("motorized_1", 0.15), ("armor_1", 0.20)]
 
+# Every starting line, stockpile entry, wing and ship must be fieldable from hour
+# zero: the technology that gates a model has to be researched at scenario start,
+# otherwise the AI opens a line for a model it is not allowed to field, produces a
+# useless residue and retires it. The gate table is read from the content database
+# (instead of being hardcoded) so adding a model or moving a gate keeps the scenario
+# consistent automatically.
+TECH_DATA = json.load(open(os.path.join(ROOT, "data", "common", "technologies.json")))["technologies"]
+TECH_BY_KEY = {t["key"]: t for t in TECH_DATA}
+EQUIPMENT_GATE = {}
+for _tech in TECH_DATA:
+    for _eq in _tech.get("unlock_equipment", []):
+        EQUIPMENT_GATE.setdefault(_eq, _tech["key"])
+
+
+def gate_techs_for(equipment_keys):
+    """Gating technologies (with prerequisites, prerequisites first) for models.
+
+    A model no technology lists is unlocked from the start and needs nothing.
+    """
+    ordered = []
+    for key in equipment_keys:
+        gate = EQUIPMENT_GATE.get(key)
+        if gate is None:
+            continue
+        stack = [gate]
+        chain = []
+        while stack:
+            current = stack.pop()
+            if current in chain:
+                continue
+            chain.append(current)
+            for prereq in TECH_BY_KEY.get(current, {}).get("prerequisites", []):
+                stack.append(prereq)
+        # prerequisites first: reverse of the post-order walk above
+        for item in reversed(chain):
+            if item not in ordered:
+                ordered.append(item)
+    return ordered
+
+
+def equipment_used_by(lines, stock, wings, navy):
+    used = [entry["equipment"] for entry in lines]
+    used.extend(stock.keys())
+    for wing in wings:
+        used.append(wing["equipment"])
+    if navy:
+        for task_force in navy.get("task_forces", []):
+            used.append(task_force["equipment"])
+    return used
+
 # Ship and convoy lines draw on dockyards, land equipment on military factories
 # (the engine's factory-pool rule), so they are budgeted separately.
 DOCKYARD_LINES = {
@@ -464,6 +514,22 @@ for tag, name, ideology in COUNTRIES:
         tag, ("conscription_limited" if len(state_list) % 2 == 0 else
               "conscription_volunteer", "economy_civilian", 0.52, 0.30))
 
+    lines = (make_lines(LINE_PRIORITY.get(tag, DEFAULT_LINES), mil) +
+             make_lines(DOCKYARD_LINES.get(tag, []), dock))
+    # Complete the technology list so every model the country starts with - a line,
+    # a stockpile entry, a wing or a ship - is one it is allowed to field. Gate
+    # technologies are appended in first-use order with prerequisites first, and the
+    # post-condition is checked so this cannot regress.
+    used_equipment = equipment_used_by(lines, stock, wings, NAVIES.get(tag))
+    techs = list(techs)
+    for tech in gate_techs_for(used_equipment):
+        if tech not in techs:
+            techs.append(tech)
+    for key in used_equipment:
+        gate = EQUIPMENT_GATE.get(key)
+        if gate is not None and gate not in techs:
+            raise SystemExit("country %s starts with %s but not %s" % (tag, key, gate))
+
     entry = {
         "tag": tag,
         "name": name,
@@ -474,8 +540,7 @@ for tag, name, ideology in COUNTRIES:
         "military_factories": mil,
         "dockyards": dock,
         "technologies": techs,
-        "production_lines": (make_lines(LINE_PRIORITY.get(tag, DEFAULT_LINES), mil) +
-                             make_lines(DOCKYARD_LINES.get(tag, []), dock)),
+        "production_lines": lines,
         "stockpile": stock,
         "laws": [law, economy, "trade_free"],
         "political_power": 20.0 + len(state_list) * 0.5,

@@ -32,6 +32,11 @@ void phase_industry(Game& g);
 // 8. Research progress and technology effect propagation.
 void phase_research(Game& g);
 // 8b. Division training: equipment/manpower consumption and readiness.
+// Continuous replacement: divisions below strength draw the model the country issues
+// for each slot's family from the stockpile. Runs after production so a line's output
+// is visible to the same tick, and before the AI, which reads division strength.
+void phase_reinforcement(Game& g);
+
 void phase_training(Game& g);
 // 9. Political power, laws, stability/war support, manpower growth.
 void phase_politics(Game& g);

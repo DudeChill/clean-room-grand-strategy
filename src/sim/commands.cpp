@@ -1331,21 +1331,89 @@ void phase_training(Game& g) {
             const double day_fraction = hours / 24.0 * std::max(0.25, training_time_mod);
 
             // Equipment arrives gradually: each hour the division draws its share of
-            // the template's equipment from the stockpile when available.
-            double equipment_ratio = 0.0;
-            int equipment_kinds = 0;
+            // the template's equipment from the stockpile when available. A slot draws
+            // from its *family*, not from one exact model, so a country builds new
+            // divisions out of what it is producing now and a newly designed or newly
+            // unlocked model reaches the field without editing the template (MIL-021).
+            //
+            // Families are handled as a whole: the requirement is the sum over the
+            // template's slots of that family and the held gear is summed across every
+            // model of the family, so a half-equipped trainee is not measured as empty
+            // and cannot be over-filled. When the model the country is building has no
+            // stock yet (the normal case while it retools), the draw falls back to the
+            // best model of the family that *is* in the depot - mirrors
+            // `reinforce_division`, so replacing and building gear agree.
+            struct FamilyNeed {
+                std::string family;
+                EquipmentId slot_equipment;
+                double required = 0.0;
+                double held = 0.0;
+            };
+            std::vector<FamilyNeed> needs;
+            auto need_for = [&](const BattalionSlot& b) -> FamilyNeed& {
+                const std::string fam = slot_family(g.content, b.equipment);
+                for (FamilyNeed& n : needs) {
+                    if (n.family == fam && fam.empty() && !(n.slot_equipment == b.equipment)) {
+                        continue;  // no family: one bucket per exact model
+                    }
+                    if (n.family == fam) return n;
+                }
+                FamilyNeed fresh;
+                fresh.family = fam;
+                fresh.slot_equipment = b.equipment;
+                needs.push_back(fresh);
+                return needs.back();
+            };
             for (const auto& b : t->battalions) {
                 if (!b.equipment.valid() || b.count <= 0) continue;
+                need_for(b).required += static_cast<double>(b.count);
+            }
+            if (d->equipment.size() < c->equipment_stockpile.size()) {
+                d->equipment.resize(c->equipment_stockpile.size(), 0.0);
+            }
+            for (FamilyNeed& n : needs) {
+                for (size_t i = 0; i < d->equipment.size() && i < g.content.equipment.size(); ++i) {
+                    if (!(d->equipment[i] > 0.0)) continue;
+                    const EquipmentDef* def =
+                        g.content.equipment_def(EquipmentId(static_cast<uint32_t>(i)));
+                    if (!def || def->is_archetype) continue;
+                    const bool same = n.family.empty() ? (def->id == n.slot_equipment)
+                                                       : (def->archetype == n.family);
+                    if (same) n.held += d->equipment[i];
+                }
+            }
+            double equipment_ratio = 0.0;
+            int equipment_kinds = 0;
+            for (FamilyNeed& n : needs) {
+                const double required = n.required;
+                if (!(required > 0.0)) continue;
                 ++equipment_kinds;
-                const double need = static_cast<double>(b.count);
-                const double per_hour = need / (train_days * 24.0);
-                const size_t idx = b.equipment.v;
-                if (idx >= c->equipment_stockpile.size()) continue;
-                const double take = std::min(per_hour, c->equipment_stockpile[idx]);
-                c->equipment_stockpile[idx] -= take;
-                if (idx >= d->equipment.size()) d->equipment.resize(idx + 1, 0.0);
-                d->equipment[idx] += take;
-                equipment_ratio += d->equipment[idx] / std::max(1.0, need);
+                const double missing = required - n.held;
+                if (missing > 0.0) {
+                    EquipmentId model =
+                        preferred_slot_model(g, c->id, n.slot_equipment,
+                                            family_production_model(g, c->id, n.slot_equipment));
+                    if (model.valid() &&
+                        (model.v >= c->equipment_stockpile.size() ||
+                         !(c->equipment_stockpile[model.v] > 0.0))) {
+                        const EquipmentId stocked =
+                            preferred_slot_model(g, c->id, n.slot_equipment, EquipmentId{});
+                        if (stocked.valid() && stocked.v < c->equipment_stockpile.size() &&
+                            c->equipment_stockpile[stocked.v] > 0.0) {
+                            model = stocked;
+                        }
+                    }
+                    const size_t idx = model.valid() ? model.v : n.slot_equipment.v;
+                    if (idx < c->equipment_stockpile.size()) {
+                        const double per_hour = missing / (train_days * 24.0);
+                        const double take = std::min(per_hour, c->equipment_stockpile[idx]);
+                        c->equipment_stockpile[idx] -= take;
+                        if (idx >= d->equipment.size()) d->equipment.resize(idx + 1, 0.0);
+                        d->equipment[idx] += take;
+                        n.held += take;
+                    }
+                }
+                equipment_ratio += clamp01(safe_div(n.held, required));
             }
             if (equipment_kinds > 0) equipment_ratio /= static_cast<double>(equipment_kinds);
 

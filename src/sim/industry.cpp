@@ -23,6 +23,7 @@
 #include "core/log.h"
 #include "core/math.h"
 #include "game/game.h"
+#include "sim/research.h"
 
 namespace hoi {
 namespace {
@@ -702,25 +703,164 @@ void count_factories(const World& w, CountryId country, int* civ, int* mil, int*
     if (dock) *dock = d;
 }
 
+// ------------------------------------------------------------- variants ----
+//
+// A battalion slot draws from one equipment family. `preferred_slot_model` picks
+// the member the country should field, in this order:
+//   1. the live `producing` member, when it fits the slot: a country fields what
+//      its industry builds, so demand and reinforcement agree with production and
+//      a transiently-empty stockpile cannot flip the preference;
+//   2. a fieldable member the country already holds stock of, highest
+//      equipment_stat_score first (depot gear is never stranded);
+//   3. the highest-scoring member the country can field;
+//   4. invalid, when the family is empty or yields nothing.
+// A member outside those rules (a locked model, another country's design) is never
+// returned. Rule 1 makes the choice independent of when a caller samples it relative
+// to `phase_industry`; rules 2-3 never strand a depot or leave a country with
+// nothing to issue. Iteration is by ascending index with a strict `>` comparison, so
+// ties keep the lowest index and the result never depends on insertion or pointer
+// order.
+namespace {
+
+// The same weighted statistic the production AI ranks models by, so industry and
+// the AI agree on which model is "better".
+double equipment_stat_score(const EquipmentDef& def) {
+    return def.soft_attack + def.hard_attack * 0.5 + def.defense + def.breakthrough * 0.5 +
+           def.armor * 0.5 + def.piercing * 0.25;
+}
+
+}  // namespace
+
+std::string slot_family(const Content& content, EquipmentId slot_equipment) {
+    const EquipmentDef* def = content.equipment_def(slot_equipment);
+    if (!def) return std::string();
+    return def->is_archetype ? def->key : def->archetype;
+}
+
+bool equipment_fits_slot(const Game& g, CountryId country, EquipmentId slot_equipment,
+                         EquipmentId candidate) {
+    const std::string family = slot_family(g.content, slot_equipment);
+    if (family.empty()) return false;
+    const EquipmentDef* def = g.content.equipment_def(candidate);
+    if (!def || def->is_archetype) return false;
+    if (def->archetype != family) return false;
+    return equipment_unlocked(g, country, candidate);
+}
+
+EquipmentId preferred_slot_model(const Game& g, CountryId country, EquipmentId slot_equipment,
+                                 EquipmentId producing) {
+    const std::string family = slot_family(g.content, slot_equipment);
+    if (family.empty()) return EquipmentId{};
+    const Country* c = g.world.country(country);
+    if (!c) return EquipmentId{};
+
+    // 1. The live production member wins: a country fields what it builds, so a
+    // transiently-empty stockpile cannot flip the preference between ticks.
+    if (producing.valid() && equipment_fits_slot(g, country, slot_equipment, producing)) {
+        return producing;
+    }
+
+    EquipmentId stocked;
+    double stocked_score = 0.0;
+    EquipmentId best;
+    double best_score = 0.0;
+    for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+        const EquipmentDef& def = g.content.equipment[i];
+        if (def.is_archetype || def.archetype != family) continue;
+        const EquipmentId id(static_cast<uint32_t>(i));
+        if (!equipment_unlocked(g, country, id)) continue;
+        const double score = equipment_stat_score(def);
+        if (!best.valid() || score > best_score) {
+            best = id;
+            best_score = score;
+        }
+        const double stock = i < c->equipment_stockpile.size() ? c->equipment_stockpile[i] : 0.0;
+        if (stock > 0.0 && (!stocked.valid() || score > stocked_score)) {
+            stocked = id;
+            stocked_score = score;
+        }
+    }
+    if (stocked.valid()) return stocked;  // 2
+    return best;  // 3, or invalid (4) when the family has no fieldable member
+}
+
+EquipmentId family_production_model(const Game& g, CountryId country,
+                                    EquipmentId slot_equipment) {
+    const std::string family = slot_family(g.content, slot_equipment);
+    if (family.empty()) return EquipmentId{};
+    const Country* c = g.world.country(country);
+    if (!c) return EquipmentId{};
+    for (const ProductionLine& line : c->lines) {
+        if (line.factories <= 0 || !line.equipment.valid()) continue;
+        if (slot_family(g.content, line.equipment) != family) continue;
+        return line.equipment;  // first live line in priority order wins
+    }
+    return EquipmentId{};
+}
+
 void compute_equipment_demand(const Game& g, CountryId country,
                               std::vector<double>* demand_by_equipment) {
     if (!demand_by_equipment) return;
     demand_by_equipment->assign(g.content.equipment.size(), 0.0);
     const Country* c = g.world.country(country);
     if (!c) return;
-    std::vector<double> required(demand_by_equipment->size(), 0.0);
 
-    // Template equipment needs, accumulated per equipment index.
+    // The preferred model of a family is the same for every division and for every
+    // slot of that family, so it is resolved once per family per call (deterministic
+    // linear probe; families are few). `family_production_model` is the shared
+    // resolver for "what is this country building on a live line".
+    std::vector<std::pair<std::string, EquipmentId>> target_cache;
+    auto target_for = [&](const std::string& family, EquipmentId slot_equipment) -> EquipmentId {
+        for (const auto& entry : target_cache) {
+            if (entry.first == family) return entry.second;
+        }
+        const EquipmentId target = preferred_slot_model(
+            g, country, slot_equipment, family_production_model(g, country, slot_equipment));
+        target_cache.emplace_back(family, target);
+        return target;
+    };
+
+    // A template's slots grouped by equipment family: one requirement and one
+    // production target per family, so a division fielding an older member is not
+    // double-counted and the whole shortfall lands on the model the country would
+    // actually issue. `slot_equipment` is a representative slot of the family, and
+    // all slots of a family resolve to the same family id.
+    struct FamilyNeed {
+        std::string family;
+        EquipmentId slot_equipment;
+        double required = 0.0;
+    };
+    std::vector<FamilyNeed> groups;
     auto template_needs = [&](TemplateId template_id) {
-        for (double& v : required) v = 0.0;
+        groups.clear();
         const DivisionTemplate* t = g.content.template_def(template_id);
         if (!t) return false;
         for (const BattalionSlot& b : t->battalions) {
-            if (!b.equipment.valid() || b.equipment.v >= required.size()) continue;
-            if (b.count <= 0) continue;
-            required[b.equipment.v] += static_cast<double>(b.count);
+            if (!b.equipment.valid() || b.count <= 0) continue;
+            const std::string family = slot_family(g.content, b.equipment);
+            if (family.empty()) continue;
+            size_t gi = groups.size();
+            for (size_t i = 0; i < groups.size(); ++i) {
+                if (groups[i].family == family) {
+                    gi = i;
+                    break;
+                }
+            }
+            if (gi == groups.size()) groups.push_back(FamilyNeed{family, b.equipment, 0.0});
+            groups[gi].required += static_cast<double>(b.count);
         }
         return true;
+    };
+
+    // What a division holds of a family, summed over every member model.
+    auto family_present = [&](const Division& d, const std::string& family) {
+        double present = 0.0;
+        for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+            const EquipmentDef& def = g.content.equipment[i];
+            if (def.is_archetype || def.archetype != family) continue;
+            if (i < d.equipment.size()) present += d.equipment[i];
+        }
+        return present;
     };
 
     g.world.divisions.for_each([&](DivisionId, const Division& d) {
@@ -728,16 +868,16 @@ void compute_equipment_demand(const Game& g, CountryId country,
         if (!template_needs(d.template_id)) return;
         const double strength = clamp01(d.strength);
         const double strength_deficit = 1.0 - strength;
-        for (size_t e = 0; e < required.size(); ++e) {
-            const double need = required[e];
-            if (!(need > 0.0)) continue;
-            const double present = e < d.equipment.size() ? d.equipment[e] : 0.0;
+        for (const FamilyNeed& grp : groups) {
+            const EquipmentId target = target_for(grp.family, grp.slot_equipment);
+            if (!target.valid()) continue;  // nothing fits: no expressible demand
+            const double present = family_present(d, grp.family);
             // The larger of "gear missing outright" and "gear missing to reach the
             // division's strength share" - either one justifies replacement.
-            double missing = need - present;
-            const double to_full_strength = need * strength_deficit;
+            double missing = grp.required - present;
+            const double to_full_strength = grp.required * strength_deficit;
             if (to_full_strength > missing) missing = to_full_strength;
-            if (missing > 0.0) (*demand_by_equipment)[e] += missing;
+            if (missing > 0.0) (*demand_by_equipment)[target.v] += missing;
         }
     });
 
@@ -747,42 +887,73 @@ void compute_equipment_demand(const Game& g, CountryId country,
     for (const TrainingDivision& t : c->training) {
         if (g.world.division(t.division)) continue;
         if (!template_needs(t.template_id)) continue;
-        for (size_t e = 0; e < required.size(); ++e) {
-            if (required[e] > 0.0) (*demand_by_equipment)[e] += required[e];
+        for (const FamilyNeed& grp : groups) {
+            const EquipmentId target = target_for(grp.family, grp.slot_equipment);
+            if (!target.valid()) continue;
+            (*demand_by_equipment)[target.v] += grp.required;
         }
     }
 }
 
 double reinforce_division(Game& g, Division& d, EquipmentId equipment, double count) {
     if (!equipment.valid() || !(count > 0.0) || !std::isfinite(count)) return 0.0;
-    const EquipmentDef* def = g.content.equipment_def(equipment);
     Country* c = g.world.country(d.country);
-    if (!def || !c) return 0.0;
     const DivisionTemplate* t = g.content.template_def(d.template_id);
-    if (!t) return 0.0;
+    if (!c || !t) return 0.0;
+
+    // The call names a model the country can field in a slot of this template that
+    // shares its family. Equipment no slot of the template uses is refused before
+    // any state is touched.
+    const std::string family = slot_family(g.content, equipment);
+    if (family.empty()) return 0.0;
+    EquipmentId slot_equipment;
     double required = 0.0;
     for (const BattalionSlot& b : t->battalions) {
-        if (b.equipment == equipment && b.count > 0) required += static_cast<double>(b.count);
+        if (!b.equipment.valid() || b.count <= 0) continue;
+        if (slot_family(g.content, b.equipment) != family) continue;
+        slot_equipment = b.equipment;
+        required += static_cast<double>(b.count);
     }
-    if (!(required > 0.0)) return 0.0;  // the template does not use this equipment
+    if (!(required > 0.0)) return 0.0;  // the template does not use this family
+    if (!equipment_fits_slot(g, d.country, slot_equipment, equipment)) return 0.0;
 
     ensure_stockpile(*c, g.content.equipment.size());
     if (d.equipment.size() < g.content.equipment.size()) {
         d.equipment.resize(g.content.equipment.size(), 0.0);
     }
-    double& present = d.equipment[equipment.v];
-    if (!(present > 0.0)) present = 0.0;
+
+    // Gear of the same family already present counts against the slot's whole
+    // requirement, in whichever model it is, so the cap is on the family.
+    double present = 0.0;
+    for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+        const EquipmentDef& def = g.content.equipment[i];
+        if (def.is_archetype || def.archetype != family) continue;
+        if (i < d.equipment.size()) present += d.equipment[i];
+    }
     const double missing = required - present;
     if (!(missing > 0.0)) return 0.0;
-    const double moved = std::min(count, std::min(missing, c->equipment_stockpile[equipment.v]));
+
+    // Prefer the model the caller asked for when it has stock; otherwise fall back
+    // to the best family member with stock (`producing` deliberately invalid, so the
+    // choice is the depot-preserving rule rather than the live production model).
+    EquipmentId source = equipment;
+    if (!(c->equipment_stockpile[equipment.v] > 0.0)) {
+        source = preferred_slot_model(g, d.country, slot_equipment, EquipmentId{});
+    }
+    const EquipmentDef* src_def = g.content.equipment_def(source);
+    if (!src_def) return 0.0;
+    double& present_of_source = d.equipment[source.v];
+    if (!(present_of_source > 0.0)) present_of_source = 0.0;
+    const double moved = std::min(count, std::min(missing, c->equipment_stockpile[source.v]));
     if (!(moved > 0.0)) return 0.0;
 
-    c->equipment_stockpile[equipment.v] -= moved;
-    present += moved;
+    c->equipment_stockpile[source.v] -= moved;
+    present_of_source += moved;
 
-    // Strength and manpower follow the equipment moved in: strength as a share of
-    // the template's total hit points, manpower as persons carried by the gear.
-    const double hp_per_unit = def->max_strength > 0.0 ? def->max_strength : 1.0;
+    // Strength and manpower follow the definition actually consumed: strength as a
+    // share of the template's total hit points, manpower as persons carried by the
+    // gear.
+    const double hp_per_unit = src_def->max_strength > 0.0 ? src_def->max_strength : 1.0;
     const double template_hp = t->max_strength > 0.0 ? t->max_strength : 1.0;
     d.strength = clamp01(d.strength + safe_div(moved * hp_per_unit, template_hp));
     if (t->manpower > 0.0) {

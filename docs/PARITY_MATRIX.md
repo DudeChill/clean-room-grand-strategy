@@ -40,6 +40,7 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | IND-007 | Equipment stockpile and reinforcement | PARITY_TESTING | HIGH | yes | yes | yes | unit + golden |
 | IND-008 | Trade and convoys (land and sea routes, blockade, factory cost) | SPECIFIED | MODERATE | yes | yes | yes | unit + golden |
 | IND-009 | Equipment designers (components, computed variants) | FUNCTIONAL | HIGH | yes | yes | yes | unit + golden + browser |
+| MIL-021 | Equipment variants in division slots and continuous replacement | FUNCTIONAL | HIGH | yes | yes | yes | unit + adversarial + campaign scan |
 | RES-001 | Technology graph and prerequisites | FUNCTIONAL | HIGH | yes | yes | yes | unit + golden |
 | RES-002 | Research slots and progress | PARITY_TESTING | HIGH | yes | yes | yes | unit + golden |
 | RES-003 | Unlock propagation to equipment | PARITY_TESTING | HIGH | yes | yes | yes | unit + golden |

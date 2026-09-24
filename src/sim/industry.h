@@ -63,8 +63,38 @@ void compute_equipment_demand(const Game& g, CountryId country,
                               std::vector<double>* demand_by_equipment);
 
 // Attempts to move `count` units of `equipment` from stockpile into `division`
+// Attempts to move `count` units of `equipment` from stockpile into `division`
 // (strength/manpower follow). Returns the number actually transferred.
 double reinforce_division(Game& g, Division& d, EquipmentId equipment, double count);
+
+// ------------------------------------------------------------- variants ----
+
+// The equipment family a battalion slot draws from: a slot naming a concrete model
+// (`infantry_equipment_1`) draws from that model's archetype family
+// (`infantry_equipment`); a slot naming an archetype draws from that archetype.
+// Empty string means "no family" (unknown or invalid equipment).
+std::string slot_family(const Content& content, EquipmentId slot_equipment);
+
+// True when `candidate` may fill a battalion slot that names `slot_equipment` for
+// this country: same family, and a model the country may actually field (researched,
+// or one of its own designs). Locked models and other countries' designs are refused.
+bool equipment_fits_slot(const Game& g, CountryId country, EquipmentId slot_equipment,
+                         EquipmentId candidate);
+
+// The model a country wants in a slot. `producing` is the member of a live production
+// line (may be invalid): when it fits, it is returned first, because a country fields
+// what it builds (this keeps the choice stable across tick ordering). Otherwise a
+// family member the country holds stock of wins, so gear already in the depot is not
+// stranded, then the best member it can field. Returns an invalid id when nothing fits.
+EquipmentId preferred_slot_model(const Game& g, CountryId country, EquipmentId slot_equipment,
+                                 EquipmentId producing);
+
+// The member of a slot's family that the country is currently building on a live line
+// (factories > 0), or an invalid id when there is none. Ascending line order, first
+// match wins, so it is deterministic. The training queue and the AI resolve a slot's
+// equipment through this, so they agree with reinforcement about what a country issues.
+EquipmentId family_production_model(const Game& g, CountryId country,
+                                    EquipmentId slot_equipment);
 
 // True when the country's industry can still be considered functional (used by
 // capitulation checks and AI sanity).

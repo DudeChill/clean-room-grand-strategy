@@ -412,12 +412,28 @@ std::vector<CountryId> hostile_neighbours(const World& w, CountryId self, Provin
 // every template for every technology and every candidate line.
 std::vector<char> template_equipment_mask(const Content& content, const Country& c,
                                           size_t equipment_count) {
-    std::vector<char> mask(equipment_count, 0);
+    // A slot draws from a family, not from one model (MIL-021): every model of a family
+    // the templates use counts, so a newer variant or a design is recognised as "this is
+    // what my divisions are made of" instead of being invisible to production scoring.
+    std::vector<std::string> families;
     for (TemplateId t : c.templates) {
         const DivisionTemplate* td = content.template_def(t);
         if (!td) continue;
         for (const BattalionSlot& b : td->battalions) {
-            if (b.equipment.valid() && b.equipment.v < equipment_count) mask[b.equipment.v] = 1;
+            if (!b.equipment.valid()) continue;
+            const std::string family = slot_family(content, b.equipment);
+            if (family.empty()) continue;
+            if (std::find(families.begin(), families.end(), family) == families.end()) {
+                families.push_back(family);
+            }
+        }
+    }
+    std::vector<char> mask(equipment_count, 0);
+    for (size_t i = 0; i < content.equipment.size() && i < equipment_count; ++i) {
+        const EquipmentDef& def = content.equipment[i];
+        if (def.is_archetype) continue;
+        if (std::find(families.begin(), families.end(), def.archetype) != families.end()) {
+            mask[i] = 1;
         }
     }
     return mask;
@@ -1862,12 +1878,29 @@ double template_power(const DivisionTemplate& td) {
 
 // Share of one division's equipment the stockpile already covers (min over
 // battalions). A country trains only what it can actually equip.
-double equipment_readiness(const Country& c, const DivisionTemplate& td) {
+double equipment_readiness(const Game& g, const Country& c, const DivisionTemplate& td) {
+    // Gear of any model in the slot's family counts: a country holding 200 of a newly
+    // designed rifle is equipped, not "short of the 1936 model".
     double worst = 1.0;
     for (const BattalionSlot& b : td.battalions) {
         if (b.count <= 0 || !b.equipment.valid()) continue;
         double have = 0.0;
-        if (b.equipment.v < c.equipment_stockpile.size()) have = c.equipment_stockpile[b.equipment.v];
+        if (b.equipment.v < c.equipment_stockpile.size()) {
+            have = c.equipment_stockpile[b.equipment.v];
+        }
+        const std::string family = slot_family(g.content, b.equipment);
+        if (!family.empty()) {
+            const double named = have;
+            have = 0.0;
+            for (size_t i = 0; i < g.content.equipment.size() && i < c.equipment_stockpile.size();
+                 ++i) {
+                const EquipmentDef& def = g.content.equipment[i];
+                if (def.is_archetype || def.archetype != family) continue;
+                if (!equipment_unlocked(g, c.id, def.id)) continue;
+                have += c.equipment_stockpile[i];
+            }
+            if (have <= 0.0) have = named;  // locked family: fall back to the named model
+        }
         const double ratio = clamp01(safe_div(have, static_cast<double>(b.count)));
         if (ratio < worst) worst = ratio;
     }
@@ -2452,7 +2485,7 @@ void ai_military_layer(Game& g, Country& c) {
             const DivisionTemplate* td = g.content.template_def(t);
             if (!td) continue;
             if (td->manpower <= 0.0) continue;
-            const double readiness = equipment_readiness(c, *td);
+            const double readiness = equipment_readiness(g, c, *td);
             const double power = template_power(*td);
             if (readiness < kMilEquipmentReady) continue;
             if (manpower_left < td->manpower) continue;

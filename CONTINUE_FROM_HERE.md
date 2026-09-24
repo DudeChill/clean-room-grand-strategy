@@ -1,6 +1,6 @@
 # CONTINUE FROM HERE
 
-State of the project at the end of the session that shipped v0.7.0. Read this first when
+State of the project at the end of the session that shipped v0.8.0. Read this first when
 resuming; then `DEVLOG.md` (top entry), `docs/PARITY_MATRIX.md` and
 `docs/DISCREPANCIES.md`.
 
@@ -10,7 +10,8 @@ resuming; then `DEVLOG.md` (top entry), `docs/PARITY_MATRIX.md` and
   (`https://github.com/DudeChill/clean-room-grand-strategy`).
 * Releases published: v0.1.0 (foundation), v0.2.0 (air), v0.3.0/v0.3.1 (naval),
   v0.4.0 (focus trees and decisions), v0.5.0 (national spirits and advisers),
-  v0.6.0 (trade, convoys, blockade), **v0.7.0 (equipment designers, scarce resources)**.
+  v0.6.0 (trade, convoys, blockade), v0.7.0 (equipment designers, scarce resources),
+  **v0.8.0 (equipment variants and continuous replacement)**.
 * Build directories in use: `build/` (main), plus per-slice dirs (`build-air/`,
   `build-navy/`, `build-pol/`, `build-spirit/`, `build-trade/`, `build-des/`, ...).
   Never build two agents into the same directory.
@@ -19,7 +20,7 @@ Last verified commands (all green on a clean Release build):
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-build/hoi_tests                            # 239 passed, 0 failed
+build/hoi_tests                            # 252 passed, 0 failed
 scripts/verify.sh                          # release gate
 build/game --days 365 --audit --summary    # world audit: OK, 0 content warnings
 build/game --days 30 --inspect-trade       # 9/10 countries in deficit, 12 routes
@@ -46,18 +47,19 @@ browser client that plays the whole game over `/api/state` + `/api/command`.
 
 ## Open work, in priority order
 
-1. **MIL-021 (MAJOR, blocker for the equipment chain)**: division slots hold one exact
-   `EquipmentId`, so a new model reaches new units only - existing divisions never
-   retrofit, and the AI cannot re-point templates at its own designs. Fix: family/variant
-   sets on `BattalionSlot` (or match on `EquipmentDef::archetype` with a preference order),
-   family-aggregated demand in `compute_equipment_demand`, and an AI template upgrade step.
-   Evidence and the design sketch are in `docs/DISCREPANCIES.md`.
-2. **INT-001 (MAJOR)**: intelligence - agencies, networks, operations, decryption.
-3. **MP-001 (MAJOR)**: multiplayer transport over the existing command/save layer.
-4. **MOD-002/003 (MINOR)**: mod load order, content validator CLI, mod test pack.
-5. Residual from v0.7.0: components exist for five categories only (support, anti-tank,
-   anti-air, motorized, mechanized, convoy have none), and designers have no ship-hull
-   module variety beyond the four slots.
+1. **INT-001 (MAJOR)**: intelligence - agencies, networks, operations, decryption.
+2. **MP-001 (MAJOR)**: multiplayer transport over the existing command/save layer.
+3. **MOD-002/003 (MINOR)**: mod load order, content validator CLI, mod test pack.
+4. **ECON-004 (MINOR)**: the AI piles up gear the army cannot use (307,478 units of one
+   design in a depot at day 365 against 2,589 in the field); net depot stock out of the
+   production baseline and taper line factories as stock covers the army.
+5. **AI-014 (MINOR)**: the industry layer assigns factories against pre-loss control counts
+   and self-heals a tick later, logging a warning per occurrence.
+6. Residual from v0.7.0: components exist for five categories only (support, anti-tank,
+   anti-air, motorized, mechanized, convoy have none).
+7. Residual from v0.8.0: the replacement rate is a fixed share (2% of the shortfall per hour,
+   0.25 floor); a proper reinforcement-priority system (per-front priority, equipment
+   priority settings) is not modelled yet.
 
 ## Conventions that keep this project honest
 

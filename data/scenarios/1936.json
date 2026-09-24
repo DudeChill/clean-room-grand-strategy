@@ -523,7 +523,8 @@
         "support_weapons",
         "field_artillery",
         "motorization",
-        "production_lines"
+        "production_lines",
+        "light_armor"
       ],
       "production_lines": [
         {
@@ -637,7 +638,8 @@
         "support_weapons",
         "field_artillery",
         "motorization",
-        "production_lines"
+        "production_lines",
+        "light_armor"
       ],
       "production_lines": [
         {

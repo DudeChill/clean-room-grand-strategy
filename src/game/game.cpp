@@ -94,6 +94,7 @@ void Game::tick_once() {
     HOI_PHASE(phase_naval, ms_naval);
     HOI_PHASE(phase_trade, ms_trade);
     HOI_PHASE(phase_industry, ms_industry);
+    HOI_PHASE(phase_reinforcement, ms_industry);
     HOI_PHASE(phase_research, ms_research);
     HOI_PHASE(phase_training, ms_training);
     HOI_PHASE(phase_politics, ms_politics);

@@ -433,6 +433,17 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         j.set("supply", Json(dv.supply));
         j.set("moving", Json(dv.moving));
         j.set("training", Json(dv.in_training()));
+        // What this division actually fields, by model key. A slot may be filled by
+        // several models of one family once newer variants reach the depot, so the
+        // composition is the honest answer to "what is this division made of?".
+        Json gear = Json::object();
+        for (size_t i = 0; i < dv.equipment.size(); ++i) {
+            if (!(dv.equipment[i] > 0.0)) continue;
+            const EquipmentDef* def = g.content.equipment_def(EquipmentId(static_cast<uint32_t>(i)));
+            if (!def) continue;
+            gear.set(def->key, Json(dv.equipment[i]));
+        }
+        j.set("equipment", gear);
         j.set("battle", Json(static_cast<int>(dv.battle.valid() ? static_cast<int>(dv.battle.v) : -1)));
         j.set("army", Json(static_cast<int>(dv.army.valid() ? static_cast<int>(dv.army.v) : -1)));
         j.set("name", Json(dv.name));

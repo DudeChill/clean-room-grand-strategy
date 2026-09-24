@@ -1,4 +1,29 @@
 
+## 2026-09-24 - v0.8.0: equipment variants, replacement and a properly equipped army
+
+MIL-021 is closed, and it was the missing link of the whole equipment chain: until now a
+newly produced model could never reach an existing division, because a battalion slot held
+one exact equipment id. Slots now name a family, the country issues the model it builds,
+and a new reinforcement phase moves gear into divisions every hour, gated by supply and
+with a fallback to whatever the depot actually holds.
+
+The effect is measurable rather than argued. Divisions on an older model while a newer one
+sits in the depot: 329/351 before, 0/351 after. Design equipment in the field: 0 before,
+2,589 after. Mean division strength 0.925 with 83 understrength divisions, against 0.801
+and 189 before the training-queue fix that the adversarial pass forced out.
+
+Three defects were found by verification rather than by writing: the preference oscillated
+49 times in 60 days when a line ramped up (fixed by making "what the country builds" the
+first rule, which is order-independent), the training queue stalled while a country
+retooled (fixed by the same fallback), and two countries started with a live line for
+equipment they were not allowed to field (fixed in the generator, which now derives the
+technology gate of every starting model and fails loudly if it cannot).
+
+Recorded as minority gaps with numbers: ECON-004 (the AI piles up gear the army cannot use
+- 307,478 units in one depot) and AI-014 (factory assignments follow pre-loss control
+counts and self-heal a tick later).
+
+
 ## 2026-09-24 - v0.7.0: equipment designers and a scarce resource economy
 
 The designer is a rule, not a modifier: components fit into an archetype, the statistics
