@@ -17,6 +17,7 @@ file(GLOB_RECURSE HOI_LIB_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/data/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/sim/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/save/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/net/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/game/*.cpp"
 )
 

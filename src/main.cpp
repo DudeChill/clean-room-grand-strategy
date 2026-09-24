@@ -11,9 +11,14 @@
 //   game --player TAG                     hand a country to the player (AI plays the rest)
 
 #include <algorithm>
+#include <chrono>
 #include <csignal>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,6 +27,8 @@
 #include "data/mod.h"
 #include "game/game.h"
 #include "game/server.h"
+#include "net/lockstep.h"
+#include "net/transport.h"
 #include "sim/design.h"
 #include "save/save.h"
 #include "sim/industry.h"
@@ -57,7 +64,12 @@ struct Options {
     uint64_t save_every_days = 0;
     uint64_t autosave_days = 0;
     uint16_t port = 8080;
+    uint32_t players = 1;         // --players: seats in a networked session (host: required)
+    bool players_set = false;     // --players was given explicitly (joiners cross-check it)
+    std::string join_addr;        // --join HOST:PORT
+    int64_t net_issue_at = -1;    // --net-issue-at: tick this peer submits its one command
     bool use_ticks = false;
+    bool host = false;            // --host: listen and run the session
     bool hashes = false;
     bool audit = false;
     bool summary = false;
@@ -81,7 +93,12 @@ void usage() {
         "  --load <file>         load a save instead of a scenario\n"
         "  --save-every-days <n> periodic save/load round trip (stress test)\n"
         "  --serve               run the playable browser client\n"
-        "  --port <n>            server port (default 8080)\n"
+        "  --port <n>            server port (default 8080); the session port with --host\n"
+        "  --host                host a networked lockstep session (see docs/MULTIPLAYER.md)\n"
+        "  --players <n>         seats in a networked session, including the host (host: default 1)\n"
+        "  --join HOST:PORT      join a hosted session\n"
+        "  --net-issue-at <tick> tick at which this peer issues its one command (default: half\n"
+        "                        the session); both peers may pick different ticks\n"
         "  --web <dir>           static web root (default web)\n"
         "  --autosave-days <n>   autosave interval while serving\n"
         "  --hashes              print subsystem hashes\n"
@@ -136,6 +153,19 @@ bool parse_args(int argc, char** argv, Options* o) {
             o->save_every_days = std::strtoull(v.c_str(), nullptr, 10);
         } else if (a == "--serve") {
             o->serve = true;
+        } else if (a == "--host") {
+            o->host = true;
+        } else if (a == "--join") {
+            if (!next(&o->join_addr)) return false;
+        } else if (a == "--net-issue-at") {
+            std::string v;
+            if (!next(&v)) return false;
+            o->net_issue_at = static_cast<int64_t>(std::strtoll(v.c_str(), nullptr, 10));
+        } else if (a == "--players") {
+            std::string v;
+            if (!next(&v)) return false;
+            o->players = static_cast<uint32_t>(std::strtoul(v.c_str(), nullptr, 10));
+            o->players_set = true;
         } else if (a == "--port") {
             std::string v;
             if (!next(&v)) return false;
@@ -588,6 +618,916 @@ int run_content_validation(const Options& opt) {
     return 0;
 }
 
+// ------------------------------------------------------------------ multiplayer ----
+//
+// MP-001: a deterministic lockstep session over the transport in src/net/transport.h.
+//
+// One peer hosts, the rest join. The host is the only peer that derives a tick's
+// application order: it collects every seat's `Commands` for the tick, asks `Lockstep`
+// for the ordered list (by seat, then submission order), broadcasts that list as
+// `Applied` and applies it locally. A joiner applies exactly the list it was handed, so
+// two peers cannot disagree about the order even when the arrivals interleave
+// differently. Every `kLockstepHashCadence` ticks the peers compare `world_hash`; a
+// mismatch halts the session with the tick, the first differing subsystem and that
+// tick's command list, because a silent divergence is the one outcome that is not
+// allowed.
+//
+// Lobby protocol (session state, never simulation state - the roster is agreed, then
+// every peer builds `Lockstep` from it and Hello messages are ignored from then on):
+//   joiner -> host : Hello{text = tag}
+//   host -> joiner : one Hello per seat (seat, country, text = tag). The seat-0 Hello
+//                    carries the seat count in `hash` and the session length in `tick`,
+//                    so a joiner can size the roster and the run before tick 0.
+//   host -> joiner : Bye when the session ends, or when the lobby refused the joiner.
+// After the lobby the only traffic is: joiner -> host `Commands`/`Hash`; host -> joiner
+// `Applied`/`Hash`/`Bye`/`Desync`.
+//
+// The wall clock below bounds how long a peer waits for a stalled seat; it never
+// touches simulation state or the application order.
+
+constexpr int kNetPollSliceMs = 200;
+constexpr int kNetLobbyTimeoutMs = 20000;
+constexpr int kNetConnectTimeoutMs = 5000;
+constexpr uint64_t kNetStallMillis = 30000;
+
+std::string net_fmt(const char* fmt, ...)
+#if defined(__GNUC__)
+    __attribute__((format(printf, 1, 2)))
+#endif
+    ;
+std::string net_fmt(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    return buf;
+}
+
+int64_t ms_since(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+}
+
+const char* net_result_name(LockstepResult r) {
+    switch (r) {
+        case LockstepResult::Ok: return "ok";
+        case LockstepResult::Waiting: return "waiting";
+        case LockstepResult::Desynced: return "desynced";
+        case LockstepResult::NotMySeat: return "not-my-seat";
+        case LockstepResult::Unknown: return "unknown";
+    }
+    return "?";
+}
+
+bool find_country_by_tag(const Game& g, const std::string& tag, CountryId* out) {
+    CountryId found;
+    bool duplicate = false;
+    g.world.countries.for_each([&](CountryId cid, const Country& c) {
+        if (c.tag != tag) return;
+        if (found.valid()) duplicate = true;
+        found = cid;
+    });
+    if (!found.valid() || duplicate) return false;
+    *out = found;
+    return true;
+}
+
+std::string country_tag(const Game& g, CountryId cid) {
+    const Country* c = g.world.country(cid);
+    return c != nullptr ? c->tag : std::string("?");
+}
+
+bool parse_host_port(const std::string& text, std::string* host, uint16_t* port) {
+    const size_t colon = text.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= text.size()) return false;
+    const std::string digits = text.substr(colon + 1);
+    char* end = nullptr;
+    const unsigned long value = std::strtoul(digits.c_str(), &end, 10);
+    if (end == nullptr || *end != '\0' || value == 0 || value > 65535) return false;
+    *host = text.substr(0, colon);
+    *port = static_cast<uint16_t>(value);
+    return true;
+}
+
+std::string describe_command(const Command& c) {
+    std::string text = command_type_name(c.type);
+    if (!c.text.empty()) text += " \"" + c.text + "\"";
+    if (c.state.valid()) text += net_fmt(" state=%u", c.state.raw());
+    if (c.province.valid()) text += net_fmt(" province=%u", c.province.raw());
+    if (c.equipment.valid()) text += net_fmt(" equipment=%u", c.equipment.raw());
+    if (c.tech.valid()) text += net_fmt(" tech=%u", c.tech.raw());
+    if (c.value != 0) text += net_fmt(" value=%d", c.value);
+    return text;
+}
+
+// The one command this peer issues for its own country, chosen deterministically: the
+// first candidate that validates, scanned in content order. Both peers scan the same
+// state, so two peers pick the same command - the point is that the *order* of two
+// seats' commands, not the choice, is what the session has to agree on.
+bool pick_player_command(const Game& g, CountryId cid, Tick tick, Command* out) {
+    if (!cid.valid()) return false;
+
+    // 1. The first national focus the country may start.
+    for (const FocusDef& focus : g.content.focuses) {
+        Command c;
+        c.type = CommandType::SelectFocus;
+        c.country = cid;
+        c.issued_tick = tick;
+        c.text = focus.key;
+        if (validate_command(g, c) == CommandResult::Applied) {
+            *out = c;
+            return true;
+        }
+    }
+    // 2. The first technology with a free research slot.
+    for (const TechDef& tech : g.content.techs) {
+        Command c;
+        c.type = CommandType::StartResearch;
+        c.country = cid;
+        c.issued_tick = tick;
+        c.tech = tech.id;
+        if (validate_command(g, c) == CommandResult::Applied) {
+            *out = c;
+            return true;
+        }
+    }
+    // 3. A civilian factory in the first state the country controls.
+    StateId state;
+    g.world.states.for_each([&](StateId id, const State& s) {
+        if (!state.valid() && s.controller == cid) state = id;
+    });
+    if (state.valid()) {
+        Command c;
+        c.type = CommandType::StartConstruction;
+        c.country = cid;
+        c.issued_tick = tick;
+        c.state = state;
+        c.value = static_cast<int32_t>(BuildingKind::CivilianFactory);
+        if (validate_command(g, c) == CommandResult::Applied) {
+            *out = c;
+            return true;
+        }
+    }
+    // 4. The first law the country can afford and does not already hold.
+    for (const LawDef& law : g.content.laws) {
+        Command c;
+        c.type = CommandType::SetLaw;
+        c.country = cid;
+        c.issued_tick = tick;
+        c.text = law.key;
+        c.value = law.level;
+        if (validate_command(g, c) == CommandResult::Applied) {
+            *out = c;
+            return true;
+        }
+    }
+    // 5. The first national spirit it is allowed to hold.
+    for (const SpiritDef& spirit : g.content.spirits) {
+        Command c;
+        c.type = CommandType::AddNationalSpirit;
+        c.country = cid;
+        c.issued_tick = tick;
+        c.text = spirit.key;
+        if (validate_command(g, c) == CommandResult::Applied) {
+            *out = c;
+            return true;
+        }
+    }
+    return false;
+}
+
+// One remote seat and its channel. Peers are kept in ascending seat order so a
+// diagnostic names the same seat on every peer.
+struct RemotePeer {
+    uint32_t seat = 0;
+    std::string tag;
+    std::unique_ptr<net::Connection> conn;
+    std::unique_ptr<net::Channel> channel;
+    bool alive = true;
+};
+
+// One lockstep session. The same loop drives both roles: `host` only decides who
+// derives a tick's order, who broadcasts it and who waits for it.
+struct NetSession {
+    Game* game = nullptr;
+    Lockstep lock;
+    std::vector<PeerSeat> seats;
+    std::vector<RemotePeer> peers;
+    uint32_t local_seat = 0;
+    std::string local_tag;
+    bool host = false;
+    Tick total_ticks = 0;
+    Tick issue_tick = 0;
+
+    std::deque<NetMessage> inbox;
+    std::map<Tick, std::map<uint32_t, NetMessage>> hashes;
+    bool bye = false;
+    Tick bye_tick = 0;
+    bool stopped = false;
+    std::string stop_reason;
+    bool desync = false;
+    std::string desync_text;
+    uint64_t ticks_applied = 0;
+    uint64_t commands_applied = 0;
+    uint64_t ticks_with_commands = 0;
+
+    void stop(const std::string& reason) {
+        if (stopped) return;
+        stopped = true;
+        stop_reason = reason;
+    }
+
+    [[nodiscard]] bool is_hash_tick(Tick t) const {
+        return t % kLockstepHashCadence == 0 || t + 1 == total_ticks;
+    }
+
+    [[nodiscard]] std::string seat_list() const {
+        std::string text;
+        for (const PeerSeat& s : seats) {
+            if (!text.empty()) text += " ";
+            text += net_fmt("%u:%s", s.seat, s.tag.c_str());
+        }
+        return text;
+    }
+
+    [[nodiscard]] uint32_t seat_of_country(CountryId cid) const {
+        for (const PeerSeat& s : seats) {
+            if (s.country == cid) return s.seat;
+        }
+        return 0xFFFFFFFFu;
+    }
+
+    void send_all(const NetMessage& msg) {
+        for (RemotePeer& p : peers) {
+            if (!p.alive) continue;
+            std::string err;
+            if (!p.channel->send(msg, &err)) {
+                p.alive = false;
+                HOI_WARN("seat %u (%s): send failed: %s", p.seat, p.tag.c_str(), err.c_str());
+            }
+        }
+    }
+
+    // Starts a tick: this seat's commands (if it has any) go out, and - commands or not -
+    // this seat takes part in the tick's barrier. A seat with nothing to say still
+    // submits an empty list: the session must never guess that a silent seat had
+    // nothing to say, and the host cannot advance without a submission from every seat.
+    void begin_tick(Tick tick) {
+        if (tick == issue_tick) issue_command(tick);
+        // A seat with nothing to say still has to vote for the tick: the session must
+        // never guess that a silent seat had nothing to say, and the host cannot advance
+        // without a submission from every seat. Real commands are submitted first, so
+        // `submit_empty` only fills the tick when this seat has none.
+        if (lock.submit_empty(tick) == LockstepResult::Desynced) {
+            desync = true;
+            desync_text = lock.desync_report();
+        }
+        // This seat's Commands message belongs to the host; the host already holds its
+        // own submission, so it only forwards anything else that was queued.
+        for (const NetMessage& msg : lock.outgoing()) {
+            if (host && msg.kind == NetMessageKind::Commands) continue;
+            send_all(msg);
+        }
+    }
+
+    // Reads and dispatches everything the peers have sent. False once the session cannot
+    // continue. `progress` counts messages, which is what resets the stall clock.
+    bool pump(int timeout_ms, uint64_t* progress) {
+        for (RemotePeer& p : peers) {
+            if (!p.alive) continue;
+            std::vector<NetMessage> got;
+            std::string err;
+            const net::LinkStatus status = p.channel->receive(&got, timeout_ms, &err);
+            if (status == net::LinkStatus::Closed) {
+                p.alive = false;
+                stop(net_fmt("peer seat %u (%s) left the session", p.seat, p.tag.c_str()));
+                return false;
+            }
+            if (status == net::LinkStatus::Malformed) {
+                stop(net_fmt("malformed message framing from seat %u (%s): %s", p.seat,
+                             p.tag.c_str(), err.c_str()));
+                return false;
+            }
+            if (progress != nullptr) *progress += got.size();
+            for (NetMessage& msg : got) inbox.push_back(std::move(msg));
+        }
+        dispatch();
+        return !stopped;
+    }
+
+    void dispatch() {
+        while (!inbox.empty()) {
+            NetMessage msg = std::move(inbox.front());
+            inbox.pop_front();
+            switch (msg.kind) {
+                case NetMessageKind::Hello:
+                    break;  // the lobby is closed; the agreed roster is authoritative
+                case NetMessageKind::Commands:
+                    // A joiner only ever hears the host's `Applied`: a Commands message
+                    // would let a peer push this peer's tick to ready before the host
+                    // has derived the order.
+                    if (!host) {
+                        stop(net_fmt("seat %u sent Commands to a joiner: only the host derives a "
+                                     "tick's order",
+                                     msg.seat));
+                        break;
+                    }
+                    if (lock.receive(msg) == LockstepResult::Desynced) {
+                        desync = true;
+                        desync_text = lock.desync_report();
+                    }
+                    break;
+                case NetMessageKind::Applied:
+                    // Only the host derives a tick's order, so only the host may broadcast
+                    // one; a joiner that sends `Applied` is trying to choose this peer's
+                    // application order.
+                    if (host) {
+                        stop(net_fmt("seat %u sent Applied to the host: only the host derives a "
+                                     "tick's order",
+                                     msg.seat));
+                        break;
+                    }
+                    if (lock.receive(msg) == LockstepResult::Desynced) {
+                        desync = true;
+                        desync_text = lock.desync_report();
+                    }
+                    break;
+                case NetMessageKind::Hash:
+                    // Held until the barrier for that tick: a peer's hash for tick T can
+                    // arrive before this peer has applied T, and comparing then would
+                    // report a divergence that does not exist.
+                    hashes[msg.tick][msg.seat] = std::move(msg);
+                    break;
+                case NetMessageKind::Desync:
+                    desync = true;
+                    desync_text = msg.text.empty()
+                                      ? net_fmt("seat %u reported a desync at tick %llu", msg.seat,
+                                                static_cast<unsigned long long>(msg.tick))
+                                      : msg.text;
+                    break;
+                case NetMessageKind::Bye:
+                    bye = true;
+                    bye_tick = msg.tick;
+                    break;
+                default:
+                    break;
+            }
+            if (desync || stopped) {
+                inbox.clear();
+                return;
+            }
+        }
+    }
+
+    // Waits until every seat has submitted for `tick`; `ordered` then holds the list in
+    // application order. On the host that is the seats' own submissions; on a joiner it
+    // is the host's `Applied` message.
+    bool wait_ready(Tick tick, std::vector<Command>* ordered) {
+        std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+        while (!lock.ready(tick, ordered)) {
+            uint64_t progress = 0;
+            if (!pump(kNetPollSliceMs, &progress)) return false;
+            const int64_t idle = ms_since(last);
+            if (progress > 0) {
+                last = std::chrono::steady_clock::now();
+            } else if (idle > static_cast<int64_t>(kNetStallMillis)) {
+                stop(net_fmt("stalled at tick %llu: not every seat has submitted (seats %s); a "
+                             "seat that is behind stalls the session rather than guessing",
+                             static_cast<unsigned long long>(tick), seat_list().c_str()));
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // The hash barrier: after applying tick `t` every peer sends its hash and waits for
+    // the others, so the comparison always happens with both peers on the same tick.
+    bool barrier(Tick applied_tick) {
+        const NetMessage mine = lock.hash_message(*game);
+        const Tick key = mine.tick;  // whatever the message calls it, both peers agree
+        send_all(mine);
+
+        std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+        while (hashes[key].size() < peers.size()) {
+            uint64_t progress = 0;
+            if (!pump(kNetPollSliceMs, &progress)) return false;
+            const int64_t idle = ms_since(last);
+            if (progress > 0) {
+                last = std::chrono::steady_clock::now();
+            } else if (idle > static_cast<int64_t>(kNetStallMillis)) {
+                stop(net_fmt("stalled at tick %llu waiting for %zu peer hash(es) (seats %s)",
+                             static_cast<unsigned long long>(applied_tick),
+                             peers.size() - hashes[key].size(), seat_list().c_str()));
+                return false;
+            }
+        }
+
+        for (const auto& entry : hashes[key]) {
+            const NetMessage& msg = entry.second;
+            if (lock.check_hash(*game, msg) == LockstepResult::Desynced) {
+                desync = true;
+                desync_text = lock.desync_report();
+                NetMessage report;
+                report.kind = NetMessageKind::Desync;
+                report.seat = local_seat;
+                report.tick = applied_tick;
+                report.text = desync_text;
+                send_all(report);  // tell the others to stop too, never to keep running
+                return false;
+            }
+        }
+        hashes.erase(key);
+        return true;
+    }
+
+    void issue_command(Tick tick) {
+        const CountryId cid = lock.local_country();
+        Command cmd;
+        if (!pick_player_command(*game, cid, tick, &cmd)) {
+            std::printf("tick %llu: %s has no command that validates; issuing none\n",
+                        static_cast<unsigned long long>(tick), local_tag.c_str());
+            return;
+        }
+        const LockstepResult result = lock.submit(tick, cmd);
+        if (result != LockstepResult::Ok) {
+            std::printf("tick %llu: %s (%s) command refused by the session: %s\n",
+                        static_cast<unsigned long long>(tick), local_tag.c_str(),
+                        country_tag(*game, cid).c_str(), net_result_name(result));
+            return;
+        }
+        std::printf("tick %llu: %s submits %s\n", static_cast<unsigned long long>(tick),
+                    local_tag.c_str(), describe_command(cmd).c_str());
+    }
+
+    void print_tick_line(Tick tick, const std::vector<Command>& ordered) {
+        std::string rendered;
+        for (const Command& c : ordered) {
+            if (!rendered.empty()) rendered += "; ";
+            rendered += net_fmt("seat%u/%s %s", seat_of_country(c.country),
+                                country_tag(*game, c.country).c_str(), describe_command(c).c_str());
+        }
+        std::printf("tick %llu: applied %zu command(s) [%s]\n",
+                    static_cast<unsigned long long>(tick), ordered.size(), rendered.c_str());
+    }
+
+    void print_summary() {
+        std::printf("session ticks %llu\n", static_cast<unsigned long long>(ticks_applied));
+        std::printf("session commands %llu applied over %llu tick(s) with commands\n",
+                    static_cast<unsigned long long>(commands_applied),
+                    static_cast<unsigned long long>(ticks_with_commands));
+        std::printf("session ended %04d-%02u-%02u (date of tick %llu)\n", game->world.date.year,
+                    game->world.date.month, game->world.date.day,
+                    static_cast<unsigned long long>(ticks_applied));
+        std::printf("desync false\n");
+        std::printf("world hash %016llx\n", static_cast<unsigned long long>(world_hash(*game)));
+    }
+
+    int finish() {
+        if (desync) {
+            if (host) {
+                NetMessage report;
+                report.kind = NetMessageKind::Desync;
+                report.seat = local_seat;
+                report.tick = ticks_applied;
+                report.text = desync_text;
+                send_all(report);
+            }
+            std::printf("\n%s\n", desync_text.c_str());
+            std::printf("desync true\n");
+            std::printf("session ticks %llu\n", static_cast<unsigned long long>(ticks_applied));
+            std::printf("world hash %016llx\n", static_cast<unsigned long long>(world_hash(*game)));
+            return 1;
+        }
+        if (stopped) {
+            std::fflush(stdout);
+            std::fprintf(stderr, "session failed: %s\n", stop_reason.c_str());
+            std::printf("session ticks %llu\n", static_cast<unsigned long long>(ticks_applied));
+            std::printf("desync false\n");
+            std::printf("world hash %016llx\n", static_cast<unsigned long long>(world_hash(*game)));
+            return 1;
+        }
+        if (host) {
+            NetMessage end;
+            end.kind = NetMessageKind::Bye;
+            end.seat = local_seat;
+            end.tick = total_ticks == 0 ? 0 : total_ticks - 1;
+            end.text = "session complete";
+            send_all(end);
+        }
+        print_summary();
+        return 0;
+    }
+
+    int run() {
+        // Every seat's country must be non-AI on *every* peer, or the AI layers would
+        // issue different commands on different peers: the roster decides it, so both
+        // peers derive the same `ai_controlled` from the same seats. `player_country` is
+        // a per-peer view (which country this human holds) and is not part of the
+        // compared hash, so each peer keeps its own seat there.
+        for (const PeerSeat& s : seats) game->set_ai(s.country, false);
+        if (lock.local_country().valid()) game->player_country = lock.local_country();
+
+        std::printf("session: %zu seat(s) [%s], local seat %u (%s) %s\n", seats.size(),
+                    seat_list().c_str(), local_seat, local_tag.c_str(), host ? "host" : "client");
+        std::printf("session: %llu ticks, hash exchange every %u ticks, %zu remote peer(s)\n",
+                    static_cast<unsigned long long>(total_ticks), kLockstepHashCadence,
+                    peers.size());
+
+        for (Tick tick = 0; tick < total_ticks; ++tick) {
+            begin_tick(tick);
+
+            std::vector<Command> ordered;
+            if (!wait_ready(tick, &ordered)) break;
+
+            if (host) {
+                NetMessage applied;
+                applied.kind = NetMessageKind::Applied;
+                applied.seat = local_seat;
+                applied.tick = tick;
+                applied.commands = ordered;  // the authoritative order for this tick
+                send_all(applied);
+            }
+
+            for (const Command& cmd : ordered) game->queue.push(cmd);
+            game->tick_once();
+            ++ticks_applied;
+            commands_applied += ordered.size();
+            if (!ordered.empty()) {
+                ++ticks_with_commands;
+                print_tick_line(tick, ordered);
+            }
+
+            // The hash barrier comes before `mark_applied`: the tick's command list is
+            // what the desync report has to name, so it stays stored until the peers
+            // agree about the tick.
+            if (is_hash_tick(tick) && !barrier(tick)) break;
+            lock.mark_applied(tick);
+            if (bye) break;
+        }
+
+        if (!host && !stopped && !desync && !bye) {
+            // The host ends the session. A joiner never infers the end from a missing
+            // message: it waits for the Bye, so a session that stopped early is a
+            // failure and not a quiet success.
+            std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+            while (!bye) {
+                uint64_t progress = 0;
+                if (!pump(kNetPollSliceMs, &progress)) break;
+                const int64_t idle = ms_since(last);
+                if (progress > 0) {
+                    last = std::chrono::steady_clock::now();
+                } else if (idle > static_cast<int64_t>(kNetStallMillis)) {
+                    stop(net_fmt("host went quiet after tick %llu without ending the session",
+                                 static_cast<unsigned long long>(ticks_applied - 1)));
+                    break;
+                }
+            }
+            if (bye && bye_tick + 1 != total_ticks) {
+                stop(net_fmt("host ended the session after tick %llu, expected %llu",
+                             static_cast<unsigned long long>(bye_tick + 1),
+                             static_cast<unsigned long long>(total_ticks)));
+            }
+        }
+        return finish();
+    }
+};
+
+// The tick at which this peer submits its one command. Both peers may choose different
+// ticks; the barrier does not care when a submission arrives, only that it does.
+Tick issue_tick_for(const Options& opt, Tick total) {
+    if (opt.net_issue_at < 0) return total / 2;
+    const Tick want = static_cast<Tick>(opt.net_issue_at);
+    if (want >= total) {
+        std::printf("note: --net-issue-at %llu is past the last tick (%llu); using the last tick\n",
+                    static_cast<unsigned long long>(want),
+                    static_cast<unsigned long long>(total - 1));
+        return total - 1;
+    }
+    return want;
+}
+
+// The host: bind, seat the joiners, agree the roster, then run the session.
+int run_net_host(const Options& opt, Game& game) {
+    if (opt.player_tag.empty()) {
+        std::fprintf(stderr, "--host needs --player TAG (the host's country)\n");
+        return 2;
+    }
+    if (opt.players < 1 || opt.players > 8) {
+        std::fprintf(stderr, "--players must be between 1 and 8 (this is a LAN transport)\n");
+        return 2;
+    }
+
+    std::string err;
+    net::Listener listener;
+    if (!listener.bind_port(opt.port, &err)) {
+        std::fprintf(stderr, "host: cannot listen: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("listening on port %u for %u player(s)\n", listener.port(), opt.players);
+
+    // The roster is built in ascending seat order and is the only definition of the
+    // seats; both peers construct `Lockstep` from it.
+    std::vector<PeerSeat> seats;
+    CountryId host_country;
+    if (!find_country_by_tag(game, opt.player_tag, &host_country)) {
+        std::fprintf(stderr, "host: no country with tag %s in this scenario\n",
+                     opt.player_tag.c_str());
+        return 1;
+    }
+    seats.push_back(PeerSeat{0, host_country, opt.player_tag});
+
+    std::vector<RemotePeer> joiners;
+    for (uint32_t seat = 1; seat < opt.players; ++seat) {
+        std::string aerr;
+        auto conn = listener.accept(-1, &g_stop_requested, &aerr);
+        if (conn == nullptr) {
+            std::fprintf(stderr, "host: %s\n", aerr.c_str());
+            return 1;
+        }
+        RemotePeer peer;
+        peer.seat = seat;
+        peer.conn = std::move(conn);
+        peer.channel = std::make_unique<net::Channel>(peer.conn.get());
+
+        // The joiner announces itself with its tag, and - when it was told a session size -
+        // how many players it expects; the seat is assigned here, so the assignment is
+        // identical on every peer.
+        const std::string from = peer.conn->peer();
+        std::string hello_err;
+        bool greeted = false;
+        uint32_t announced_players = 0;
+        for (int attempt = 0; attempt < 100 && !greeted; ++attempt) {
+            std::vector<NetMessage> got;
+            const net::LinkStatus status =
+                peer.channel->receive(&got, kNetLobbyTimeoutMs / 100, &hello_err);
+            if (status == net::LinkStatus::Closed || status == net::LinkStatus::Malformed) break;
+            for (NetMessage& msg : got) {
+                if (msg.kind == NetMessageKind::Hello && !greeted) {
+                    peer.tag = msg.text;
+                    announced_players = static_cast<uint32_t>(msg.hash);
+                    greeted = true;
+                }
+            }
+        }
+        if (!greeted) {
+            std::fprintf(stderr, "host: %s connected but never announced a tag (%s)\n", from.c_str(),
+                         hello_err.c_str());
+            return 1;
+        }
+
+        CountryId country;
+        std::string refusal;
+        if (peer.tag.empty()) {
+            refusal = "empty tag";
+        } else if (announced_players != 0 && announced_players != opt.players) {
+            refusal = "this peer asked for " + std::to_string(announced_players) +
+                      " players, the session has " + std::to_string(opt.players);
+        } else if (!find_country_by_tag(game, peer.tag, &country)) {
+            refusal = "no country with tag " + peer.tag + " in this scenario";
+        } else {
+            for (const PeerSeat& s : seats) {
+                if (s.tag == peer.tag) refusal = "tag " + peer.tag + " is already seated";
+                if (s.country == country) refusal = "country " + peer.tag + " is already seated";
+            }
+        }
+        if (!refusal.empty()) {
+            NetMessage bye_msg;
+            bye_msg.kind = NetMessageKind::Bye;
+            bye_msg.text = "refused: " + refusal;
+            std::string send_err;
+            peer.channel->send(bye_msg, &send_err);
+            std::fflush(stdout);
+            std::fprintf(stderr, "host: refused %s from %s: %s\n", peer.tag.c_str(), from.c_str(),
+                         refusal.c_str());
+            return 1;
+        }
+
+        seats.push_back(PeerSeat{seat, country, peer.tag});
+        std::printf("seat %u: %s joined from %s\n", seat, peer.tag.c_str(), from.c_str());
+        joiners.push_back(std::move(peer));
+    }
+    listener.close();
+
+    // Ascending seat order, ties broken by tag: the sort is explicit so the roster does
+    // not depend on message arrival order.
+    std::sort(seats.begin(), seats.end(), [](const PeerSeat& a, const PeerSeat& b) {
+        if (a.seat != b.seat) return a.seat < b.seat;
+        if (a.tag != b.tag) return a.tag < b.tag;
+        return a.country < b.country;
+    });
+
+    const Tick total = opt.use_ticks ? opt.ticks
+                                     : opt.days * static_cast<uint64_t>(TICKS_PER_DAY);
+    if (total == 0) {
+        std::fprintf(stderr, "host: --days/--ticks asks for a zero-tick session\n");
+        return 2;
+    }
+
+    // The agreed roster: one Hello per seat, seat 0 first, carrying the seat count and
+    // the session length so a joiner can size the run before tick 0.
+    for (RemotePeer& peer : joiners) {
+        std::string send_err;
+        for (const PeerSeat& s : seats) {
+            NetMessage hello;
+            hello.kind = NetMessageKind::Hello;
+            hello.seat = s.seat;
+            hello.tick = total;
+            hello.text = s.tag;  // the tag is the seat's identity; the country follows from it
+            if (s.seat == 0) hello.hash = seats.size();
+            if (!peer.channel->send(hello, &send_err)) {
+                std::fprintf(stderr, "host: cannot send the roster to seat %u: %s\n", peer.seat,
+                             send_err.c_str());
+                return 1;
+            }
+        }
+    }
+
+    NetSession session;
+    session.game = &game;
+    session.seats = seats;
+    session.peers = std::move(joiners);
+    session.local_seat = 0;
+    session.local_tag = opt.player_tag;
+    session.host = true;
+    session.total_ticks = total;
+    session.issue_tick = issue_tick_for(opt, total);
+    session.lock = Lockstep(seats, 0);
+    if (session.peers.empty()) {
+        std::printf("session: no joiners; the session has no peer to verify against\n");
+    }
+    return session.run();
+}
+
+// The joiner: connect, be seated, then follow the host's ordered list tick by tick.
+int run_net_client(const Options& opt, Game& game) {
+    if (opt.player_tag.empty()) {
+        std::fprintf(stderr, "--join needs --player TAG (this peer's country)\n");
+        return 2;
+    }
+    std::string host;
+    uint16_t port = 0;
+    if (!parse_host_port(opt.join_addr, &host, &port)) {
+        std::fprintf(stderr, "--join wants HOST:PORT (got \"%s\")\n", opt.join_addr.c_str());
+        return 2;
+    }
+
+    std::string err;
+    auto conn = net::Connection::connect(host, port, kNetConnectTimeoutMs, &err);
+    if (conn == nullptr) {
+        std::fprintf(stderr, "join failed: %s\n", err.c_str());
+        return 1;
+    }
+    auto channel = std::make_unique<net::Channel>(conn.get());
+    std::printf("connected to %s:%u as %s\n", host.c_str(), static_cast<unsigned>(port),
+                opt.player_tag.c_str());
+
+    NetMessage hello;
+    hello.kind = NetMessageKind::Hello;
+    hello.seat = 0;
+    // Announce the tag, and the session size when this peer was given one, so the host
+    // can refuse a mismatch before tick 0 instead of stalling later.
+    hello.hash = opt.players_set ? opt.players : 0;
+    hello.text = opt.player_tag;
+    if (!channel->send(hello, &err)) {
+        std::fprintf(stderr, "join failed: cannot announce this peer: %s\n", err.c_str());
+        return 1;
+    }
+
+    // The host's own Hello (seat 0, sent first) says how many seats the session has and
+    // how long it runs; the rest of the roster follows.
+    std::deque<NetMessage> lobby;
+    std::vector<PeerSeat> seats;
+    size_t expected = 0;
+    bool seated = false;
+    bool refused = false;
+    std::string refusal;
+    Tick total = 0;
+    uint32_t my_seat = 0;
+    bool lobby_done = false;
+    std::string roster_error;
+    while (!lobby_done) {
+        while (!lobby.empty()) {
+            NetMessage msg = std::move(lobby.front());
+            lobby.pop_front();
+            if (msg.kind == NetMessageKind::Bye) {
+                refused = true;
+                refusal = msg.text;
+                lobby_done = true;
+                break;
+            }
+            if (msg.kind != NetMessageKind::Hello) continue;
+            if (msg.seat == 0) expected = static_cast<size_t>(msg.hash);
+            total = msg.tick;
+            // The seat's country is the scenario's country for that tag: both peers
+            // resolve it the same way, and an unknown tag is a scenario mismatch.
+            CountryId country;
+            if (!find_country_by_tag(game, msg.text, &country)) {
+                roster_error = "the host seated " + msg.text +
+                               ", which is not a country in this peer's scenario";
+                lobby_done = true;
+                break;
+            }
+            seats.push_back(PeerSeat{msg.seat, country, msg.text});
+            if (msg.text == opt.player_tag) {
+                my_seat = msg.seat;
+                seated = true;
+            }
+        }
+        if (lobby_done) break;
+        if (expected != 0 && seats.size() >= expected) break;
+        std::vector<NetMessage> got;
+        const net::LinkStatus status = channel->receive(&got, kNetLobbyTimeoutMs, &err);
+        if (status == net::LinkStatus::Closed || status == net::LinkStatus::Malformed) {
+            std::fprintf(stderr, "lobby: the host closed the connection%s%s\n",
+                         err.empty() ? "" : ": ", err.c_str());
+            return 1;
+        }
+        for (NetMessage& msg : got) lobby.push_back(std::move(msg));
+        if (status == net::LinkStatus::Idle && got.empty()) {
+            std::fprintf(stderr, "lobby: no roster from the host within %d ms\n",
+                         kNetLobbyTimeoutMs);
+            return 1;
+        }
+    }
+
+    if (!roster_error.empty()) {
+        std::fprintf(stderr, "lobby: %s; both peers need the same scenario, seed, data root and "
+                             "mods\n",
+                     roster_error.c_str());
+        return 1;
+    }
+    if (refused) {
+        std::fprintf(stderr, "lobby: the host did not seat this peer: %s\n", refusal.c_str());
+        return 1;
+    }
+    if (!seated || expected == 0 || seats.size() < expected) {
+        std::fprintf(stderr,
+                     "lobby: %s was not seated (got %zu of %zu seat(s); the host assigns seats "
+                     "by tag)\n",
+                     opt.player_tag.c_str(), seats.size(), expected);
+        return 1;
+    }
+    if (opt.players_set && opt.players != expected) {
+        std::fprintf(stderr, "lobby: --players %u disagrees with the host's %zu seats\n",
+                     opt.players, expected);
+        return 1;
+    }
+
+    const Tick local_total = opt.use_ticks ? opt.ticks
+                                           : opt.days * static_cast<uint64_t>(TICKS_PER_DAY);
+    if (local_total != total) {
+        std::printf("session: the host runs %llu ticks, this peer's --days/--ticks asks for %llu; "
+                    "following the host\n",
+                    static_cast<unsigned long long>(total),
+                    static_cast<unsigned long long>(local_total));
+    }
+
+    std::sort(seats.begin(), seats.end(), [](const PeerSeat& a, const PeerSeat& b) {
+        if (a.seat != b.seat) return a.seat < b.seat;
+        if (a.tag != b.tag) return a.tag < b.tag;
+        return a.country < b.country;
+    });
+
+    RemotePeer host_peer;
+    host_peer.seat = 0;
+    host_peer.tag = seats.empty() ? std::string("host") : seats.front().tag;
+    host_peer.channel = std::move(channel);
+    host_peer.conn = std::move(conn);
+
+    NetSession session;
+    session.game = &game;
+    session.seats = seats;
+    session.peers.push_back(std::move(host_peer));
+    session.local_seat = my_seat;
+    session.local_tag = opt.player_tag;
+    session.host = false;
+    session.total_ticks = total;
+    session.issue_tick = issue_tick_for(opt, total);
+    session.lock = Lockstep(seats, my_seat);
+    return session.run();
+}
+
+int run_net_session(const Options& opt, Game& game) {
+    if (opt.host && !opt.join_addr.empty()) {
+        std::fprintf(stderr, "--host and --join are mutually exclusive\n");
+        return 2;
+    }
+    if (opt.serve) {
+        std::fprintf(stderr, "--serve and --host/--join are mutually exclusive\n");
+        return 2;
+    }
+    if (!opt.save_path.empty() || opt.audit || opt.hashes || opt.summary ||
+        opt.save_every_days > 0) {
+        std::printf("note: --save/--audit/--hashes/--summary/--save-every-days do not apply to a "
+                    "networked session and are ignored\n");
+    }
+    std::signal(SIGINT, on_signal);
+    std::signal(SIGTERM, on_signal);
+    return opt.host ? run_net_host(opt, game) : run_net_client(opt, game);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -642,6 +1582,8 @@ int main(int argc, char** argv) {
     }
 
     const uint64_t ticks = opt.use_ticks ? opt.ticks : opt.days * static_cast<uint64_t>(TICKS_PER_DAY);
+
+    if (opt.host || !opt.join_addr.empty()) return run_net_session(opt, game);
 
     if (opt.serve) {
         std::signal(SIGINT, on_signal);

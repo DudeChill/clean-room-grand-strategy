@@ -89,10 +89,10 @@ Earlier in this milestone:
 ## 0.9 Modding, Multiplayer, Tooling (mod half shipped in v0.9.0)
 
 * [x] mod load order, data validation, mod test pack, validator CLI, docs/MODDING.md
-* [ ] multiplayer determinism and desync tooling (MP-001)
+* [x] multiplayer determinism and desync tooling (MP-001): lockstep session, framing, desync report, host/join CLI, docs/MULTIPLAYER.md
 * [ ] map/data editors
 
-## 0.10 Intelligence (in progress)
+## 0.10 Intelligence (shipped in v0.10.0)
 
 * agencies and upgrades, spy networks, operations, decryption
 * effects: knowledge of the enemy, attack bonus, planning denial, sabotage,

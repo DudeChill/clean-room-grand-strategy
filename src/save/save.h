@@ -34,7 +34,7 @@ inline constexpr uint32_t SAVE_MAGIC = 0x34494F48;  // "HOI4" little-endian
 //    (Content::operations, Content::agency_upgrades) and Politics gained each
 //    country's agency state (Country::agency_upgrades, networks, operations,
 //    ciphers). Layout changed, so version 8 files are rejected.
-inline constexpr uint32_t SAVE_VERSION = 9;
+inline constexpr uint32_t SAVE_VERSION = 10;
 
 enum class Subsystem : uint8_t {
     Map = 0,

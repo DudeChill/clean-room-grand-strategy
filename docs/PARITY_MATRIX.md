@@ -38,11 +38,12 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | IND-005 | Resource production and consumption | FUNCTIONAL | MODERATE | yes | yes | yes | unit |
 | IND-006 | Consumer goods | FUNCTIONAL | LOW | yes | yes | yes | unit |
 | IND-007 | Equipment stockpile and reinforcement | PARITY_TESTING | HIGH | yes | yes | yes | unit + golden |
-| IND-008 | Trade and convoys (land and sea routes, blockade, factory cost) | SPECIFIED | MODERATE | yes | yes | yes | unit + golden |
+| IND-008 | Trade and convoys (land and sea routes, blockade, factory cost) | FUNCTIONAL | MODERATE | yes | yes | yes | unit: 9 trade tests; measured at day 30: 12 routes (10 active) close real deficits |
 | IND-009 | Equipment designers (components, computed variants) | FUNCTIONAL | HIGH | yes | yes | yes | unit + golden + browser |
 | MIL-021 | Equipment variants in division slots and continuous replacement | FUNCTIONAL | HIGH | yes | yes | yes | unit + adversarial + campaign scan |
 | INT-001 | Agency upgrades, spy networks, operations, decryption | FUNCTIONAL | HIGH | yes | yes | yes | unit (12) + campaign measurement + browser |
 | INT-002 | Intel effects on battle (attack bonus, planning denial) | FUNCTIONAL | MODERATE | yes | yes | yes | unit (directional organisation assertions) |
+| MP-001 | Deterministic lockstep transport with desync tooling | FUNCTIONAL | MODERATE | n/a | n/a | yes | 12 lockstep + 4 transport tests; two-process localhost sessions at 3 and 600 days with identical hashes; peer-loss halt verified |
 | MOD-001 | Mod layer: discovery, deterministic order, overrides, report | FUNCTIONAL | HIGH | no | n/a | yes | unit (MODS_001..006) + pack (10) + CLI |
 | MOD-002 | Content validator CLI and gate | FUNCTIONAL | MODERATE | n/a | n/a | n/a | 13-case script wired into scripts/verify.sh |
 | RES-001 | Technology graph and prerequisites | FUNCTIONAL | HIGH | yes | yes | yes | unit + golden |
@@ -68,7 +69,7 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | LOG-003 | Emergent encirclement starvation | PARITY_TESTING | HIGH | yes | yes | - | unit + golden |
 | LOG-004 | Supply debugger | FUNCTIONAL | HIGH | part | - | - | unit |
 | LOG-005 | Fuel distribution | FUNCTIONAL | LOW | yes | yes | yes | unit |
-| LOG-006 | Ports and overseas supply | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| LOG-006 | Ports and overseas supply | FUNCTIONAL | MODERATE | yes | yes | yes | unit: overseas supply, convoy draw and blockade covered by supply + trade suites |
 | LOG-007 | Motorisation effect | PROTOTYPE | LOW | yes | yes | yes | - |
 | AIR-001 | Air wings, bases, missions, air combat | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
 | AIR-002 | Air superiority feeding land combat | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
@@ -79,13 +80,13 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | AIR-007 | Air detection model | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | AIR-008 | Air fuel and pilot manpower | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | AIR-009 | Reconnaissance / fog of war | NOT_IMPLEMENTED | LOW | - | - | - | - |
-| NAV-001 | Ships, task forces, fleets, sea zones | SPECIFIED | MODERATE | yes | yes | yes | unit + golden |
-| NAV-002 | Detection, positioning, screening, engagements | SPECIFIED | MODERATE | yes | yes | - | unit |
-| NAV-003 | Missions: patrol, strike force, escort, raid, support, training | SPECIFIED | MODERATE | yes | yes | yes | unit |
-| NAV-004 | Naval invasion workflow (load, cross, land, supply) | SPECIFIED | MODERATE | yes | yes | yes | unit + golden |
-| NAV-005 | Ports as supply sources, convoys, blockade | SPECIFIED | LOW | yes | yes | yes | unit |
-| NAV-006 | Repair and port facilities | SPECIFIED | LOW | yes | yes | yes | unit |
-| NAV-007 | Carrier air power | SPECIFIED | LOW | part | yes | yes | unit |
+| NAV-001 | Ships, task forces, fleets, sea zones | FUNCTIONAL | HIGH | yes | yes | yes | unit: 15 naval + 8 invasion tests pass; 365-day gate run exercises fleets, missions and invasions on AI |
+| NAV-002 | Detection, positioning, screening, engagements | FUNCTIONAL | HIGH | yes | yes | yes | unit: detection and engagement tests pass; engagements resolve incrementally |
+| NAV-003 | Missions: patrol, strike force, escort, raid, support, training | FUNCTIONAL | HIGH | yes | yes | yes | unit: every mission type is set through commands and changes control |
+| NAV-004 | Naval invasion workflow (load, cross, land, supply) | FUNCTIONAL | HIGH | yes | yes | yes | unit: 8 invasion tests, including the AI staging proof that shipped as v0.3.1 |
+| NAV-005 | Ports as supply sources, convoys, blockade | FUNCTIONAL | MODERATE | yes | yes | yes | unit: overseas supply and convoy consumption covered by supply + trade tests |
+| NAV-006 | Repair and port facilities | FUNCTIONAL | LOW | yes | yes | yes | unit: repair covered by the naval suite |
+| NAV-007 | Carrier air power | PARTIAL | LOW | yes | yes | yes | unit: carriers fly their air group and take part in engagements; a full carrier air model (separate wings, deck capacity, losses) is not modelled |
 | POL-001 | Focus trees (prerequisites, exclusions, bypass, effects, AI) | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
 | POL-002 | Events (triggers, options, chains, delays) | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
 | POL-003 | Decisions (visibility, cost, timers, targeting) | PARITY_TESTING | MODERATE | yes | yes | yes | unit |

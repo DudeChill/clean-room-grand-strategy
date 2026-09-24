@@ -2391,7 +2391,10 @@ void write_ai(ByteWriter& w, const Game& g) {
     w.u64(g.ai.decisions_made);
     w.u64(g.ai.commands_issued);
     write_bytes(w, g.ai_controlled);
-    w.u32(g.player_country.v);
+    // `player_country` is a per-peer view (which country a human is holding), not
+    // simulation state: it lives in the save header, and keeping it out of this section
+    // is what lets two peers in a session compare this subsystem's hash. A multiplayer
+    // session is otherwise byte-identical between peers that seat different countries.
 }
 
 bool read_ai(ByteReader& r, Game& g) {
@@ -2417,9 +2420,7 @@ bool read_ai(ByteReader& r, Game& g) {
     if (!read_bytes(r, &g.ai.posture)) return false;
     if (!r.u64(&g.ai.decisions_made) || !r.u64(&g.ai.commands_issued)) return false;
     if (!read_bytes(r, &g.ai_controlled)) return false;
-    uint32_t player = INVALID_ID;
-    if (!r.u32(&player)) return false;
-    g.player_country = CountryId(player);
+    // `player_country` comes from the save header (see write_ai for why it is not here).
     return true;
 }
 
@@ -3037,11 +3038,7 @@ bool load_game(Game& g, const std::string& path, std::string* err) {
     if (!(g.start_date == header.start_date)) {
         return fail(err, "save header start_date disagrees with the Rng section start_date");
     }
-    if (g.player_country.v != header.player_country) {
-        return fail(err, "save header player_country " + std::to_string(header.player_country) +
-                             " disagrees with the Ai section player_country " +
-                             std::to_string(g.player_country.v));
-    }
+
     if (g.ai_controlled != header.ai_controlled) {
         return fail(err, "save header ai_controlled (" + std::to_string(header.ai_controlled.size()) +
                              " entries) disagrees with the Ai section (" +

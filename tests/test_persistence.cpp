@@ -1876,7 +1876,10 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"ai.decisions_made", +[](Game& g) { g.ai.decisions_made += 1; }},
         {"ai.commands_issued", +[](Game& g) { g.ai.commands_issued += 1; }},
         {"ai_controlled", +[](Game& g) { g.ai_controlled.push_back(1); }},
-        {"player_country", +[](Game& g) { g.player_country = CountryId(1); }},
+        // `player_country` is a per-peer view field (which country a human is holding),
+        // not simulation state: it lives in the save header and is deliberately absent
+        // from the World hash so two peers in a multiplayer session can compare hashes.
+        // It is still round-tripped by save_round_trip_preserves_player_country.
         {"game.seed", +[](Game& g) { g.seed += 1; }},
         {"world.world_seed", +[](Game& g) { g.world.world_seed += 1; }},
         {"world.tick", +[](Game& g) { g.world.tick += 1; }},

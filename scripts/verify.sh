@@ -69,6 +69,16 @@ echo "== 8. content validation (MOD-002, MOD-003) =="
 check "content validator: base tree, data/mods, tests/mods fixtures" env GAME="$game" scripts/validate-content.sh
 
 echo
+echo "== 9. documentation gate (parity matrix + discrepancy database) =="
+if scripts/audit-docs.sh > /tmp/verify_docs.txt 2>&1; then
+  results+=("PASS  documentation gate (no OPEN BLOCKER/MAJOR, vocabularies intact)")
+  pass=$((pass + 1))
+else
+  results+=("FAIL  documentation gate")
+  sed 's/^/        /' /tmp/verify_docs.txt | tail -12
+  fail=$((fail + 1))
+fi
+
 echo "==== verification summary ===="
 printf '%s\n' "${results[@]}"
 echo "passed: $pass   failed: $fail"

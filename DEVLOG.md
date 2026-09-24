@@ -1,3 +1,26 @@
+## 2026-09-24 - v0.11.0: multiplayer, and the last MAJOR closes
+
+Two machines can now play the same campaign and prove it: peers exchange only commands,
+every seat has to vote on every tick (including "nothing to say"), and the world hash is
+compared every 24 ticks so a divergence stops the session instead of quietly forking it.
+A real session over localhost stayed identical for 14,400 ticks (`world hash
+672625a6241b4063` on both sides), and killing a peer mid-session stops the other with a
+message naming the seat rather than a hang.
+
+Getting there needed one architectural admission: `player_country` is which country a
+*human* is holding, so it is per-peer view state, not simulation state. It was inside the
+hashed Ai subsystem, which made every cross-peer comparison a false desync. It now lives in
+the save header only. A session also sets every seated country to human on every peer, so
+`ai_controlled` - which genuinely affects the simulation - is hashed and still agrees.
+
+With MP-001 closed there is no OPEN BLOCKER or MAJOR left in the discrepancy database, and
+`scripts/audit-docs.sh` now enforces that mechanically as part of the release gate: 10
+checks pass. That is the structural half of the 1.0 exit criterion; the remaining parity
+rows are FUNCTIONAL or PARITY_TESTING, plus fourteen LOW-confidence extras that are
+explicitly not implemented (rivers and canals, doctrines, strategic redeployment, air
+detection/fuel/recon, ideology drift, lend-lease, occupation policies, carrier air depth,
+save migration, map editors, profiler history).
+
 ## 2026-09-24 - v0.10.0: intelligence, the last MAJOR subsystem
 
 Agencies, networks, operations and decryption are in, and they change the game in two
