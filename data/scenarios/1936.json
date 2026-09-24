@@ -68,7 +68,7 @@
         "s332"
       ],
       "civilian_factories": 38,
-      "military_factories": 15,
+      "military_factories": 18,
       "dockyards": 5,
       "technologies": [
         "infantry_weapons",
@@ -88,7 +88,7 @@
       "production_lines": [
         {
           "equipment": "infantry_equipment_1",
-          "factories": 6
+          "factories": 5
         },
         {
           "equipment": "support_equipment_1",
@@ -96,15 +96,15 @@
         },
         {
           "equipment": "artillery_1",
-          "factories": 2
+          "factories": 4
         },
         {
           "equipment": "motorized_1",
-          "factories": 2
+          "factories": 3
         },
         {
           "equipment": "armor_1",
-          "factories": 3
+          "factories": 4
         },
         {
           "equipment": "destroyer_1",
@@ -132,9 +132,6 @@
         "conscription_limited",
         "economy_civilian",
         "trade_free"
-      ],
-      "spirits": [
-        "heavy_industrial_base"
       ],
       "political_power": 48.0,
       "stability": 0.62,
@@ -322,7 +319,7 @@
         "s98"
       ],
       "civilian_factories": 23,
-      "military_factories": 9,
+      "military_factories": 11,
       "dockyards": 4,
       "technologies": [
         "infantry_weapons",
@@ -347,11 +344,11 @@
           "factories": 1
         },
         {
-          "equipment": "artillery_1",
-          "factories": 1
+          "equipment": "destroyer_1",
+          "factories": 3
         },
         {
-          "equipment": "motorized_1",
+          "equipment": "convoy_1",
           "factories": 2
         },
         {
@@ -378,9 +375,6 @@
         "conscription_extensive",
         "economy_partial_mobilization",
         "trade_free"
-      ],
-      "spirits": [
-        "colonial_administration"
       ],
       "political_power": 48.5,
       "stability": 0.55,
@@ -522,11 +516,13 @@
         "s97"
       ],
       "civilian_factories": 6,
-      "military_factories": 3,
+      "military_factories": 8,
       "dockyards": 0,
       "technologies": [
         "infantry_weapons",
+        "support_weapons",
         "field_artillery",
+        "motorization",
         "production_lines"
       ],
       "production_lines": [
@@ -537,12 +533,25 @@
         {
           "equipment": "support_equipment_1",
           "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 2
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 1
+        },
+        {
+          "equipment": "armor_1",
+          "factories": 2
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 320,
         "support_equipment_1": 96,
-        "artillery_1": 48
+        "artillery_1": 48,
+        "motorized_1": 80
       },
       "laws": [
         "conscription_volunteer",
@@ -582,6 +591,11 @@
           "template": "garrison_division",
           "province": "p289",
           "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p247",
+          "count": 1
         }
       ]
     },
@@ -616,24 +630,42 @@
         "s260"
       ],
       "civilian_factories": 5,
-      "military_factories": 2,
+      "military_factories": 7,
       "dockyards": 0,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
+        "motorization",
         "production_lines"
       ],
       "production_lines": [
         {
           "equipment": "infantry_equipment_1",
           "factories": 2
+        },
+        {
+          "equipment": "support_equipment_1",
+          "factories": 1
+        },
+        {
+          "equipment": "artillery_1",
+          "factories": 2
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 1
+        },
+        {
+          "equipment": "armor_1",
+          "factories": 1
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 280,
         "support_equipment_1": 84,
-        "artillery_1": 42
+        "artillery_1": 42,
+        "motorized_1": 70
       },
       "laws": [
         "conscription_limited",
@@ -667,6 +699,11 @@
         {
           "template": "garrison_division",
           "province": "p1304",
+          "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1312",
           "count": 1
         }
       ]
@@ -708,13 +745,14 @@
         "s95"
       ],
       "civilian_factories": 14,
-      "military_factories": 6,
+      "military_factories": 9,
       "dockyards": 2,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "construction_engineering",
+        "motorization",
+        "light_armor",
         "production_lines"
       ],
       "production_lines": [
@@ -728,17 +766,23 @@
         },
         {
           "equipment": "artillery_1",
-          "factories": 1
+          "factories": 2
         },
         {
           "equipment": "motorized_1",
           "factories": 1
+        },
+        {
+          "equipment": "armor_1",
+          "factories": 2
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 360,
         "support_equipment_1": 108,
-        "artillery_1": 54
+        "artillery_1": 54,
+        "motorized_1": 90,
+        "armor_1": 45
       },
       "laws": [
         "conscription_volunteer",
@@ -777,6 +821,16 @@
         {
           "template": "garrison_division",
           "province": "p180",
+          "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p136",
+          "count": 1
+        },
+        {
+          "template": "armored_division",
+          "province": "p263",
           "count": 1
         }
       ]
@@ -821,19 +875,20 @@
         "s330"
       ],
       "civilian_factories": 12,
-      "military_factories": 5,
+      "military_factories": 10,
       "dockyards": 1,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "construction_engineering",
+        "motorization",
+        "light_armor",
         "production_lines"
       ],
       "production_lines": [
         {
           "equipment": "infantry_equipment_1",
-          "factories": 2
+          "factories": 3
         },
         {
           "equipment": "support_equipment_1",
@@ -841,17 +896,23 @@
         },
         {
           "equipment": "artillery_1",
-          "factories": 1
+          "factories": 2
         },
         {
           "equipment": "motorized_1",
-          "factories": 1
+          "factories": 2
+        },
+        {
+          "equipment": "armor_1",
+          "factories": 2
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 400,
         "support_equipment_1": 120,
-        "artillery_1": 60
+        "artillery_1": 60,
+        "motorized_1": 100,
+        "armor_1": 50
       },
       "laws": [
         "conscription_limited",
@@ -901,6 +962,21 @@
           "template": "garrison_division",
           "province": "p1430",
           "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1479",
+          "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1435",
+          "count": 1
+        },
+        {
+          "template": "armored_division",
+          "province": "p1531",
+          "count": 1
         }
       ]
     },
@@ -939,13 +1015,14 @@
         "s99"
       ],
       "civilian_factories": 11,
-      "military_factories": 5,
+      "military_factories": 8,
       "dockyards": 1,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "construction_engineering",
+        "motorization",
+        "light_armor",
         "production_lines"
       ],
       "production_lines": [
@@ -959,17 +1036,23 @@
         },
         {
           "equipment": "artillery_1",
-          "factories": 1
+          "factories": 2
         },
         {
           "equipment": "motorized_1",
           "factories": 1
+        },
+        {
+          "equipment": "armor_1",
+          "factories": 2
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 320,
         "support_equipment_1": 96,
-        "artillery_1": 48
+        "artillery_1": 48,
+        "motorized_1": 80,
+        "armor_1": 40
       },
       "laws": [
         "conscription_volunteer",
@@ -1008,6 +1091,16 @@
         {
           "template": "garrison_division",
           "province": "p769",
+          "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p815",
+          "count": 1
+        },
+        {
+          "template": "armored_division",
+          "province": "p866",
           "count": 1
         }
       ]
@@ -1058,13 +1151,14 @@
         "s287"
       ],
       "civilian_factories": 13,
-      "military_factories": 6,
+      "military_factories": 11,
       "dockyards": 2,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "construction_engineering",
+        "motorization",
+        "light_armor",
         "production_lines"
       ],
       "production_lines": [
@@ -1078,17 +1172,23 @@
         },
         {
           "equipment": "artillery_1",
-          "factories": 1
+          "factories": 3
         },
         {
           "equipment": "motorized_1",
-          "factories": 1
+          "factories": 2
+        },
+        {
+          "equipment": "armor_1",
+          "factories": 2
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 440,
         "support_equipment_1": 132,
-        "artillery_1": 66
+        "artillery_1": 66,
+        "motorized_1": 110,
+        "armor_1": 55
       },
       "laws": [
         "conscription_limited",
@@ -1143,6 +1243,21 @@
           "template": "garrison_division",
           "province": "p1110",
           "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1185",
+          "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1092",
+          "count": 1
+        },
+        {
+          "template": "armored_division",
+          "province": "p1144",
+          "count": 1
         }
       ]
     },
@@ -1177,13 +1292,14 @@
         "s320"
       ],
       "civilian_factories": 10,
-      "military_factories": 4,
+      "military_factories": 7,
       "dockyards": 2,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "construction_engineering",
+        "motorization",
+        "light_armor",
         "production_lines"
       ],
       "production_lines": [
@@ -1197,13 +1313,23 @@
         },
         {
           "equipment": "artillery_1",
+          "factories": 2
+        },
+        {
+          "equipment": "motorized_1",
+          "factories": 1
+        },
+        {
+          "equipment": "armor_1",
           "factories": 1
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 280,
         "support_equipment_1": 84,
-        "artillery_1": 42
+        "artillery_1": 42,
+        "motorized_1": 70,
+        "armor_1": 35
       },
       "laws": [
         "conscription_volunteer",
@@ -1238,6 +1364,16 @@
           "template": "garrison_division",
           "province": "p1557",
           "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p1515",
+          "count": 1
+        },
+        {
+          "template": "armored_division",
+          "province": "p1561",
+          "count": 1
         }
       ]
     },
@@ -1270,13 +1406,14 @@
         "s331"
       ],
       "civilian_factories": 9,
-      "military_factories": 4,
+      "military_factories": 6,
       "dockyards": 1,
       "technologies": [
         "infantry_weapons",
         "support_weapons",
         "field_artillery",
-        "construction_engineering",
+        "motorization",
+        "light_armor",
         "production_lines"
       ],
       "production_lines": [
@@ -1290,13 +1427,19 @@
         },
         {
           "equipment": "artillery_1",
+          "factories": 2
+        },
+        {
+          "equipment": "motorized_1",
           "factories": 1
         }
       ],
       "stockpile": {
         "infantry_equipment_1": 240,
         "support_equipment_1": 72,
-        "artillery_1": 36
+        "artillery_1": 36,
+        "motorized_1": 60,
+        "armor_1": 30
       },
       "laws": [
         "conscription_volunteer",
@@ -1330,6 +1473,16 @@
         {
           "template": "garrison_division",
           "province": "p2006",
+          "count": 1
+        },
+        {
+          "template": "motorized_division",
+          "province": "p2007",
+          "count": 1
+        },
+        {
+          "template": "armored_division",
+          "province": "p1996",
           "count": 1
         }
       ]

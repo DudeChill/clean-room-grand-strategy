@@ -24,6 +24,7 @@
 #include "core/math.h"
 #include "save/save.h"
 #include "sim/commands.h"
+#include "sim/design.h"
 #include "sim/events.h"
 #include "sim/focus.h"
 #include "sim/industry.h"
@@ -261,6 +262,17 @@ bool apply_client_command(Game& g, const Json& payload, std::string* err) {
     if (payload.has("division_ids")) {
         for (const Json& v : payload.at("division_ids").array_items()) {
             cmd.divisions.push_back(DivisionId(static_cast<uint32_t>(v.as_int())));
+        }
+    }
+    // Equipment designers: [[slot index, component index], ...] in ascending slot order.
+    if (payload.has("components")) {
+        for (const Json& c : payload.at("components").array_items()) {
+            if (!c.is_array() || c.array_items().size() < 2) continue;
+            const Json& pair = c;
+            const int slot = static_cast<int>(pair.at(0).as_int(-1));
+            const uint32_t component = static_cast<uint32_t>(pair.at(1).as_int(-1));
+            if (slot < 0 || component == 0xFFFFFFFFu) continue;
+            cmd.components.emplace_back(static_cast<uint8_t>(slot), component);
         }
     }
     if (payload.has("battalions")) {
@@ -883,6 +895,75 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
             decisions.push_back(j);
         }
         player.set("decisions", decisions);
+
+        // Designers: the archetypes the player may design from, the unlocked components
+        // per category/slot, and the designs already owned.
+        Json designer = Json::object();
+        Json archetypes = Json::array();
+        for (const EquipmentDef& def : g.content.equipment) {
+            if (!def.is_archetype) continue;
+            if (!design_available(g, viewer, def.id)) continue;
+            Json j = Json::object();
+            j.set("key", Json(def.key));
+            j.set("name", Json(def.name));
+            j.set("category", Json(std::string(equipment_category_name(def.category))));
+            j.set("id", Json(static_cast<uint32_t>(def.id.v)));
+            archetypes.push_back(j);
+        }
+        designer.set("archetypes", archetypes);
+        Json component_list = Json::array();
+        for (uint32_t i = 0; i < g.content.components.size(); ++i) {
+            const ComponentDef* def = g.content.component(i);
+            if (!def) continue;
+            Json j = Json::object();
+            j.set("id", Json(i));
+            j.set("key", Json(def->key));
+            j.set("name", Json(def->name));
+            j.set("slot", Json(std::string(component_slot_name(def->slot))));
+            // The client greys out what cannot be fitted yet: the command layer would
+            // reject it anyway, and a player should not have to guess why.
+            j.set("unlocked", Json(component_unlocked(g, viewer, i)));
+            j.set("category", Json(std::string(equipment_category_name(def->category))));
+            j.set("year", Json(def->year));
+            j.set("cost_add", Json(def->build_cost_add));
+            j.set("cost_mult", Json(def->cost_multiplier));
+            j.set("soft", Json(def->soft_attack));
+            j.set("hard", Json(def->hard_attack));
+            j.set("armor", Json(def->armor));
+            j.set("piercing", Json(def->piercing));
+            j.set("speed", Json(def->speed));
+            j.set("air_attack", Json(def->air_attack));
+            j.set("ground_attack", Json(def->ground_attack));
+            j.set("agility", Json(def->agility));
+            j.set("naval_attack", Json(def->naval_attack));
+            j.set("torpedo_attack", Json(def->torpedo_attack));
+            component_list.push_back(j);
+        }
+        designer.set("components", component_list);
+        Json owned = Json::array();
+        for (uint32_t idx : c->designs) {
+            const EquipmentDesign* d = g.content.design(idx);
+            if (!d) continue;
+            const EquipmentDef* produced = g.content.equipment_def(d->produced);
+            Json j = Json::object();
+            j.set("key", Json(d->key));
+            j.set("name", Json(d->name));
+            j.set("year", Json(d->year));
+            if (produced) {
+                j.set("category", Json(std::string(equipment_category_name(produced->category))));
+                j.set("cost", Json(produced->build_cost));
+                j.set("soft", Json(produced->soft_attack));
+                j.set("hard", Json(produced->hard_attack));
+                j.set("defense", Json(produced->defense));
+                j.set("armor", Json(produced->armor));
+                j.set("piercing", Json(produced->piercing));
+                j.set("speed", Json(produced->speed));
+                j.set("reliability", Json(produced->reliability));
+            }
+            owned.push_back(j);
+        }
+        designer.set("designs", owned);
+        player.set("designer", designer);
 
         Json balances = Json::array();
         for (int r = 0; r < RESOURCE_COUNT; ++r) {

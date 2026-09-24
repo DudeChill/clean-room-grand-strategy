@@ -674,6 +674,7 @@ function productionPanel() {
       `<td><button data-remove="${l.equipment}">×</button></td></tr>`;
   }
   html += '</table>';
+  html += designerSection();
   const stock = Object.entries(p.stockpile || {})
     .map(([k, v]) => `${k}: ${Math.round(v)}`).join(' · ');
   html += `<div class="section small" style="margin-top:8px">stockpile — ${stock || 'empty'}</div>`;
@@ -684,11 +685,75 @@ function productionPanel() {
     const factories = Number(el.querySelector('#line-factories').value);
     if (await sendCommand({ type: 'set_production_line', equipment, factories })) refresh();
   });
+  const archetypeSel = el.querySelector('#design-archetype');
+  if (archetypeSel) {
+    const renderSlots = () => {
+      const cat = archetypeSel.selectedOptions[0].dataset.category;
+      const comps = (App.snap.player.designer.components || []).filter((c2) => c2.category === cat);
+      const slots = [...new Set(comps.map((c2) => c2.slot))];
+      el.querySelector('#design-slots').innerHTML = slots.map((slot) =>
+        `<div class="row-actions" style="margin:2px 0"><span class="dim" style="width:70px">${slot}</span>` +
+        `<select data-slot="${slot}"><option value="">— none —</option>` +
+        comps.filter((c2) => c2.slot === slot).map((c2) =>
+          `<option value="${c2.id}"${c2.unlocked === false ? ' disabled' : ''}>${c2.name}` +
+          ` (${c2.year}, +${c2.cost_add.toFixed(1)}×${c2.cost_mult.toFixed(2)})` +
+          `${c2.unlocked === false ? ' — locked' : ''}</option>`).join('') +
+        '</select></div>').join('');
+    };
+    archetypeSel.addEventListener('change', renderSlots);
+    renderSlots();
+    el.querySelector('#create-design').addEventListener('click', async () => {
+      const equipment = Number(archetypeSel.value);
+      const text = el.querySelector('#design-name').value || 'Variant';
+      const components = [];
+      let slotIndex = 0;
+      const slotNames = ['armor', 'weapon', 'engine', 'airframe', 'hull', 'special'];
+      for (const sel of el.querySelectorAll('#design-slots select[data-slot]')) {
+        if (sel.value !== '') {
+          components.push([slotNames.indexOf(sel.dataset.slot), Number(sel.value)]);
+        }
+        ++slotIndex;
+      }
+      if (await sendCommand({ type: 'create_equipment_design', equipment, text, components })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-produce]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'set_production_line', equipment: b.dataset.produce, factories: 3 })) refresh();
+    });
+  }
   for (const b of el.querySelectorAll('button[data-remove]')) {
     b.addEventListener('click', async () => {
       if (await sendCommand({ type: 'remove_production_line', equipment: b.dataset.remove })) refresh();
     });
   }
+}
+
+function designerSection() {
+  const p = App.snap.player;
+  const designer = p.designer || { archetypes: [], components: [], designs: [] };
+  if (designer.archetypes.length === 0) return '';
+  let html = '<h3>Equipment designer</h3>';
+  html += '<div class="section"><div class="row-actions">' +
+    `<select id="design-archetype">${designer.archetypes.map((a) =>
+      `<option value="${a.id}" data-category="${a.category}">${a.name} (${a.category})</option>`).join('')}</select>` +
+    '<input id="design-name" placeholder="design name" style="width:120px" />' +
+    '<button id="create-design">Create design</button></div>' +
+    '<div id="design-slots" class="small"></div></div>';
+
+  html += '<table><tr><th>Design</th><th>Category</th><th class="num">Cost</th>' +
+    '<th class="num">Soft/Hard</th><th class="num">Armor/Pierce</th><th class="num">Speed</th><th></th></tr>';
+  if (designer.designs.length === 0) html += '<tr><td colspan="7" class="dim">no designs yet</td></tr>';
+  for (const d of designer.designs) {
+    html += `<tr><td>${d.name}<br><span class="dim">${d.key}</span></td><td>${d.category || ''}</td>` +
+      `<td class="num">${(d.cost || 0).toFixed(2)}</td>` +
+      `<td class="num">${(d.soft || 0).toFixed(0)}/${(d.hard || 0).toFixed(0)}</td>` +
+      `<td class="num">${(d.armor || 0).toFixed(0)}/${(d.piercing || 0).toFixed(0)}</td>` +
+      `<td class="num">${(d.speed || 0).toFixed(1)}</td>` +
+      `<td><button data-produce="${d.key}">Produce</button></td></tr>`;
+  }
+  html += '</table>';
+  return html;
 }
 
 function constructionPanel() {

@@ -257,17 +257,13 @@ assert sum(len(v) for v in member_states.values()) == total_states
 # ------------------------------------------------------------------- industry --
 
 LINE_PRIORITY = {
-    "VEL": [("infantry_equipment_1", 0.42), ("support_equipment_1", 0.12),
-            ("artillery_1", 0.12), ("motorized_1", 0.14), ("armor_1", 0.20)],
-    "KOR": [("infantry_equipment_1", 0.52), ("support_equipment_1", 0.12),
-            ("artillery_1", 0.14), ("motorized_1", 0.22)],
-    "THA": [("infantry_equipment_1", 0.60), ("support_equipment_1", 0.20),
-            ("artillery_1", 0.20)],
-    "SUD": [("infantry_equipment_1", 0.60), ("support_equipment_1", 0.20),
-            ("artillery_1", 0.20)],
+    "VEL": [("infantry_equipment_1", 0.30), ("support_equipment_1", 0.12),
+            ("artillery_1", 0.20), ("motorized_1", 0.16), ("armor_1", 0.22)],
+    "KOR": [("infantry_equipment_1", 0.40), ("support_equipment_1", 0.10),
+            ("destroyer_1", 0.30), ("convoy_1", 0.20)],
 }
-DEFAULT_LINES = [("infantry_equipment_1", 0.50), ("support_equipment_1", 0.18),
-                 ("artillery_1", 0.16), ("motorized_1", 0.16)]
+DEFAULT_LINES = [("infantry_equipment_1", 0.30), ("support_equipment_1", 0.10),
+                 ("artillery_1", 0.25), ("motorized_1", 0.15), ("armor_1", 0.20)]
 
 # Ship and convoy lines draw on dockyards, land equipment on military factories
 # (the engine's factory-pool rule), so they are budgeted separately.
@@ -285,11 +281,13 @@ TECHS = {
             "convoy_design", "destroyer_hull", "cruiser_hull", "capital_ship_hull",
             "aircraft_design", "construction_engineering",
             "fighter_airframe", "cas_airframe"],
-    "THA": ["infantry_weapons", "field_artillery", "production_lines"],
-    "SUD": ["infantry_weapons", "support_weapons", "field_artillery", "production_lines"],
+    "THA": ["infantry_weapons", "support_weapons", "field_artillery", "motorization",
+            "production_lines"],
+    "SUD": ["infantry_weapons", "support_weapons", "field_artillery", "motorization",
+            "production_lines"],
 }
-DEFAULT_TECHS = ["infantry_weapons", "support_weapons", "field_artillery",
-                 "construction_engineering", "production_lines"]
+DEFAULT_TECHS = ["infantry_weapons", "support_weapons", "field_artillery", "motorization",
+                 "light_armor", "production_lines"]
 
 # Starting navies for the two largest powers. The ships are built at scenario load
 # through form_task_force (the same helper CreateTaskForce uses) from the stockpile
@@ -330,17 +328,21 @@ LAW = {"VEL": ("conscription_limited", "economy_civilian", 0.62, 0.35),
 # playable from day one: a factory costs ~10800 capacity-days, so a power with
 # ~38 civilian factories finishes one in well under three months even after the
 # consumer-goods share.
+# Civilian factories stay in the agreed bands (VEL 30-40, KOR ~60% of it, mid 8-16,
+# small 3-6). Military factories scale with owned states, because a power's resource
+# demand has to be commensurate with the territory that feeds it - otherwise the
+# small powers can never face scarcity and the big ones always do.
 FACTORIES = {
-    "VEL": (38, 15, 5),
-    "KOR": (23, 9, 4),
-    "AVA": (14, 6, 2),
-    "CAL": (13, 6, 2),
-    "MER": (12, 5, 1),
-    "OST": (11, 5, 1),
-    "NOR": (10, 4, 2),
-    "TIR": (9, 4, 1),
-    "THA": (6, 3, 0),
-    "SUD": (5, 2, 0),
+    "VEL": (38, 18, 5),
+    "KOR": (23, 11, 4),
+    "CAL": (13, 11, 2),
+    "MER": (12, 10, 1),
+    "AVA": (14, 9, 2),
+    "OST": (11, 8, 1),
+    "THA": (6, 8, 0),
+    "SUD": (5, 7, 0),
+    "NOR": (10, 7, 2),
+    "TIR": (9, 6, 1),
 }
 
 

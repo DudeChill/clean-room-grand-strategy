@@ -18,6 +18,7 @@
 #include "core/types.h"
 #include "game/game.h"
 #include "game/server.h"
+#include "sim/design.h"
 #include "save/save.h"
 #include "sim/industry.h"
 #include "sim/research.h"
@@ -200,6 +201,10 @@ void print_metrics(const Game& g) {
                 m.average_tick_ms(), m.ms_commands, m.ms_diplomacy, m.ms_movement, m.ms_combat,
                 m.ms_territory, m.ms_supply, m.ms_air, m.ms_naval, m.ms_industry, m.ms_research, m.ms_training,
                 m.ms_politics, m.ms_weather, m.ms_ai, m.ms_cleanup);
+    std::printf("   ai detail: industry %.1f trade %.1f design %.1f production %.1f military %.1f "
+                "politics %.1f research %.1f diplomacy %.1f\n",
+                m.ms_ai_industry, m.ms_ai_trade, m.ms_ai_design, m.ms_ai_production,
+                m.ms_ai_military, m.ms_ai_politics, m.ms_ai_research, m.ms_ai_diplomacy);
     std::printf("tick p50 %.3f ms, p95 %.3f ms, p99 %.3f ms over %zu samples\n",
                 m.percentile_tick_ms(0.50), m.percentile_tick_ms(0.95), m.percentile_tick_ms(0.99),
                 m.tick_history.size());
@@ -349,6 +354,23 @@ void inspect_country(const Game& g, const std::string& tag) {
         if (c.equipment_stockpile[i] <= 0.0) continue;
         const EquipmentDef* def = g.content.equipment_def(EquipmentId(static_cast<uint32_t>(i)));
         if (def) std::printf("    %-24s %.1f\n", def->key.c_str(), c.equipment_stockpile[i]);
+    }
+    std::printf("  designs:\n");
+    for (uint32_t idx : c.designs) {
+        const EquipmentDesign* d = g.content.design(idx);
+        if (!d) continue;
+        const EquipmentDef* produced = g.content.equipment_def(d->produced);
+        const EquipmentDef* base = g.content.equipment_def(d->archetype);
+        if (!produced) continue;
+        double cost_delta = 0.0;
+        if (base && base->build_cost > 0.0) {
+            cost_delta = (produced->build_cost / base->build_cost - 1.0) * 100.0;
+        }
+        std::printf("    %-20s %-10s year %d  cost %.2f (%+.0f%% vs %s)  soft %.0f hard %.0f "
+                    "armor %.0f pierce %.0f speed %.1f  slots %zu\n",
+                    d->name.c_str(), d->key.c_str(), d->year, produced->build_cost, cost_delta,
+                    base ? base->key.c_str() : "?", produced->soft_attack, produced->hard_attack,
+                    produced->armor, produced->piercing, produced->speed, d->components.size());
     }
 }
 

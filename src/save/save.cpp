@@ -22,9 +22,13 @@
 //              (Country::wings), the fleet roster (Country::fleets) and the
 //              character store
 //   Economy    the content snapshot - equipment, division templates, technologies,
-//              laws, buildings, focuses, events, decisions, national spirits,
-//              political advisors and SimConstants, i.e. every table the simulation
-//              reads - plus per country: production
+//              laws, buildings, focuses, events, decisions, equipment components
+//              (Content::components, the parts a country may fit), equipment designs
+//              (Content::designs, the variants countries have created - a design's
+//              computed statistics live in the EquipmentDef it produced, which sits
+//              in the same equipment table, so `produced` resolves after a load),
+//              national spirits, political advisors and SimConstants, i.e. every table
+//              the simulation reads - plus per country: production
 //              lines, construction queue, research state and the template roster
 //              (Country::templates), and the world-level World::trade_routes
 //              (resources move, industry consumes them, and the routes tie up
@@ -34,8 +38,8 @@
 //              and research consume, and it travels with the save so a
 //              default-constructed Game can continue from a file without help from
 //              data/; each script block (FocusDef/EventDef/DecisionDef/SpiritDef/
-//              AdvisorDef Json fields) travels structurally and the derived
-//              key -> id maps are rebuilt on load instead of being stored twice
+//              AdvisorDef/ComponentDef Json fields) travels structurally and the
+//              derived key -> id maps are rebuilt on load instead of being stored twice
 //   Military   per country: division/army rosters and the training list; then the
 //              army store, the division store, the air wing store, and the naval
 //              area: the ship store, the task force store, the fleet store and the
@@ -53,11 +57,13 @@
 //              focus_progress, pending_events, fired_events, active_decisions,
 //              decision_days_left, decision_cooldown, country_flags,
 //              timed_modifiers, national_spirits, spirit_keys, advisors,
-//              spirit_slots, advisor_slots); then the world-level script variables
-//              (World::script_vars, an ordered map) and the scheduled events
+//              spirit_slots, advisor_slots, designs); then the world-level script
+//              variables (World::script_vars, an ordered map) and the scheduled events
 //              (World::delayed_events). Politics owns them because focuses, events,
 //              decisions, spirits and advisors are the political layer and these
-//              are the fields they mutate
+//              are the fields they mutate; Country::designs sits with spirit_keys
+//              and advisors because it is the same kind of roster - the country's
+//              indices into a content table (Content::designs, in Economy)
 //   Ai         the six AI layer states (last run tick, interval, reasons), the
 //              strategic posture vector, the decision/command counters, the
 //              per-country AI control bitmap and the player country
@@ -872,6 +878,112 @@ bool read_advisor(ByteReader& r, AdvisorDef* a) {
     return read_modifiers(r, &a->modifiers);
 }
 
+// Equipment designers. The component table is the set of parts a country may fit and
+// the design table is the variants it has created; both are content the simulation
+// reads (availability gates, statistics and production), so they travel with the save
+// like every other table. A design's computed statistics live in the EquipmentDef it
+// produced, already serialized in the equipment table, so `produced` resolves to the
+// same model after a load. ComponentDef carries a JSON availability trigger like a
+// spirit, which travels structurally. Derived key -> index maps are rebuilt on load.
+void write_component(ByteWriter& w, const ComponentDef& c) {
+    w.u32(c.index);
+    w.str(c.key);
+    w.str(c.name);
+    write_enum(w, c.slot);
+    write_enum(w, c.category);
+    w.i32(c.year);
+    w.f64(c.soft_attack);
+    w.f64(c.hard_attack);
+    w.f64(c.air_attack);
+    w.f64(c.air_defence);
+    w.f64(c.ground_attack);
+    w.f64(c.agility);
+    w.f64(c.armor);
+    w.f64(c.piercing);
+    w.f64(c.defense);
+    w.f64(c.breakthrough);
+    w.f64(c.hardness);
+    w.f64(c.max_strength);
+    w.f64(c.organization);
+    w.f64(c.speed);
+    w.f64(c.reliability);
+    w.f64(c.range);
+    w.f64(c.detection);
+    w.f64(c.sub_detection);
+    w.f64(c.naval_attack);
+    w.f64(c.torpedo_attack);
+    w.f64(c.visibility);
+    w.f64(c.build_cost_add);
+    w.f64(c.cost_multiplier);
+    write_resources(w, c.resources);
+    w.f64(c.fuel_use);
+    w.f64(c.supply_use);
+    w.f64(c.manpower);
+    write_json(w, c.available);
+}
+
+bool read_component(ByteReader& r, ComponentDef* c) {
+    if (!r.u32(&c->index)) return false;
+    if (!r.str(&c->key) || !r.str(&c->name)) return false;
+    if (!read_enum(r, &c->slot, static_cast<int>(ComponentSlot::Count))) return false;
+    if (!read_enum(r, &c->category, static_cast<int>(EquipmentCategory::Count))) return false;
+    if (!r.i32(&c->year)) return false;
+    if (!r.f64(&c->soft_attack) || !r.f64(&c->hard_attack) || !r.f64(&c->air_attack)) return false;
+    if (!r.f64(&c->air_defence) || !r.f64(&c->ground_attack) || !r.f64(&c->agility)) return false;
+    if (!r.f64(&c->armor) || !r.f64(&c->piercing)) return false;
+    if (!r.f64(&c->defense) || !r.f64(&c->breakthrough)) return false;
+    if (!r.f64(&c->hardness)) return false;
+    if (!r.f64(&c->max_strength) || !r.f64(&c->organization) || !r.f64(&c->speed)) return false;
+    if (!r.f64(&c->reliability) || !r.f64(&c->range)) return false;
+    if (!r.f64(&c->detection) || !r.f64(&c->sub_detection)) return false;
+    if (!r.f64(&c->naval_attack) || !r.f64(&c->torpedo_attack) || !r.f64(&c->visibility)) return false;
+    if (!r.f64(&c->build_cost_add) || !r.f64(&c->cost_multiplier)) return false;
+    if (!read_resources(r, c->resources)) return false;
+    if (!r.f64(&c->fuel_use) || !r.f64(&c->supply_use) || !r.f64(&c->manpower)) return false;
+    return read_json(r, &c->available);
+}
+
+void write_design(ByteWriter& w, const EquipmentDesign& d) {
+    w.u32(d.index);
+    w.str(d.key);
+    w.str(d.name);
+    write_id(w, d.country);
+    write_id(w, d.archetype);
+    w.i32(d.year);
+    w.u32(static_cast<uint32_t>(d.components.size()));
+    for (const std::pair<ComponentSlot, uint32_t>& part : d.components) {
+        write_enum(w, part.first);
+        w.u32(part.second);
+    }
+    write_id(w, d.produced);
+}
+
+bool read_design(ByteReader& r, EquipmentDesign* d) {
+    if (!r.u32(&d->index)) return false;
+    if (!r.str(&d->key) || !r.str(&d->name)) return false;
+    uint32_t country = INVALID_ID;
+    uint32_t archetype = INVALID_ID;
+    if (!r.u32(&country) || !r.u32(&archetype)) return false;
+    d->country = CountryId(country);
+    d->archetype = EquipmentId(archetype);
+    if (!r.i32(&d->year)) return false;
+    uint32_t n = 0;
+    if (!read_count(r, 5, &n)) return false;  // slot byte + component index
+    d->components.clear();
+    d->components.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        ComponentSlot slot = ComponentSlot::Special;
+        uint32_t component = 0;
+        if (!read_enum(r, &slot, static_cast<int>(ComponentSlot::Count))) return false;
+        if (!r.u32(&component)) return false;
+        d->components.emplace_back(slot, component);
+    }
+    uint32_t produced = INVALID_ID;
+    if (!r.u32(&produced)) return false;
+    d->produced = EquipmentId(produced);
+    return true;
+}
+
 // SimConstants in declaration order; every balance number the simulation reads is
 // part of the state, so a data change cannot slip past a hash comparison.
 void write_constants(ByteWriter& w, const SimConstants& k) {
@@ -1067,6 +1179,10 @@ void write_content(ByteWriter& w, const Content& c) {
     for (const EventDef& e : c.events) write_event(w, e);
     w.u32(static_cast<uint32_t>(c.decisions.size()));
     for (const DecisionDef& d : c.decisions) write_decision(w, d);
+    w.u32(static_cast<uint32_t>(c.components.size()));
+    for (const ComponentDef& comp : c.components) write_component(w, comp);
+    w.u32(static_cast<uint32_t>(c.designs.size()));
+    for (const EquipmentDesign& d : c.designs) write_design(w, d);
     w.u32(static_cast<uint32_t>(c.spirits.size()));
     for (const SpiritDef& s : c.spirits) write_spirit(w, s);
     w.u32(static_cast<uint32_t>(c.advisors.size()));
@@ -1092,6 +1208,18 @@ void rebuild_content_index(Content& c) {
     c.decision_index.clear();
     for (size_t i = 0; i < c.decisions.size(); ++i) {
         c.decision_index[c.decisions[i].key] = static_cast<uint32_t>(i);
+    }
+    c.design_of_equipment.clear();
+    for (size_t i = 0; i < c.designs.size(); ++i) {
+        c.design_of_equipment[c.designs[i].produced.v] = static_cast<uint32_t>(i);
+    }
+    c.component_index.clear();
+    for (size_t i = 0; i < c.components.size(); ++i) {
+        c.component_index[c.components[i].key] = static_cast<uint32_t>(i);
+    }
+    c.design_index.clear();
+    for (size_t i = 0; i < c.designs.size(); ++i) {
+        c.design_index[c.designs[i].key] = static_cast<uint32_t>(i);
     }
     c.spirit_index.clear();
     for (size_t i = 0; i < c.spirits.size(); ++i) c.spirit_index[c.spirits[i].key] = static_cast<uint32_t>(i);
@@ -1149,6 +1277,27 @@ bool read_content(ByteReader& r, Content* c) {
     c->decisions.resize(n);
     for (uint32_t i = 0; i < n; ++i) {
         if (!read_decision(r, &c->decisions[i])) return false;
+    }
+    if (!read_count(r, 266, &n)) return false;  // index + 2 strings + enums + 32 doubles + json
+    c->components.clear();
+    c->components.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_component(r, &c->components[i])) return false;
+    }
+    if (!read_count(r, 32, &n)) return false;  // index + 2 strings + 4 ids + int + part count
+    c->designs.clear();
+    c->designs.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_design(r, &c->designs[i])) return false;
+    }
+    // A design's archetype, fitted components and produced model must all resolve:
+    // design_create guarantees it, so a save where they do not is malformed.
+    for (const EquipmentDesign& d : c->designs) {
+        if (!d.archetype.valid() || d.archetype.v >= c->equipment.size()) return false;
+        if (!d.produced.valid() || d.produced.v >= c->equipment.size()) return false;
+        for (const std::pair<ComponentSlot, uint32_t>& part : d.components) {
+            if (part.second >= c->components.size()) return false;
+        }
     }
     if (!read_count(r, 40, &n)) return false;
     c->spirits.clear();
@@ -2010,6 +2159,9 @@ void write_country_politics(ByteWriter& w, const Country& c) {
     for (const TimedModifier& m : c.national_spirits) write_timed_modifier(w, m);
     write_u32s(w, c.spirit_keys);
     write_u32s(w, c.advisors);
+    // The country's equipment designs, indices into Content::designs (Economy); the
+    // same kind of roster as spirit_keys and advisors.
+    write_u32s(w, c.designs);
     w.i32(c.spirit_slots);
     w.i32(c.advisor_slots);
 }
@@ -2044,6 +2196,7 @@ bool read_country_politics(ByteReader& r, Country* c) {
     }
     if (!read_u32s(r, &c->spirit_keys)) return false;
     if (!read_u32s(r, &c->advisors)) return false;
+    if (!read_u32s(r, &c->designs)) return false;
     if (!r.i32(&c->spirit_slots) || !r.i32(&c->advisor_slots)) return false;
     return true;
 }

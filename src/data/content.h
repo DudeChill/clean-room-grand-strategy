@@ -289,6 +289,15 @@ struct Content {
     std::map<std::string, uint32_t> event_index;
     std::vector<DecisionDef> decisions;
     std::map<std::string, uint32_t> decision_index;
+    std::vector<ComponentDef> components;
+    std::map<std::string, uint32_t> component_index;
+    std::vector<EquipmentDesign> designs;  // created at runtime by countries
+    std::map<std::string, uint32_t> design_index;
+    // Reverse link, derived: the equipment a design produces -> that design's index.
+    // Built by rebuild_content_index on load and maintained by design_create, so
+    // `equipment_unlocked` can answer "is this another country's design?" without
+    // scanning the design table in hot paths.
+    std::map<uint32_t, uint32_t> design_of_equipment;
     std::vector<SpiritDef> spirits;
     std::map<std::string, uint32_t> spirit_index;
     std::vector<AdvisorDef> advisors;
@@ -334,6 +343,20 @@ struct Content {
     [[nodiscard]] uint32_t event_id(const std::string& key) const {
         auto it = event_index.find(key);
         return it == event_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    [[nodiscard]] const ComponentDef* component(uint32_t index) const {
+        return index < components.size() ? &components[index] : nullptr;
+    }
+    [[nodiscard]] uint32_t component_id(const std::string& key) const {
+        auto it = component_index.find(key);
+        return it == component_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    [[nodiscard]] const EquipmentDesign* design(uint32_t index) const {
+        return index < designs.size() ? &designs[index] : nullptr;
+    }
+    [[nodiscard]] uint32_t design_id(const std::string& key) const {
+        auto it = design_index.find(key);
+        return it == design_index.end() ? 0xFFFFFFFFu : it->second;
     }
     [[nodiscard]] const SpiritDef* spirit(uint32_t index) const {
         return index < spirits.size() ? &spirits[index] : nullptr;

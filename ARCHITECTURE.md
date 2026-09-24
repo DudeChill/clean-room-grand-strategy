@@ -237,6 +237,41 @@ draws convoys from the owner's stockpile while it operates. Convoy raiding there
 starves an overseas theatre through the ordinary supply graph rather than through a
 special case.
 
+### 5.11 Equipment designs
+
+A design is an equipment archetype plus a fitted component set. The rule is a pure
+function of data:
+
+```
+design(base, components) = for each fitted component, ascending slot order:
+                             stat += component.stat            (every additive field)
+                             resources[r] += component.resources[r]
+                             cost_add += component.build_cost_add
+                             cost_mult *= component.cost_multiplier
+                           build_cost = (base.build_cost + cost_add) * cost_mult
+                           reliability = clamp(base.reliability + ΣΔ, 0.1, 1.0)
+                           every other statistic = max(0, value)   (NaN/Inf rejected)
+```
+
+Rules that keep it honest:
+
+* The result is registered as a real `EquipmentDef` (`is_archetype = false`) in
+  `Content::equipment` — production lines, stockpiles, division equipment, combat
+  and the client read it exactly like an authored model. A design is never a
+  modifier applied to the archetype.
+* `design_compute` is pure; `design_create` validates first and commits atomically
+  (no partial state on failure), so an invalid command cannot corrupt content.
+* Keys are deterministic: `"<tag>_<category>_<n>"` with the smallest unused `n`.
+* Availability is checked per component: scenario year, the component's optional
+  `available` trigger, and any technology naming the component key in
+  `unlock_equipment`. Stats never gate; only availability does.
+* The AI buys capability for money: it accepts a fitted variant when capability gain
+  over the best model it can currently build clears `kDesignMinGainRatio` and the
+  cost increase stays inside its affordable margin — the reasoning a player uses.
+* Rounding: the same IEEE-754 double rules as every other formula in section 5, and
+  results are sanitised (`finite_or`, clamps) so a hostile component set cannot
+  produce NaN or negative statistics.
+
 ## 6. Data formats
 
 ```

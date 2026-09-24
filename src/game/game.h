@@ -43,6 +43,14 @@ struct SimMetrics {
     double ms_spirits = 0.0;
     double ms_weather = 0.0;
     double ms_ai = 0.0;
+    double ms_ai_design = 0.0;   // the equipment-design layer inside the AI phase
+    double ms_ai_industry = 0.0;
+    double ms_ai_trade = 0.0;
+    double ms_ai_production = 0.0;
+    double ms_ai_military = 0.0;
+    double ms_ai_politics = 0.0;
+    double ms_ai_research = 0.0;
+    double ms_ai_diplomacy = 0.0;
     double ms_cleanup = 0.0;
     double ms_tick_total = 0.0;
     std::vector<double> tick_history;  // capped ring of recent tick durations

@@ -25,7 +25,12 @@ inline constexpr uint32_t SAVE_MAGIC = 0x34494F48;  // "HOI4" little-endian
 //    content tables. Layout changed, so version 4 files are rejected.
 // 6: Economy gained the world-level trade routes (World::trade_routes) after the
 //    per-country economy blocks; layout changed, so version 5 files are rejected.
-inline constexpr uint32_t SAVE_VERSION = 6;
+// 7: Economy gained the equipment designer content tables (Content::components and
+//    Content::designs); Politics gained each country's design roster
+//    (Country::designs). Layout changed, so version 6 files are rejected.
+// 8: ComponentDef gained its defense and breakthrough deltas, widening every
+//    serialized component record. Layout changed, so version 7 files are rejected.
+inline constexpr uint32_t SAVE_VERSION = 8;
 
 enum class Subsystem : uint8_t {
     Map = 0,

@@ -53,6 +53,7 @@ enum class CommandType : uint8_t {
     CancelFocus,
     ChooseEventOption,  // text = event key, value = option index
     TakeDecision,       // text = decision key, state = target state when required
+    CreateEquipmentDesign,  // text = design name, equipment = base archetype, components
     StartTrade,         // target_country + value = resource index, value_f = amount/day
     CancelTrade,        // target_country + value = resource index
     AppointAdvisor,     // text = advisor key
@@ -98,6 +99,8 @@ struct Command {
     std::string text;        // template name / army name
     std::vector<BattalionSlot> battalions;  // CreateTemplate / EditTemplate
     std::vector<DivisionId> divisions;      // bulk assignment
+    // Designer choices: slot + component index (CreateEquipmentDesign).
+    std::vector<std::pair<uint8_t, uint32_t>> components;
 };
 
 // Why a command was rejected. Rejections never mutate state.

@@ -874,10 +874,9 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
                 for (size_t k = 0; k < unlocks_eq.size(); ++k) {
                     const std::string ek = unlocks_eq[k].as_string();
                     if (ek.empty()) continue;
-                    if (out->equipment_by_key.count(ek) == 0) {
-                        errors.push_back(f_technologies + ":" + key +
-                                         ": unlock_equipment references unknown equipment " + ek);
-                    }
+                    // The key is checked against the equipment and component tables in
+                    // the cross-reference pass: components load after technologies so a
+                    // technology may gate one of them.
                     def.unlock_equipment.push_back(ek);
                 }
             }
@@ -1329,6 +1328,144 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         }
     }
 
+    // ---- designer components --------------------------------------------
+    // Optional file: a data set with no designers ships none. A file that exists
+    // but does not parse is a hard error, exactly like the focus trees. Components
+    // load before technologies because a technology may gate a component by naming
+    // its key in `unlock_equipment` (alongside equipment keys).
+    //
+    // A component's stat fields are additive deltas on the archetype it is fitted
+    // into; `cost_multiplier` scales the archetype's build cost; `resources` are
+    // added per unit; `reliability` is a delta the designer maths clamps into
+    // [0.1, 1.0]. Only a negative *cost* is a data error (it would let a design
+    // undercut its own archetype for free); negative stat deltas are legitimate
+    // (a heavy gun slows the design, a heavy airframe trades agility for armour).
+    const std::string f_components = root + "/common/components.json";
+    if (std::filesystem::exists(f_components)) {
+        Json fd;
+        if (!load_json_file(f_components, &fd, &file_err)) {
+            errors.push_back(file_err);
+            if (err) *err = file_err;
+            return false;
+        }
+        const Json& arr = fd["components"];
+        if (!arr.is_array()) {
+            const std::string msg = f_components + ":components: expected an array";
+            errors.push_back(msg);
+            if (err) *err = msg;
+            return false;
+        }
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const Json& cj = arr[i];
+            const std::string key = cj["key"].as_string();
+            if (key.empty()) {
+                errors.push_back(f_components + ":<entry " + std::to_string(i) +
+                                 ">: missing key");
+                continue;
+            }
+            if (out->component_index.count(key) != 0) {
+                errors.push_back(f_components + ":" + key + ": duplicate component key");
+                continue;
+            }
+            const std::string slot_name = cj["slot"].as_string();
+            ComponentSlot slot = ComponentSlot::Special;
+            if (slot_name.empty() || !component_slot_from_name(slot_name, &slot)) {
+                errors.push_back(f_components + ":" + key + ": unknown slot " +
+                                 (slot_name.empty() ? std::string("(missing)") : slot_name));
+                continue;
+            }
+            const std::string category_name = cj["category"].as_string();
+            const int cat = match_equipment_category(category_name);
+            if (cat < 0) {
+                errors.push_back(f_components + ":" + key + ": unknown category " +
+                                 (category_name.empty() ? std::string("(missing)")
+                                                        : category_name));
+                continue;
+            }
+            ComponentDef def;
+            def.index = static_cast<uint32_t>(out->components.size());
+            def.key = key;
+            def.name = cj["name"].as_string(key);
+            def.slot = slot;
+            def.category = static_cast<EquipmentCategory>(cat);
+            def.year = static_cast<int>(cj["year"].as_int(def.year));
+            def.soft_attack = cj["soft_attack"].as_double(def.soft_attack);
+            def.hard_attack = cj["hard_attack"].as_double(def.hard_attack);
+            def.air_attack = cj["air_attack"].as_double(def.air_attack);
+            def.air_defence = cj["air_defence"].as_double(def.air_defence);
+            def.ground_attack = cj["ground_attack"].as_double(def.ground_attack);
+            def.agility = cj["agility"].as_double(def.agility);
+            def.armor = cj["armor"].as_double(def.armor);
+            def.piercing = cj["piercing"].as_double(def.piercing);
+            def.defense = cj["defense"].as_double(def.defense);
+            def.breakthrough = cj["breakthrough"].as_double(def.breakthrough);
+            def.hardness = cj["hardness"].as_double(def.hardness);
+            def.max_strength = cj["max_strength"].as_double(def.max_strength);
+            def.organization = cj["organization"].as_double(def.organization);
+            def.speed = cj["speed"].as_double(def.speed);
+            def.reliability = cj["reliability"].as_double(def.reliability);
+            def.range = cj["range"].as_double(def.range);
+            def.detection = cj["detection"].as_double(def.detection);
+            def.sub_detection = cj["sub_detection"].as_double(def.sub_detection);
+            def.naval_attack = cj["naval_attack"].as_double(def.naval_attack);
+            def.torpedo_attack = cj["torpedo_attack"].as_double(def.torpedo_attack);
+            def.visibility = cj["visibility"].as_double(def.visibility);
+            def.build_cost_add = cj["build_cost_add"].as_double(def.build_cost_add);
+            def.cost_multiplier = cj["cost_multiplier"].as_double(def.cost_multiplier);
+            def.fuel_use = cj["fuel_use"].as_double(def.fuel_use);
+            def.supply_use = cj["supply_use"].as_double(def.supply_use);
+            def.manpower = cj["manpower"].as_double(def.manpower);
+            parse_resource_costs(cj["resources"], def.resources, &errors, f_components, key);
+            def.available = cj["available"];
+
+            bool invalid_cost = false;
+            if (def.build_cost_add < 0.0) {
+                errors.push_back(f_components + ":" + key + ": negative build_cost_add");
+                invalid_cost = true;
+            }
+            if (def.cost_multiplier <= 0.0) {
+                errors.push_back(f_components + ":" + key +
+                                 ": cost_multiplier must be greater than zero");
+                invalid_cost = true;
+            }
+            if (def.fuel_use < 0.0) {
+                errors.push_back(f_components + ":" + key + ": negative fuel_use");
+                invalid_cost = true;
+            }
+            if (def.supply_use < 0.0) {
+                errors.push_back(f_components + ":" + key + ": negative supply_use");
+                invalid_cost = true;
+            }
+            if (def.manpower < 0.0) {
+                errors.push_back(f_components + ":" + key + ": negative manpower");
+                invalid_cost = true;
+            }
+            for (int r = 0; r < RESOURCE_COUNT; ++r) {
+                if (def.resources[r] < 0.0) {
+                    errors.push_back(f_components + ":" + key + ": negative " +
+                                     resource_name(static_cast<Resource>(r)) + " cost");
+                    invalid_cost = true;
+                }
+            }
+            if (invalid_cost) continue;
+
+            // A malformed `available` trigger is a data error: report it and skip the
+            // entry so invalid content never reaches the designer. Components are
+            // country-scoped, so the trigger takes no state scope.
+            std::vector<std::string> trigger_errors;
+            const std::set<std::string> no_states;
+            validate_trigger(def.available, *out, no_states, &trigger_errors, f_components, key,
+                             "available");
+            if (!trigger_errors.empty()) {
+                errors.insert(errors.end(), trigger_errors.begin(), trigger_errors.end());
+                continue;
+            }
+
+            out->component_index[key] = def.index;
+            out->components.push_back(std::move(def));
+        }
+    }
+
     // ---- cross-reference validation --------------------------------------
     // Runs after every file is registered so a focus may reference an event or a
     // decision declared later, and vice versa.
@@ -1384,6 +1521,17 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         const AdvisorDef& d = out->advisors[i];
         const std::string file = i < advisor_src.size() ? advisor_src[i] : std::string();
         validate_trigger(d.available, *out, no_states, &errors, file, d.key, "available");
+    }
+    // Technologies may gate an equipment model or a designer component by key; both
+    // tables are complete here, so the reference is resolved now.
+    for (const TechDef& t : out->techs) {
+        for (const std::string& ek : t.unlock_equipment) {
+            if (out->equipment_by_key.count(ek) == 0 && out->component_index.count(ek) == 0) {
+                errors.push_back(f_technologies + ":" + t.key +
+                                 ": unlock_equipment references unknown equipment or component " +
+                                 ek);
+            }
+        }
     }
 
     if (err) *err = errors.empty() ? std::string() : errors.front();

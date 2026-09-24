@@ -456,7 +456,7 @@
       "build_cost": 500.00,
       "fuel_use": 0.05,
       "manpower": 150.0,
-      "resources": {"steel": 20}
+      "resources": {"steel": 2}
     },
     {
       "key": "destroyer_2",
@@ -480,7 +480,7 @@
       "build_cost": 600.00,
       "fuel_use": 0.05,
       "manpower": 160.0,
-      "resources": {"steel": 22, "tungsten": 1}
+      "resources": {"steel": 3}
     },
 
     {
@@ -515,7 +515,7 @@
       "build_cost": 1200.00,
       "fuel_use": 0.08,
       "manpower": 400.0,
-      "resources": {"steel": 45, "tungsten": 2}
+      "resources": {"steel": 4, "tungsten": 1}
     },
     {
       "key": "light_cruiser_2",
@@ -539,7 +539,7 @@
       "build_cost": 1500.00,
       "fuel_use": 0.08,
       "manpower": 440.0,
-      "resources": {"steel": 50, "tungsten": 3}
+      "resources": {"steel": 5, "tungsten": 1}
     },
 
     {
@@ -574,7 +574,7 @@
       "build_cost": 2200.00,
       "fuel_use": 0.12,
       "manpower": 700.0,
-      "resources": {"steel": 70, "tungsten": 4}
+      "resources": {"steel": 6, "tungsten": 1}
     },
     {
       "key": "heavy_cruiser_2",
@@ -598,7 +598,7 @@
       "build_cost": 2700.00,
       "fuel_use": 0.12,
       "manpower": 760.0,
-      "resources": {"steel": 80, "tungsten": 6}
+      "resources": {"steel": 7, "tungsten": 2}
     },
 
     {
@@ -633,7 +633,7 @@
       "build_cost": 6000.00,
       "fuel_use": 0.20,
       "manpower": 1600.0,
-      "resources": {"steel": 180, "tungsten": 12, "chromium": 8}
+      "resources": {"steel": 9, "tungsten": 2, "chromium": 1}
     },
 
     {
@@ -669,7 +669,7 @@
       "build_cost": 4500.00,
       "fuel_use": 0.18,
       "manpower": 1200.0,
-      "resources": {"steel": 120, "aluminium": 40}
+      "resources": {"steel": 8, "aluminium": 3}
     },
 
     {
@@ -704,7 +704,7 @@
       "build_cost": 350.00,
       "fuel_use": 0.02,
       "manpower": 40.0,
-      "resources": {"steel": 15}
+      "resources": {"steel": 1}
     },
 
     {
@@ -739,7 +739,7 @@
       "build_cost": 300.00,
       "fuel_use": 0.03,
       "manpower": 80.0,
-      "resources": {"steel": 10}
+      "resources": {"steel": 1}
     },
 
     {

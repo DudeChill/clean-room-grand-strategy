@@ -1,99 +1,72 @@
 # CONTINUE FROM HERE
 
-State of the project at the end of the session that shipped v0.3.0. Read this first
-when resuming; then read `DEVLOG.md` (top entry) and `docs/PARITY_MATRIX.md`.
+State of the project at the end of the session that shipped v0.7.0. Read this first when
+resuming; then `DEVLOG.md` (top entry), `docs/PARITY_MATRIX.md` and
+`docs/DISCREPANCIES.md`.
 
 ## Current build state
 
 * Branch `master`, clean tree, pushed to `origin`
   (`https://github.com/DudeChill/clean-room-grand-strategy`).
-* Releases published: **v0.1.0** (foundation), **v0.2.0** (air), **v0.3.0** (naval),
-  **v0.3.1** (verified AI invasion staging; also the corrected naval artifact — use this
-  for the naval milestone, v0.3.0's tarball was packaged after an in-flight edit).
-* Last verified commands (all green on a clean Release build):
+* Releases published: v0.1.0 (foundation), v0.2.0 (air), v0.3.0/v0.3.1 (naval),
+  v0.4.0 (focus trees and decisions), v0.5.0 (national spirits and advisers),
+  v0.6.0 (trade, convoys, blockade), **v0.7.0 (equipment designers, scarce resources)**.
+* Build directories in use: `build/` (main), plus per-slice dirs (`build-air/`,
+  `build-navy/`, `build-pol/`, `build-spirit/`, `build-trade/`, `build-des/`, ...).
+  Never build two agents into the same directory.
+
+Last verified commands (all green on a clean Release build):
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-build/hoi_tests                 # 170 passed, 0 failed
-scripts/verify.sh               # 8 checks passed, 0 failed
-build/game --days 365 --audit --summary    # world audit: OK, 29 wars, 336 divisions
+build/hoi_tests                            # 239 passed, 0 failed
+scripts/verify.sh                          # release gate
+build/game --days 365 --audit --summary    # world audit: OK, 0 content warnings
+build/game --days 30 --inspect-trade       # 9/10 countries in deficit, 12 routes
+build/game --days 365 --inspect-country VEL  # designs owned and on production lines
 ```
 
-* Performance: 8.0 ms per simulated hour in a full war year; supply ~2.4 ms,
-  AI ~1.9 ms, naval 0.006 ms, air 0.005 ms per tick.
+* Performance (365-day run, 2275 provinces, 10 countries): 6.3 ms per simulated hour
+  average, p50 0.8 ms, p95 19 ms, p99 62 ms. The `--quiet` report now prints an AI
+  breakdown (`ai detail: industry ... military ... design ...`) so a regression can be
+  attributed without guessing.
 
 ## What is implemented and verified
 
-Simulation core (deterministic tick, commands, hashing, saves, replay), map/states/
-regions, industry, construction, production lines, resources, research, equipment,
-manpower, fuel, training, movement, land combat, fronts and battle plans, supply
-network, weather, politics/laws/stability, diplomacy/factions/wars/capitulation/
-peace/occupation, AI (industry, research, production, military, air, naval,
-diplomacy), air warfare (wings, missions, air control, CAS, bombing, anti-air),
-naval warfare (ships, task forces, detection, engagements, missions, invasions) and
-overseas supply with convoys and blockade. Browser client covers all of it.
+Deterministic tick, command queue with validation, hashing/save/replay; map, states,
+regions, province graph; industry, construction, production lines, equipment, resources
+and **scarcity-driven trade with convoys and blockades**; research and technology; manpower,
+fuel, training; movement, land combat, fronts, battle plans, supply network, weather;
+politics, laws, stability, **focus trees, decisions, national spirits, advisers**;
+diplomacy, factions, wars, capitulation, peace, occupation; AI layers (industry, trade,
+design, research, production, military, politics, diplomacy) that act only through the
+command queue and record numeric `AiReason` factors; air warfare; naval warfare and
+invasions; **equipment designers** (components, computed variants, ownership, AI, UI); and a
+browser client that plays the whole game over `/api/state` + `/api/command`.
 
-## Active task at the moment of stopping
+## Open work, in priority order
 
-**Implement focus trees (POL-001 — the last BLOCKER).** Nothing is half-written: the
-tree is clean and every milestone is published, so this starts from a green baseline.
+1. **MIL-021 (MAJOR, blocker for the equipment chain)**: division slots hold one exact
+   `EquipmentId`, so a new model reaches new units only - existing divisions never
+   retrofit, and the AI cannot re-point templates at its own designs. Fix: family/variant
+   sets on `BattalionSlot` (or match on `EquipmentDef::archetype` with a preference order),
+   family-aggregated demand in `compute_equipment_demand`, and an AI template upgrade step.
+   Evidence and the design sketch are in `docs/DISCREPANCIES.md`.
+2. **INT-001 (MAJOR)**: intelligence - agencies, networks, operations, decryption.
+3. **MP-001 (MAJOR)**: multiplayer transport over the existing command/save layer.
+4. **MOD-002/003 (MINOR)**: mod load order, content validator CLI, mod test pack.
+5. Residual from v0.7.0: components exist for five categories only (support, anti-tank,
+   anti-air, motorized, mechanized, convoy have none), and designers have no ship-hull
+   module variety beyond the four slots.
 
-## Next concrete implementation steps
+## Conventions that keep this project honest
 
-1. **Script engine first** (`docs/mechanics/` has no file for it yet; write
-   `docs/mechanics/scripting.md` as the spec before coding):
-   * a small trigger/effect evaluator over `Game`/`World` with scopes
-     (`country`, `state`, `province`, `war`), conditions (owns, at_war, has_tech,
-     pp/stability/war_support comparisons, date/year), and effects
-     (add_political_power, add_stability, set_law, grant_tech, declare_war,
-     add_opinion, create_state_claim, unlock_equipment, add_modifier, complete_focus,
-     trigger_event);
-   * everything data-driven: no per-focus C++.
-2. **Focus trees**: `FocusDef` (key, name, icon slot, x/y, prerequisites,
-   mutual exclusions, days, available/finished/bypass triggers, effects), loaded from
-   `data/common/focuses/*.json`; `Country::focus_progress`, `completed_focuses`,
-   `selected_focus`; commands `SelectFocus` / `CancelFocus`; completion in a politics
-   phase step; AI weighting per focus with scored reasons.
-3. **Events and decisions (POL-002/003)** on the same script engine: event definitions
-   with triggers, options, effects, `trigger_event` chains, decisions with visibility,
-   cost, timers, targeting and AI evaluation.
-4. **Persistence**: focuses, events fired, decisions taken, script variables — extend
-   the save slice and the constants/field drift guard (see the note below).
-5. **Client**: focus tree view (nodes, prerequisites, progress, select), event popups
-   with options, decision list.
-6. **Tests**: golden tests for a focus chain completing and applying effects, an event
-   firing from a decision, a bypass path, and determinism.
-
-## Traps and conventions that cost time this session
-
-* **One writer per build directory.** Concurrent `cmake --build build` from several
-  agents produced reproducible "optimization-sensitive" segfaults that were pure
-  build artifacts. Agents must use their own build dirs; `scripts/verify.sh` owns
-  `build/`.
-* **Every denormalised id must be set where the entity is created.** `Store::create`
-  now auto-assigns a payload's `id` via `if constexpr`; do the same for anything not
-  in a Store (content definitions set their own ids in the loader).
-* **Single owner for every rule.** Efficiency retention, the factory pool rule and
-  the construction cost model each live in exactly one place; duplicating a rule
-  produced real double-application bugs.
-* **Tunable numbers live in data.** `SimConstants` (111 fields) + `constants.json`;
-  the save serializer has a drift guard (`static_assert` and a named table) that must
-  be updated with any new field.
-* **Allowed status vocabulary** in the parity matrix only (spec section 10); no
-  invented statuses, no percentages.
-* **Anticipate mid-edit trees**: when a peer's file does not compile, check
-  `g++ -std=c++20 -Isrc -fsyntax-only <file>` and wait rather than assuming UB.
-* **Never package a release while an agent is mid-edit.** v0.3.0's tarball was cut
-  after an edit landed and before it was tested, which produced an artifact that did not
-  match its tag and shipped untested code. Release steps now: stop all agents, freeze the
-  tree, run `scripts/verify.sh`, then package, and verify the artifact against the tag
-  (`git show <tag>:<file> | sha256sum` versus the file inside the tarball).
-
-## Known gaps (all tracked in docs/DISCREPANCIES.md)
-
-BLOCKER: POL-001 focus trees. MAJOR: events/decisions, national spirits, trade and
-convoys as an economy, equipment designers, intelligence, multiplayer transport.
-MODERATE/MINOR: battle plan execution without micromanagement, combat tactics,
-strategic redeployment, motorisation effect, rail damage, air detection model, air
-fuel/pilots, reconnaissance, raider zone coverage, convoy depletion granularity,
-mod load order and validator, tooling and UI polish.
+* Every claim needs a measurement: run the game, not just the tests. The three defects
+  found in the designer slice (dropped `defense`/`breakthrough`, cross-country design
+  theft, unparsed HTTP `components`) were all found by measuring, none by reading.
+* Statuses are the fixed vocabulary from the brief (`NOT_IMPLEMENTED` ... `VALIDATED`).
+  `VALIDATED` requires an evidence packet; nothing in this repo claims it without one.
+* Balance numbers live in `data/common/*.json` or in named `constexpr` constants with a
+  comment; never as literals in the middle of a formula.
+* Determinism: ascending-id iteration, seeded streams per subsystem, no wall-clock or
+  pointer-order dependence, and the world hash is the oracle.

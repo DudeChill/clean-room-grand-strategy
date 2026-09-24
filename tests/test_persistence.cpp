@@ -158,6 +158,51 @@ EquipmentId add_equipment(Content& c, const char* key, const char* name, Equipme
     return d.id;
 }
 
+// A component a country may fit, with every stat field non-default so the round trip
+// and the per-field hash coverage below exercise all of them.
+uint32_t add_component(Content& c, const char* key, const char* name, ComponentSlot slot,
+                       EquipmentCategory cat, double build_cost_add, double cost_multiplier) {
+    ComponentDef comp;
+    comp.index = static_cast<uint32_t>(c.components.size());
+    comp.key = key;
+    comp.name = name;
+    comp.slot = slot;
+    comp.category = cat;
+    comp.year = 1936;
+    comp.soft_attack = 2.0;
+    comp.hard_attack = 1.0;
+    comp.air_attack = 0.5;
+    comp.air_defence = 0.5;
+    comp.ground_attack = 0.25;
+    comp.agility = 1.0;
+    comp.armor = 3.0;
+    comp.piercing = 2.0;
+    comp.defense = 2.5;
+    comp.breakthrough = 1.75;
+    comp.hardness = 0.15;
+    comp.max_strength = 0.5;
+    comp.organization = 2.0;
+    comp.speed = 1.5;
+    comp.reliability = 0.02;
+    comp.range = 0.5;
+    comp.detection = 0.5;
+    comp.sub_detection = 0.25;
+    comp.naval_attack = 0.75;
+    comp.torpedo_attack = 0.5;
+    comp.visibility = 0.05;
+    comp.build_cost_add = build_cost_add;
+    comp.cost_multiplier = cost_multiplier;
+    comp.resources[static_cast<int>(Resource::Steel)] = 1.0;
+    comp.resources[static_cast<int>(Resource::Tungsten)] = 0.5;
+    comp.fuel_use = 0.05;
+    comp.supply_use = 0.1;
+    comp.manpower = 10.0;
+    comp.available = Json::parse(R"({"has_tech": "infantry_weapons"})");
+    c.components.push_back(comp);
+    c.component_index[comp.key] = comp.index;
+    return comp.index;
+}
+
 // Three countries (ALB/BRV/CDA) on eight provinces (seven land, one sea), two
 // regions, four states, one war, one faction, one battle, one army, two divisions
 // and one air wing per country: enough to exercise every subsystem with real
@@ -233,6 +278,56 @@ void build_world(Game* g) {
     destroyer.resources[static_cast<int>(Resource::Steel)] = 5.0;
     c.equipment.push_back(destroyer);
     c.equipment_by_key[destroyer.key] = destroyer.id;
+
+    // Equipment designers: components and one country design. The design's produced
+    // model is a real EquipmentDef in the same equipment table, so the round trip can
+    // prove that `produced` still resolves to the same keyed model after a load.
+    const uint32_t armor_plate = add_component(c, "armor_plate", "Armor Plate",
+                                               ComponentSlot::Armor, EquipmentCategory::Armor, 2.0, 1.10);
+    const uint32_t heavy_gun = add_component(c, "heavy_gun", "Heavy Gun", ComponentSlot::Weapon,
+                                             EquipmentCategory::Armor, 3.0, 1.05);
+    const uint32_t diesel_engine = add_component(c, "diesel_engine", "Diesel Engine",
+                                                 ComponentSlot::Engine, EquipmentCategory::Armor,
+                                                 1.5, 1.02);
+    const uint32_t radio = add_component(c, "radio_set", "Radio Set", ComponentSlot::Special,
+                                         EquipmentCategory::Armor, 0.5, 1.0);
+
+    EquipmentDef designed_tank;
+    designed_tank.id = EquipmentId(static_cast<uint32_t>(c.equipment.size()));
+    designed_tank.key = "tank_alpha_1";
+    designed_tank.name = "Alpha Tank";
+    designed_tank.category = EquipmentCategory::Armor;
+    designed_tank.year = 1939;
+    designed_tank.archetype = "tank";
+    designed_tank.soft_attack = 24.0;
+    designed_tank.hard_attack = 12.0;
+    designed_tank.armor = 30.0;
+    designed_tank.piercing = 22.0;
+    designed_tank.hardness = 0.9;
+    designed_tank.reliability = 0.92;
+    designed_tank.max_strength = 1.0;
+    designed_tank.build_cost = 30.0;
+    designed_tank.manpower = 120.0;
+    designed_tank.supply_use = 0.4;
+    designed_tank.fuel_use = 0.6;
+    designed_tank.resources[static_cast<int>(Resource::Steel)] = 4.0;
+    c.equipment.push_back(designed_tank);
+    c.equipment_by_key[designed_tank.key] = designed_tank.id;
+
+    EquipmentDesign design;
+    design.index = 0;
+    design.key = "ALB_tank_alpha";
+    design.name = "Alpha Tank";
+    design.country = CountryId(0);
+    design.archetype = inf;
+    design.year = 1939;
+    design.components = {{ComponentSlot::Armor, armor_plate},
+                         {ComponentSlot::Weapon, heavy_gun},
+                         {ComponentSlot::Engine, diesel_engine},
+                         {ComponentSlot::Special, radio}};
+    design.produced = designed_tank.id;
+    c.designs.push_back(design);
+    c.design_index[design.key] = 0;
 
     DivisionTemplate infantry;
     infantry.id = TemplateId(0);
@@ -794,6 +889,12 @@ void enrich(Game& g) {
         c.spirit_keys.clear();
         for (uint32_t i = 0; i < g.content.spirits.size(); ++i) c.spirit_keys.push_back(i);
         c.advisors.push_back(id.v % (g.content.advisors.empty() ? 1u : g.content.advisors.size()));
+        // The country's equipment designs, indices into Content::designs: only the
+        // design's owner lists it, so the biography is honest after a load.
+        c.designs.clear();
+        for (uint32_t i = 0; i < g.content.designs.size(); ++i) {
+            if (g.content.designs[i].country == id) c.designs.push_back(i);
+        }
         c.spirit_slots = 6 + static_cast<int>(id.v);
         c.advisor_slots = 3 + static_cast<int>(id.v);
     });
@@ -1028,6 +1129,11 @@ Fixture build_fixture() {
     CHECK(!f.source.world.countries[CountryId(0)].national_spirits.empty());
     CHECK(!f.source.world.countries[CountryId(0)].spirit_keys.empty());
     CHECK(!f.source.world.countries[CountryId(0)].advisors.empty());
+    // The equipment designer slice must be exercised too: empty component/design
+    // tables or an empty country roster would serialise nothing and prove nothing.
+    CHECK_GT(f.source.content.components.size(), 0u);
+    CHECK_GT(f.source.content.designs.size(), 0u);
+    CHECK(!f.source.world.countries[CountryId(0)].designs.empty());
     CHECK(!f.source.world.script_vars.empty());
     CHECK(!f.source.world.delayed_events.empty());
     CHECK(!f.source.world.countries[CountryId(0)].completed_focuses.empty());
@@ -1671,6 +1777,50 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"advisor.cost_pp", +[](Game& g) { for (auto& a : g.content.advisors) a.cost_pp += 1.0; }},
         {"advisor.available", +[](Game& g) { for (auto& a : g.content.advisors) a.available = Json(true); }},
         {"advisor.modifiers", +[](Game& g) { for (auto& a : g.content.advisors) a.modifiers.v[0] += 0.01; }},
+        {"component.index", +[](Game& g) { for (auto& comp : g.content.components) comp.index += 1; }},
+        {"component.key", +[](Game& g) { for (auto& comp : g.content.components) comp.key += "x"; }},
+        {"component.name", +[](Game& g) { for (auto& comp : g.content.components) comp.name += "x"; }},
+        {"component.slot", +[](Game& g) { for (auto& comp : g.content.components) comp.slot = ComponentSlot::Airframe; }},
+        {"component.category", +[](Game& g) { for (auto& comp : g.content.components) comp.category = EquipmentCategory::Ship; }},
+        {"component.year", +[](Game& g) { for (auto& comp : g.content.components) comp.year += 1; }},
+        {"component.soft_attack", +[](Game& g) { for (auto& comp : g.content.components) comp.soft_attack += 1.0; }},
+        {"component.hard_attack", +[](Game& g) { for (auto& comp : g.content.components) comp.hard_attack += 1.0; }},
+        {"component.air_attack", +[](Game& g) { for (auto& comp : g.content.components) comp.air_attack += 1.0; }},
+        {"component.air_defence", +[](Game& g) { for (auto& comp : g.content.components) comp.air_defence += 1.0; }},
+        {"component.ground_attack", +[](Game& g) { for (auto& comp : g.content.components) comp.ground_attack += 1.0; }},
+        {"component.agility", +[](Game& g) { for (auto& comp : g.content.components) comp.agility += 1.0; }},
+        {"component.armor", +[](Game& g) { for (auto& comp : g.content.components) comp.armor += 1.0; }},
+        {"component.piercing", +[](Game& g) { for (auto& comp : g.content.components) comp.piercing += 1.0; }},
+        {"component.defense", +[](Game& g) { for (auto& comp : g.content.components) comp.defense += 1.0; }},
+        {"component.breakthrough", +[](Game& g) { for (auto& comp : g.content.components) comp.breakthrough += 1.0; }},
+        {"component.hardness", +[](Game& g) { for (auto& comp : g.content.components) comp.hardness += 0.01; }},
+        {"component.max_strength", +[](Game& g) { for (auto& comp : g.content.components) comp.max_strength += 1.0; }},
+        {"component.organization", +[](Game& g) { for (auto& comp : g.content.components) comp.organization += 1.0; }},
+        {"component.speed", +[](Game& g) { for (auto& comp : g.content.components) comp.speed += 1.0; }},
+        {"component.reliability", +[](Game& g) { for (auto& comp : g.content.components) comp.reliability += 0.01; }},
+        {"component.range", +[](Game& g) { for (auto& comp : g.content.components) comp.range += 1.0; }},
+        {"component.detection", +[](Game& g) { for (auto& comp : g.content.components) comp.detection += 1.0; }},
+        {"component.sub_detection", +[](Game& g) { for (auto& comp : g.content.components) comp.sub_detection += 1.0; }},
+        {"component.naval_attack", +[](Game& g) { for (auto& comp : g.content.components) comp.naval_attack += 1.0; }},
+        {"component.torpedo_attack", +[](Game& g) { for (auto& comp : g.content.components) comp.torpedo_attack += 1.0; }},
+        {"component.visibility", +[](Game& g) { for (auto& comp : g.content.components) comp.visibility += 0.01; }},
+        {"component.build_cost_add", +[](Game& g) { for (auto& comp : g.content.components) comp.build_cost_add += 1.0; }},
+        {"component.cost_multiplier", +[](Game& g) { for (auto& comp : g.content.components) comp.cost_multiplier += 0.01; }},
+        {"component.resources", +[](Game& g) { for (auto& comp : g.content.components) comp.resources[static_cast<int>(Resource::Rubber)] += 1.0; }},
+        {"component.fuel_use", +[](Game& g) { for (auto& comp : g.content.components) comp.fuel_use += 0.01; }},
+        {"component.supply_use", +[](Game& g) { for (auto& comp : g.content.components) comp.supply_use += 0.01; }},
+        {"component.manpower", +[](Game& g) { for (auto& comp : g.content.components) comp.manpower += 1.0; }},
+        {"component.available", +[](Game& g) { for (auto& comp : g.content.components) comp.available = Json(true); }},
+        {"design.index", +[](Game& g) { for (auto& d : g.content.designs) d.index += 1; }},
+        {"design.key", +[](Game& g) { for (auto& d : g.content.designs) d.key += "x"; }},
+        {"design.name", +[](Game& g) { for (auto& d : g.content.designs) d.name += "x"; }},
+        {"design.country", +[](Game& g) { for (auto& d : g.content.designs) d.country = CountryId(405); }},
+        {"design.archetype", +[](Game& g) { for (auto& d : g.content.designs) d.archetype = EquipmentId(1); }},
+        {"design.year", +[](Game& g) { for (auto& d : g.content.designs) d.year += 1; }},
+        {"design.components", +[](Game& g) { for (auto& d : g.content.designs) d.components.push_back({ComponentSlot::Special, 0}); }},
+        {"design.component.slot", +[](Game& g) { for (auto& d : g.content.designs) { for (auto& p : d.components) p.first = ComponentSlot::Hull; } }},
+        {"design.component.index", +[](Game& g) { for (auto& d : g.content.designs) { for (auto& p : d.components) p.second += 1; } }},
+        {"design.produced", +[](Game& g) { for (auto& d : g.content.designs) d.produced = EquipmentId(0); }},
         {"country.completed_focuses", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.completed_focuses.push_back(1); }); }},
         {"country.selected_focus", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.selected_focus += 1; }); }},
         {"country.focus_progress", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.focus_progress += 1.0; }); }},
@@ -1690,6 +1840,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"country.national_spirit.days_left", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.national_spirits) m.days_left -= 1; }); }},
         {"country.spirit_keys", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.spirit_keys.push_back(1); }); }},
         {"country.advisors", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.advisors.push_back(1); }); }},
+        {"country.designs", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.designs.push_back(0); }); }},
         {"country.spirit_slots", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.spirit_slots += 1; }); }},
         {"country.advisor_slots", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.advisor_slots += 1; }); }},
         {"world.script_vars.value", +[](Game& g) { for (auto& e : g.world.script_vars) e.second += 1.0; }},
@@ -1883,6 +2034,8 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
     CHECK_EQ(empty.content.decisions.size(), f.source.content.decisions.size());
     CHECK_EQ(empty.content.spirits.size(), f.source.content.spirits.size());
     CHECK_EQ(empty.content.advisors.size(), f.source.content.advisors.size());
+    CHECK_EQ(empty.content.components.size(), f.source.content.components.size());
+    CHECK_EQ(empty.content.designs.size(), f.source.content.designs.size());
     CHECK(empty.content.constants.ic_per_military_factory ==
           f.source.content.constants.ic_per_military_factory);
     // Derived key -> id maps are rebuilt, not stored: lookups must work after a load.
@@ -1918,12 +2071,33 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
         CHECK(empty.content.advisor_id(advisor.key) != 0xFFFFFFFFu);
         CHECK(empty.content.advisor(empty.content.advisor_id(advisor.key)) != nullptr);
     }
+    // Components and designs are addressed by key through the rebuilt indexes, and a
+    // design's produced model must still resolve to the EquipmentDef with the same key
+    // after the load: a design whose `produced` id dangled would be a real model
+    // production and combat could no longer build.
+    for (const ComponentDef& comp : f.source.content.components) {
+        CHECK(empty.content.component_id(comp.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.component(empty.content.component_id(comp.key)) != nullptr);
+    }
+    for (const EquipmentDesign& design : f.source.content.designs) {
+        const uint32_t index = empty.content.design_id(design.key);
+        CHECK(index != 0xFFFFFFFFu);
+        const EquipmentDesign* loaded_design = empty.content.design(index);
+        CHECK(loaded_design != nullptr);
+        CHECK_EQ(loaded_design->produced.v, design.produced.v);
+        const EquipmentDef* before_model = f.source.content.equipment_def(design.produced);
+        const EquipmentDef* after_model = empty.content.equipment_def(loaded_design->produced);
+        CHECK(before_model != nullptr);
+        CHECK(after_model != nullptr);
+        CHECK(before_model != nullptr && after_model != nullptr && before_model->key == after_model->key);
+    }
     // The per-country spirit/advisor state survives the load into an empty Game.
     const Country& src_country = f.source.world.countries[CountryId(0)];
     const Country& loaded_country = empty.world.countries[CountryId(0)];
     CHECK_EQ(loaded_country.national_spirits.size(), src_country.national_spirits.size());
     CHECK_EQ(loaded_country.spirit_keys.size(), src_country.spirit_keys.size());
     CHECK_EQ(loaded_country.advisors.size(), src_country.advisors.size());
+    CHECK_EQ(loaded_country.designs.size(), src_country.designs.size());
     CHECK_EQ(loaded_country.spirit_slots, src_country.spirit_slots);
     CHECK_EQ(loaded_country.advisor_slots, src_country.advisor_slots);
 

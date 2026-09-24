@@ -793,25 +793,55 @@ void province_attributes(Gen& g) {
             if (infra > 6) infra = 6;
             g.province_infra[static_cast<size_t>(p)] = infra;
 
-            const int amount = 1 + static_cast<int>(hash_below(x, y, 21, seed, 6));
+            // Resource extraction is deliberately sparse and small: yields are
+            // sized against what production lines actually consume (a few units per
+            // factory-day), so geology - not abundance - decides who must import.
+            // Steel is the bulk industrial resource and stays common; aluminium,
+            // chromium, tungsten and rubber are gated to a fraction of their
+            // eligible provinces so a country owns only a handful of sources.
+            auto res_gate = [&](int channel, int percent) {
+                return hash_below(x, y, channel, seed, 100) < static_cast<uint32_t>(percent);
+            };
+            auto res_amount = [&](int channel, int lo, int hi) {
+                if (hi <= lo) return lo;
+                return lo + static_cast<int>(hash_below(
+                                x, y, channel + 64, seed,
+                                static_cast<uint32_t>(hi - lo + 1)));
+            };
             switch (t) {
                 case T_HILLS:
-                    g.province_res[R_STEEL][static_cast<size_t>(p)] = amount;
-                    g.province_res[R_ALUMINIUM][static_cast<size_t>(p)] = amount + 1;
+                    if (res_gate(21, 60)) {
+                        g.province_res[R_STEEL][static_cast<size_t>(p)] = res_amount(21, 1, 2);
+                    }
+                    if (res_gate(22, 85)) {
+                        g.province_res[R_ALUMINIUM][static_cast<size_t>(p)] = res_amount(22, 1, 1);
+                    }
                     break;
                 case T_MOUNTAIN:
-                    g.province_res[R_CHROMIUM][static_cast<size_t>(p)] = amount;
-                    g.province_res[R_TUNGSTEN][static_cast<size_t>(p)] = amount;
-                    if (amount >= 4) g.province_res[R_STEEL][static_cast<size_t>(p)] = amount - 2;
+                    if (res_gate(21, 55)) {
+                        g.province_res[R_STEEL][static_cast<size_t>(p)] = res_amount(21, 1, 1);
+                    }
+                    if (res_gate(23, 12)) {
+                        g.province_res[R_CHROMIUM][static_cast<size_t>(p)] = res_amount(23, 1, 1);
+                    }
+                    if (res_gate(24, 8)) {
+                        g.province_res[R_TUNGSTEN][static_cast<size_t>(p)] = res_amount(24, 1, 2);
+                    }
                     break;
                 case T_DESERT:
-                    g.province_res[R_OIL][static_cast<size_t>(p)] = amount + 1;
+                    if (res_gate(25, 60)) {
+                        g.province_res[R_OIL][static_cast<size_t>(p)] = res_amount(25, 1, 2);
+                    }
                     break;
                 case T_MARSH:
-                    g.province_res[R_OIL][static_cast<size_t>(p)] = amount;
+                    if (res_gate(25, 60)) {
+                        g.province_res[R_OIL][static_cast<size_t>(p)] = res_amount(25, 1, 1);
+                    }
                     break;
                 case T_JUNGLE:
-                    g.province_res[R_RUBBER][static_cast<size_t>(p)] = amount + 1;
+                    if (res_gate(26, 20)) {
+                        g.province_res[R_RUBBER][static_cast<size_t>(p)] = res_amount(26, 1, 1);
+                    }
                     break;
                 default:
                     break;

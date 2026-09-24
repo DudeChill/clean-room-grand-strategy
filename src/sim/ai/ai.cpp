@@ -42,12 +42,15 @@
 #include "game/game.h"
 #include "sim/air.h"
 #include "sim/diplomacy.h"
+#include "sim/design.h"
 #include "sim/events.h"
 #include "sim/focus.h"
 #include "sim/spirits.h"
 #include "sim/trade.h"
 #include "sim/industry.h"
 #include "sim/map.h"
+#include <chrono>
+
 #include "sim/navy.h"
 #include "sim/research.h"
 #include "sim/supply.h"
@@ -1706,6 +1709,47 @@ void ai_production_layer(Game& g, Country& c) {
 
     // ---- pick the models worth a line, upgrading to the best known model ----
     const int year = g.world.date.year;
+    // Tech availability is a per-country, per-run fact: resolve it once per model
+    // instead of re-scanning the technology table inside the nested model loops below
+    // (that scan is string-heavy and dominated the whole AI phase when it ran per
+    // candidate pair).
+    std::vector<char> unlocked(g.content.equipment.size(), 0);
+    for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+        unlocked[i] = equipment_unlocked(g, c.id, g.content.equipment[i].id) ? 1 : 0;
+    }
+    // A division template may name a bare archetype (the generic model) instead of a
+    // concrete model, and a country may not have unlocked an authored model of that
+    // family at all. Redirect that demand to the best model of the family the country
+    // can actually build - an authored model or one of its own designs - otherwise the
+    // demand is silently dropped (`is_archetype` defs never become production targets).
+    for (size_t i = 0; i < g.content.equipment.size(); ++i) {
+        if (need[i] <= 0.0) continue;
+        const EquipmentDef& def = g.content.equipment[i];
+        if (!def.is_archetype) continue;
+        const EquipmentDef* best = nullptr;
+        size_t best_index = 0;
+        for (size_t j = 0; j < g.content.equipment.size(); ++j) {
+            const EquipmentDef& other = g.content.equipment[j];
+            if (other.is_archetype || other.archetype != def.key) continue;
+            if (other.year > year) continue;
+            if (other.id.v >= unlocked.size() || unlocked[other.id.v] == 0) continue;
+            if (!best || equipment_stat_score(other) > equipment_stat_score(*best)) {
+                best = &other;
+                best_index = j;
+            }
+        }
+        if (!best) continue;
+        need.at(best_index) += need[i];
+        need[i] = 0.0;
+        AiReason r;
+        r.what = "build_family_model_" + def.key + "_as_" + best->key;
+        r.score = need[best_index];
+        r.factors = {{"family_need", need[best_index]},
+                     {"family", static_cast<double>(def.key.size())},
+                     {"model_is_design", best->archetype == def.key && !best->is_archetype ? 1.0 : 1.0}};
+        record_reason(g, AiLayer::Production, std::move(r));
+    }
+
     const std::vector<char> template_mask =
         template_equipment_mask(g.content, c, g.content.equipment.size());
     std::vector<ProdTarget> targets;
@@ -1713,6 +1757,10 @@ void ai_production_layer(Game& g, Country& c) {
         if (need[i] <= 0.0) continue;
         const EquipmentDef& def = g.content.equipment[i];
         if (def.is_archetype) continue;
+        // A model the country has not unlocked cannot be built: this is what a
+        // research-gated model would look like from the production layer, and
+        // targeting it only wastes commands (SetProductionLine would be rejected).
+        if (def.id.v >= unlocked.size() || unlocked[def.id.v] == 0) continue;
 
         // Upgrade within the archetype when the new model is measurably better and
         // the efficiency thrown away by switching is smaller than the gain. The
@@ -1728,6 +1776,7 @@ void ai_production_layer(Game& g, Country& c) {
                 continue;
             }
             if (other.year > year) continue;
+            if (other.id.v >= unlocked.size() || unlocked[other.id.v] == 0) continue;
             if (equipment_stat_score(other) > equipment_stat_score(*best)) {
                 best = &other;
                 best_index = j;
@@ -2954,17 +3003,44 @@ bool layer_due(AiLayerState& st, int layer, Tick now) {
     return true;
 }
 
+double timed_call(Game& g, AiLayer l, Country& c, void (*fn)(Game&, Country&)) {
+    const auto start = std::chrono::steady_clock::now();
+    fn(g, c);
+    double* slot = nullptr;
+    switch (l) {
+        case AiLayer::Industry: slot = &g.metrics.ms_ai_industry; break;
+        case AiLayer::Research: slot = &g.metrics.ms_ai_research; break;
+        case AiLayer::Production: slot = &g.metrics.ms_ai_production; break;
+        case AiLayer::Military: slot = &g.metrics.ms_ai_military; break;
+        case AiLayer::Politics: slot = &g.metrics.ms_ai_politics; break;
+        case AiLayer::Diplomacy: slot = &g.metrics.ms_ai_diplomacy; break;
+        case AiLayer::Count: break;
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                start)
+                          .count();
+    if (slot) *slot += ms;
+    return ms;
+}
+
 void run_layer(Game& g, AiLayer l, Country& c) {
     switch (l) {
-        case AiLayer::Industry:
-            ai_industry_layer(g, c);
-            ai_trade_layer(g, c);
+        case AiLayer::Industry: {
+            timed_call(g, l, c, &ai_industry_layer);
+            timed_call(g, l, c, &ai_trade_layer);
+            const auto design_start = std::chrono::steady_clock::now();
+            ai_design_layer(g, c);
+            g.metrics.ms_ai_design +=
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                          design_start)
+                    .count();
             break;
-        case AiLayer::Research: ai_research_layer(g, c); break;
-        case AiLayer::Production: ai_production_layer(g, c); break;
-        case AiLayer::Military: ai_military_layer(g, c); break;
-        case AiLayer::Politics: ai_politics_layer(g, c); break;
-        case AiLayer::Diplomacy: ai_diplomacy_layer(g, c); break;
+        }
+        case AiLayer::Research: timed_call(g, l, c, &ai_research_layer); break;
+        case AiLayer::Production: timed_call(g, l, c, &ai_production_layer); break;
+        case AiLayer::Military: timed_call(g, l, c, &ai_military_layer); break;
+        case AiLayer::Politics: timed_call(g, l, c, &ai_politics_layer); break;
+        case AiLayer::Diplomacy: timed_call(g, l, c, &ai_diplomacy_layer); break;
         case AiLayer::Count: break;
     }
 }

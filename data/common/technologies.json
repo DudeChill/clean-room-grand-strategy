@@ -49,13 +49,13 @@
     {"key": "medium_armor", "name": "Medium Armor", "category": "armor",
      "year": 1940, "cost_days": 160.0,
      "prerequisites": ["light_armor"],
-     "unlock_equipment": ["armor_2"],
+     "unlock_equipment": ["armor_2", "armor_gun_long_75"],
      "modifiers": {"DivisionBreakthrough": 0.05}},
 
     {"key": "mechanization", "name": "Mechanization", "category": "land_doctrine",
      "year": 1940, "cost_days": 150.0,
      "prerequisites": ["motorization"],
-     "unlock_equipment": ["mechanized_1"],
+     "unlock_equipment": ["mechanized_1", "armor_engine_diesel_ii"],
      "modifiers": {"DivisionOrganization": 0.03}},
 
     {"key": "aircraft_design", "name": "Aircraft Design", "category": "air",
@@ -83,7 +83,7 @@
     {"key": "improved_fighter_airframe", "name": "Improved Fighter Airframe",
      "category": "air", "year": 1940, "cost_days": 150.0,
      "prerequisites": ["fighter_airframe"],
-     "unlock_equipment": ["fighter_2"],
+     "unlock_equipment": ["fighter_2", "air_engine_inline_ii"],
      "modifiers": {}},
 
     {"key": "improved_cas_airframe", "name": "Improved Close Air Support Airframe",
@@ -136,7 +136,7 @@
     {"key": "improved_cruiser_hull", "name": "Improved Cruiser Hull",
      "category": "naval", "year": 1940, "cost_days": 160.0,
      "prerequisites": ["cruiser_hull"],
-     "unlock_equipment": ["light_cruiser_2", "heavy_cruiser_2"],
+     "unlock_equipment": ["light_cruiser_2", "heavy_cruiser_2", "ship_hull_large"],
      "modifiers": {}},
 
     {"key": "construction_engineering", "name": "Construction Engineering",

@@ -19,6 +19,7 @@
 #include "game/game.h"
 #include "sim/air.h"
 #include "sim/combat.h"
+#include "sim/design.h"
 #include "sim/diplomacy.h"
 #include "sim/events.h"
 #include "sim/focus.h"
@@ -590,6 +591,17 @@ CommandResult do_cancel_decision(Game& g, const Command& cmd) {
     return CommandResult::Applied;
 }
 
+CommandResult do_create_design(Game& g, const Command& cmd) {
+    std::vector<std::pair<ComponentSlot, uint32_t>> components;
+    components.reserve(cmd.components.size());
+    for (const auto& choice : cmd.components) {
+        components.emplace_back(static_cast<ComponentSlot>(choice.first), choice.second);
+    }
+    const uint32_t design =
+        design_create(g, cmd.country, cmd.text, cmd.equipment, components);
+    return design == 0xFFFFFFFFu ? CommandResult::PrerequisitesMissing : CommandResult::Applied;
+}
+
 CommandResult do_start_trade(Game& g, const Command& cmd) {
     if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
     return trade_start(g, cmd.country, cmd.target_country, static_cast<Resource>(cmd.value),
@@ -724,6 +736,7 @@ const char* command_type_name(CommandType t) {
         case CommandType::CancelFocus: return "cancel_focus";
         case CommandType::ChooseEventOption: return "choose_event_option";
         case CommandType::TakeDecision: return "take_decision";
+        case CommandType::CreateEquipmentDesign: return "create_equipment_design";
         case CommandType::StartTrade: return "start_trade";
         case CommandType::CancelTrade: return "cancel_trade";
         case CommandType::AppointAdvisor: return "appoint_advisor";
@@ -1105,6 +1118,24 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (decision == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
             return CommandResult::Applied;
         }
+        case CommandType::CreateEquipmentDesign: {
+            const EquipmentDef* base = g.content.equipment_def(cmd.equipment);
+            if (!base || base->is_archetype == false) return CommandResult::UnknownEntity;
+            if (cmd.text.empty()) return CommandResult::InvalidValue;
+            if (design_exists(g, cmd.text)) return CommandResult::InvalidValue;
+            for (const auto& choice : cmd.components) {
+                if (choice.first >= static_cast<uint8_t>(ComponentSlot::Count)) {
+                    return CommandResult::InvalidValue;
+                }
+                const ComponentDef* comp = g.content.component(choice.second);
+                if (!comp) return CommandResult::UnknownEntity;
+                if (comp->category != base->category) return CommandResult::InvalidTarget;
+            }
+            if (!design_available(g, cmd.country, cmd.equipment)) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            return CommandResult::Applied;
+        }
         case CommandType::StartTrade: {
             if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
             if (cmd.value_f <= 0.0) return CommandResult::InvalidValue;
@@ -1234,6 +1265,7 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::CancelFocus: return do_cancel_focus(g, cmd);
         case CommandType::ChooseEventOption: return do_choose_event_option(g, cmd);
         case CommandType::TakeDecision: return do_take_decision(g, cmd);
+        case CommandType::CreateEquipmentDesign: return do_create_design(g, cmd);
         case CommandType::StartTrade: return do_start_trade(g, cmd);
         case CommandType::CancelTrade: return do_cancel_trade(g, cmd);
         case CommandType::AppointAdvisor: return do_appoint_advisor(g, cmd);
@@ -1363,6 +1395,11 @@ void serialize_command(ByteWriter& w, const Command& c) {
     }
     w.u32(static_cast<uint32_t>(c.divisions.size()));
     for (DivisionId d : c.divisions) w.u32(d.v);
+    w.u32(static_cast<uint32_t>(c.components.size()));
+    for (const auto& choice : c.components) {
+        w.u8(choice.first);
+        w.u32(choice.second);
+    }
 }
 
 Command deserialize_command(ByteReader& r) {
@@ -1402,6 +1439,12 @@ Command deserialize_command(ByteReader& r) {
     r.u32(&n);
     c.divisions.resize(n);
     for (uint32_t i = 0; i < n; ++i) r.u32(&c.divisions[i].v);
+    r.u32(&n);
+    c.components.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        r.u8(&c.components[i].first);
+        r.u32(&c.components[i].second);
+    }
     return c;
 }
 

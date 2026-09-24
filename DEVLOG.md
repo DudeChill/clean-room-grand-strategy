@@ -1,3 +1,29 @@
+
+## 2026-09-24 - v0.7.0: equipment designers and a scarce resource economy
+
+The designer is a rule, not a modifier: components fit into an archetype, the statistics
+are computed from the fit, and the result is registered as real equipment that production,
+stockpiles, divisions and combat use like any authored model. 64 components across five
+categories, 45 year-gated, four technology-gated, two trigger-gated.
+
+Measured, not assumed: a 1936 armour fit beats `armor_1` by +29.5% capability for +7.5%
+cost; the AI designs its own models (six countries own three or more by day 365) and puts
+them on lines (VEL ran 32 factories on `VEL_infantry_1` and built 186,270 units). Three
+defects were found by measuring rather than by reading: components were silently dropping
+`defense`/`breakthrough`, countries could build each other's designs, and the HTTP command
+layer never parsed the `components` payload (so a design created through the UI arrived
+empty). All three are fixed with tests.
+
+The economy was rebalanced from evidence: the map's yields had made every country rich in
+five of six resources, because a single battleship line consumed 180 steel per factory-day
+and world demand was therefore a function of one country's shipbuilding. Capital-ship
+resource costs are down ~10x and yields follow. Now nine of ten countries run a real
+deficit and twelve trade routes close them.
+
+Open, with evidence, as MIL-021: division slots still hold one exact equipment id, so a new
+model reaches new units only - the retrofit link of the research -> design -> production ->
+combat chain is missing. That is the next military slice.
+
 # DEVLOG
 
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /

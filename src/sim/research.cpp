@@ -141,12 +141,39 @@ bool building_unlocked(const Game& g, CountryId country, const std::string& buil
     return !gated;
 }
 
+namespace {
+
+// True when a technology gates this equipment key and the country has not researched
+// any technology that unlocks it.
+bool gated_by_tech(const Game& g, const Country& c, const EquipmentDef& def) {
+    bool gated = false;
+    for (size_t i = 0; i < g.content.techs.size(); ++i) {
+        const TechDef& t = g.content.techs[i];
+        for (const std::string& key : t.unlock_equipment) {
+            if (key != def.key) continue;
+            gated = true;
+            if (c.research.has_tech(tech_id_at(g.content, i))) return false;
+        }
+    }
+    return gated;
+}
+
+}  // namespace
+
 bool equipment_unlocked(const Game& g, CountryId country, EquipmentId equipment) {
     const Country* c = g.world.country(country);
     const EquipmentDef* def = g.content.equipment_def(equipment);
     if (!c || !def) return false;
     // Archetypes are the abstract parent of the producible models, never built.
     if (def->is_archetype) return true;
+    // A design written by another country is that country's equipment: nobody else
+    // may research, build or field it. Authored models have no owning design and stay
+    // shared content.
+    auto owner = g.content.design_of_equipment.find(equipment.v);
+    if (owner != g.content.design_of_equipment.end()) {
+        const EquipmentDesign* d = g.content.design(owner->second);
+        if (d) return d->country == country && !gated_by_tech(g, *c, *def);
+    }
     bool gated = false;
     for (size_t i = 0; i < g.content.techs.size(); ++i) {
         const TechDef& t = g.content.techs[i];
