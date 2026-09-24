@@ -58,8 +58,8 @@ done condition. No open-ended items.
   tick time, memory, save size.
 * [ ] **TOOL-002: long-run observer automation** - scripted 1/6/12/36/60-month runs
   with crash, NaN, leak and runaway-value detection.
-* [ ] **MOD-001: mod loading** - deterministic load order, overrides, conflict
-  diagnostics, mod test pack.
+* [x] **MOD-001: mod loading** - deterministic load order, overrides, conflict
+  diagnostics, validator CLI, mod test pack and `docs/MODDING.md` (v0.9.0).
 * [ ] **NET-001: multiplayer determinism** - two instances, command stream exchange,
   desync report naming the first differing subsystem and command.
 * [ ] **UI-001: save/load from client**, **UI-002: casualty and war summary screens**.

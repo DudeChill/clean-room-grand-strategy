@@ -39,8 +39,16 @@ does something real; a step that dead-ends marks the related feature incomplete
 | 2 | Watch progress | days accrue at the research-speed rate | works |
 | 3 | Completion | modifiers applied and equipment keys unlocked | works |
 | 4 | Produce the unlocked equipment | production line accepts it (gated by unlock) | works |
-| 5 | Equip divisions | training and reinforcement draw the new model | works |
-| 6 | Observe combat statistics | damage uses the equipment actually present | works |
+| 5 | Equip divisions | training and `phase_reinforcement` draw the model the country issues for the slot's family: the one on a live line first, then the best stocked member, with a depot fallback | works |
+| 6 | Design a variant | Production panel: choose an archetype, fit one component per slot (locked parts shown disabled), name it, create it | works |
+| 7 | Put the variant into production | `CreateEquipmentDesign` registers real equipment; the design appears in the line picker and the Produce button sets a line (factory budget is enforced, so an existing line may need trimming first) | works |
+| 8 | Field the variant | existing divisions retrofit as replacement gear arrives; a selected division lists the models it actually holds | works |
+| 9 | Observe combat statistics | damage uses the equipment actually present, so the retrofit shows up in the battle results | works |
+
+Verified end to end in v0.8.0: a browser session designed `VEL_armor_1` (cost 12.90,
+armour 42, piercing 44) through the Production panel, put it on a line, and watched the
+stockpile grow; a 365-day AI run fielded 2,589 units of design equipment across 514
+divisions with 0 divisions left on an older model while a newer one sat in the depot.
 
 ## 4. Defend and attack
 

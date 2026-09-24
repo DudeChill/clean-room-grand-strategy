@@ -6,8 +6,11 @@
 //   game --save <file> / --load <file>    persistence round trip
 //   game --hashes                         print subsystem hashes (determinism oracle)
 //   game --audit                          run the world auditor
+//   game --mods <dirs>                    apply content mods (see docs/MODDING.md)
+//   game --validate-content               validate the content tree and exit non-zero on errors
 //   game --player TAG                     hand a country to the player (AI plays the rest)
 
+#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -16,6 +19,7 @@
 
 #include "core/log.h"
 #include "core/types.h"
+#include "data/mod.h"
 #include "game/game.h"
 #include "game/server.h"
 #include "sim/design.h"
@@ -44,6 +48,7 @@ struct Options {
     std::string web_root = "web";
     std::string inspect_country;
     std::string inspect_battle;
+    std::vector<std::string> mod_roots;  // --mods: roots holding <root>/<mod>/mod.json
     uint64_t inspect_province = 0;
     uint64_t inspect_supply = 0;
     uint64_t seed = 12345;
@@ -60,6 +65,7 @@ struct Options {
     bool verbose = false;
     bool serve = false;
     bool inspect_trade = false;
+    bool validate_content = false;
 };
 
 void usage() {
@@ -80,6 +86,9 @@ void usage() {
         "  --autosave-days <n>   autosave interval while serving\n"
         "  --hashes              print subsystem hashes\n"
         "  --audit               run the world auditor\n"
+        "  --mods <dirs>         content mod roots, comma separated (see docs/MODDING.md)\n"
+        "  --validate-content    load content with --mods, report, audit one day, exit non-zero "
+        "on any error\n"
         "  --summary             print per-country summary\n"
         "  --inspect-country TAG print full state of one country\n"
         "  --inspect-province ID print province state and supply\n"
@@ -151,6 +160,21 @@ bool parse_args(int argc, char** argv, Options* o) {
             o->inspect_trade = true;
         } else if (a == "--inspect-battle") {
             if (!next(&o->inspect_battle)) return false;
+        } else if (a == "--mods") {
+            std::string v;
+            if (!next(&v)) return false;
+            size_t start = 0;
+            while (start <= v.size()) {
+                const size_t comma = v.find(',', start);
+                const std::string one = v.substr(start, comma == std::string::npos
+                                                             ? std::string::npos
+                                                             : comma - start);
+                if (!one.empty()) o->mod_roots.push_back(one);
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+        } else if (a == "--validate-content") {
+            o->validate_content = true;
         } else if (a == "--hashes") {
             o->hashes = true;
         } else if (a == "--audit") {
@@ -498,6 +522,71 @@ void inspect_battle(const Game& g, BattleId bid) {
     }
 }
 
+void print_content_diagnostics(const ModLoadReport& report, const Content& content,
+                               bool as_errors) {
+    // One line per distinct diagnostic, whichever list carries it: the report renders
+    // its events, its error list and Content::load_errors overlap by design.
+    std::vector<std::string> seen;
+    const std::string text = report.text();
+    if (!text.empty()) std::printf("%s", text.c_str());
+    auto shown = [&](const std::string& raw) {
+        if (std::find(seen.begin(), seen.end(), raw) != seen.end()) return true;
+        seen.push_back(raw);
+        return false;
+    };
+    for (const std::string& e : report.errors) {
+        // A diagnostic the report already rendered is printed exactly once.
+        if (!text.empty() && text.find(e) != std::string::npos) {
+            shown(e);
+            continue;
+        }
+        if (!shown(e)) {
+            std::printf("%s: %s\n", as_errors ? "content error" : "content warning", e.c_str());
+        }
+    }
+    for (const std::string& e : content.load_errors) {
+        if (shown(e)) continue;
+        std::printf("%s: %s\n", as_errors ? "content error" : "content warning", e.c_str());
+    }
+}
+
+// --validate-content (MOD-002): load the content tree with the requested mods through
+// the same code path a real run uses, print the deterministic load report, audit a
+// one-day run, and exit non-zero on any diagnostic. Nothing is written.
+int run_content_validation(const Options& opt) {
+    Game game;
+    std::string err;
+    ModLoadReport report;
+    if (!Game::create(opt.data_root, opt.scenario, opt.seed, &game, &err, opt.mod_roots, &report)) {
+        print_content_diagnostics(report, game.content, true);
+        std::fflush(stdout);
+        std::fprintf(stderr, "content validation: FAILED: %s\n", err.c_str());
+        return 1;
+    }
+    print_content_diagnostics(report, game.content, true);
+    game.run_ticks(static_cast<uint64_t>(TICKS_PER_DAY));
+    std::string audit;
+    const bool audit_ok = audit_world(game, &audit);
+    std::printf("\n%s\n", audit.c_str());
+    size_t replaced = 0;
+    size_t added = 0;
+    for (const ModLoadEvent& e : report.events) {
+        if (e.action == "replaced") ++replaced;
+        if (e.action == "added") ++added;
+    }
+    if (!audit_ok || !report.errors.empty() || !game.content.load_errors.empty()) {
+        // Keep the summary after the diagnostics it summarizes even when the two streams
+        // are interleaved (stdout is block buffered when redirected to a file).
+        std::fflush(stdout);
+        std::fprintf(stderr, "content validation: FAILED: %zu mod error(s), %zu content error(s)\n",
+                     report.errors.size(), game.content.load_errors.size());
+        return 1;
+    }
+    std::printf("content validation: OK (%zu replaced, %zu added, %zu mod root(s))\n", replaced,
+                added, opt.mod_roots.size());
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -508,6 +597,7 @@ int main(int argc, char** argv) {
 
     Game game;
     std::string err;
+    if (opt.validate_content) return run_content_validation(opt);
     if (!opt.load_path.empty()) {
         if (!load_game(game, opt.load_path, &err)) {
             std::fprintf(stderr, "load failed: %s\n", err.c_str());
@@ -517,15 +607,22 @@ int main(int argc, char** argv) {
                     game.scenario_path.c_str(), game.world.date.year, game.world.date.month,
                     game.world.date.day, static_cast<unsigned long long>(game.world.tick));
     } else {
-        if (!Game::create(opt.data_root, opt.scenario, opt.seed, &game, &err)) {
+        ModLoadReport report;
+        if (!Game::create(opt.data_root, opt.scenario, opt.seed, &game, &err, opt.mod_roots,
+                          &report)) {
             std::fprintf(stderr, "startup failed: %s\n", err.c_str());
             return 1;
         }
         std::printf("scenario %s loaded: %zu provinces, %zu states, %zu countries, %zu divisions\n",
                     opt.scenario.c_str(), game.world.provinces.size(), game.world.states.size(),
                     game.world.countries.size(), game.world.divisions.size());
-        for (const auto& e : game.content.load_errors) {
-            std::printf("content warning: %s\n", e.c_str());
+        print_content_diagnostics(report, game.content, false);
+        if (!report.errors.empty()) {
+            // A mod that fails to apply must not be silently absent from the run.
+            std::fflush(stdout);
+            std::fprintf(stderr, "startup failed: %zu mod error(s); fix them or drop --mods\n",
+                         report.errors.size());
+            return 1;
         }
     }
 

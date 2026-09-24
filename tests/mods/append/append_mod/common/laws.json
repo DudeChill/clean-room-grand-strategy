@@ -1,0 +1,6 @@
+{
+  "laws": [
+    {"key": "add_mod_appended_law", "name": "Appended Law", "kind": 0, "level": 6, "cost": 5.0,
+     "modifiers": {"RecruitablePopulation": 0.001}}
+  ]
+}

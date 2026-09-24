@@ -47,11 +47,12 @@ double SimMetrics::percentile_tick_ms(double p) const {
 }
 
 bool Game::create(const std::string& data_root_in, const std::string& scenario_path_in,
-                  uint64_t seed_in, Game* out, std::string* err) {
+                  uint64_t seed_in, Game* out, std::string* err,
+                  const std::vector<std::string>& mod_roots, ModLoadReport* report) {
     out->data_root = data_root_in;
     out->scenario_path = scenario_path_in;
     out->seed = seed_in;
-    if (!load_content(data_root_in, &out->content, err)) return false;
+    if (!load_content(data_root_in, &out->content, err, mod_roots, report)) return false;
     if (!load_scenario(scenario_path_in, out->content, &out->world, err)) return false;
     if (!load_scenario_forces(scenario_path_in, *out, err)) return false;
 

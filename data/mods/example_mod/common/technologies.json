@@ -1,0 +1,15 @@
+{
+  "technologies": [
+    {
+      "key": "assault_rifle_development",
+      "name": "Assault Rifle Development",
+      "category": "infantry",
+      "year": 1943,
+      "cost_days": 110.0,
+      "prerequisites": ["improved_infantry_weapons"],
+      "unlock_equipment": ["assault_rifles_1"],
+      "modifiers": {"DivisionAttack": 0.06},
+      "add": true
+    }
+  ]
+}

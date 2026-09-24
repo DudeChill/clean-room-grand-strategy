@@ -1,0 +1,6 @@
+{
+  "laws": [
+    {"key": "mod_hint_law", "name": "Hint Law (early)", "kind": 0, "level": 4, "cost": 20.0,
+     "modifiers": {"RecruitablePopulation": 0.02}}
+  ]
+}

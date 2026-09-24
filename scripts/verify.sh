@@ -65,6 +65,9 @@ check "inspect-country" sh -c "'$game' --scenario '$scenario' --days 5 --quiet -
 check "inspect-province" sh -c "'$game' --scenario '$scenario' --days 5 --quiet --inspect-province 3 | grep -q 'PROVINCE 3'"
 check "inspect-battle" sh -c "'$game' --scenario '$scenario' --days 5 --quiet --inspect-battle 0 | grep -qE 'no battle|BATTLE'"
 
+echo "== 8. content validation (MOD-002, MOD-003) =="
+check "content validator: base tree, data/mods, tests/mods fixtures" env GAME="$game" scripts/validate-content.sh
+
 echo
 echo "==== verification summary ===="
 printf '%s\n' "${results[@]}"

@@ -1,0 +1,6 @@
+{
+  "laws": [
+    {"key": "mod_chain_law", "name": "Chain Law (base)", "kind": 2, "level": 3, "cost": 10.0,
+     "modifiers": {"ResearchSpeed": 0.01}}
+  ]
+}

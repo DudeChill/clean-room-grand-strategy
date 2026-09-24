@@ -1,3 +1,28 @@
+## 2026-09-24 - v0.9.0: a real mod layer, and a validator that already caught a bug
+
+Modding was the last named engine requirement without an implementation. Content mods now
+load after the base tree in a deterministic order (dependencies first, then `load_after`
+hints, ties broken by name), override definitions by key, append with `add:`, and can take
+a whole table for themselves with `replace_paths`. Every decision is reported:
+`mod example_mod: equipment assault_rifles_1: added`,
+`mod example_mod: equipment infantry_equipment_1: replaced`,
+`mod example_mod: technologies assault_rifle_development: added`.
+
+A mod that fails validation is skipped as a whole - never half-applied - and a normal run
+with a broken mod refuses to start rather than silently running without it. The same code
+path backs `game --validate-content`, which prints the report, runs the world auditor and
+exits non-zero on any diagnostic, so CI cannot drift from what a player would load.
+
+The validator earned its keep before the ink was dry: it rejected the shipped example mod
+because the loader treated an absent optional array as an error, which is a defect that
+would have hit every mod author, not just the example. `tests/mods/` now holds eight
+fixture roots (one per failure and success mode) with a line each saying what it proves,
+`scripts/validate-content.sh` covers thirteen cases and is wired into the release gate, and
+`docs/MODDING.md` documents manifests, ordering, override rules and packaging.
+
+Left open with evidence: MOD-004 (a mod cannot override the scenario or map yet, because
+`load_scenario` does not take mod roots) and the two MINOR AI gaps recorded in v0.8.0.
+
 
 ## 2026-09-24 - v0.8.0: equipment variants, replacement and a properly equipped army
 

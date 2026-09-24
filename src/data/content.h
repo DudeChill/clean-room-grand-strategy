@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/json.h"
+#include "data/mod.h"
 #include "sim/units.h"
 #include "sim/world.h"
 
@@ -382,8 +383,18 @@ struct Content {
 };
 
 // Loads engine constants + equipment + technologies + laws + building definitions.
-// Returns false when a hard error occurred (missing file, duplicate id).
-bool load_content(const std::string& data_root, Content* out, std::string* err);
+// Returns false when a hard error occurred (missing base file, duplicate id).
+//
+// `mod_roots` are mods roots (each holding `<root>/<mod>/mod.json`), exactly as the
+// CLI `--mods` takes them; they are discovered, ordered deterministically and merged
+// after the base content. A mod that fails validation is skipped as a whole and its
+// diagnostics are appended to Content::load_errors (and to `report` when one is
+// passed) — it never leaves half-applied content behind. An empty list loads the
+// base content alone. Definitions already present are replaced in place, entries
+// marked `"add"` append, and `replace_paths` tables come only from that mod.
+bool load_content(const std::string& data_root, Content* out, std::string* err,
+                  const std::vector<std::string>& mod_roots = {},
+                  ModLoadReport* report = nullptr);
 
 // Loads a scenario (map, states, countries, starting industry and armies) into a
 // freshly constructed world. Country/province/state data is data-driven.

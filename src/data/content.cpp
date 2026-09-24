@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include "data/mod.h"
+
 namespace hoi {
 namespace {
 
@@ -63,6 +65,11 @@ int match_building_kind(const std::string& key) {
         static_cast<int>(BuildingKind::Count), key);
 }
 
+int match_resource(const std::string& key) {
+    return match_enum_name([](int i) { return resource_name(static_cast<Resource>(i)); },
+                           RESOURCE_COUNT, key);
+}
+
 // Parses a modifier object: {"DivisionAttack": 0.05, ...}.
 Modifiers parse_modifiers(const Json& j, std::vector<std::string>* errors,
                           const std::string& file, const std::string& key) {
@@ -85,8 +92,7 @@ void parse_resource_costs(const Json& j, double out[RESOURCE_COUNT],
     for (int i = 0; i < RESOURCE_COUNT; ++i) out[i] = 0.0;
     if (!j.is_object()) return;
     for (const auto& item : j.object_items()) {
-        const int idx = match_enum_name([](int i) { return resource_name(static_cast<Resource>(i)); },
-                                        RESOURCE_COUNT, item.first);
+        const int idx = match_resource(item.first);
         if (idx < 0) {
             errors->push_back(file + ":" + key + ": unknown resource " + item.first);
             continue;
@@ -496,6 +502,720 @@ std::set<std::string> collect_state_keys(const std::string& root) {
     return keys;
 }
 
+// ---------------------------------------------------------------- mod layer --
+//
+// Content is assembled before it is parsed: every table is one document that the
+// mods merge into, so the parsing/validation passes below see a single, already
+// resolved view and never have to know where a definition came from. A mod that
+// fails validation is rejected before any of its files touch that view, so a bad
+// mod cannot leave half-applied content behind.
+
+enum class VKind { Any, Num, Str, Bool, Arr, Obj };
+
+struct VField {
+    const char* name;
+    VKind kind;
+};
+
+const char* kind_name(VKind k) {
+    switch (k) {
+        case VKind::Num: return "a number";
+        case VKind::Str: return "a string";
+        case VKind::Bool: return "true or false";
+        case VKind::Arr: return "an array";
+        case VKind::Obj: return "an object";
+        case VKind::Any: break;
+    }
+    return "a value";
+}
+
+// One keyed content table: `path` is relative to the data root, `array` the member
+// holding its entries (`focuses` is a directory of files with the same shape).
+struct ContentTable {
+    const char* name;
+    const char* path;
+    const char* array;
+    bool directory;
+};
+
+const std::vector<ContentTable>& content_tables() {
+    static const std::vector<ContentTable> kTables = {
+        {"constants", "common/constants.json", "", false},
+        {"equipment", "common/equipment.json", "equipment", false},
+        {"buildings", "common/buildings.json", "buildings", false},
+        {"technologies", "common/technologies.json", "technologies", false},
+        {"laws", "common/laws.json", "laws", false},
+        {"templates", "common/templates.json", "templates", false},
+        {"focuses", "common/focuses", "focuses", true},
+        {"events", "common/events.json", "events", false},
+        {"decisions", "common/decisions.json", "decisions", false},
+        {"spirits", "common/spirits.json", "spirits", false},
+        {"advisors", "common/advisors.json", "advisors", false},
+        {"components", "common/components.json", "components", false},
+    };
+    return kTables;
+}
+
+const ContentTable* table_by_name(const std::string& name) {
+    for (const ContentTable& t : content_tables()) {
+        if (name == t.name) return &t;
+    }
+    return nullptr;
+}
+
+// `replace_paths` and mod data files both accept a logical table name ("equipment")
+// or a data path ("common/equipment.json", "common/focuses/x.json") so the natural
+// spelling of either side works.
+const ContentTable* table_by_reference(const std::string& ref) {
+    if (const ContentTable* t = table_by_name(ref)) return t;
+    for (const ContentTable& t : content_tables()) {
+        const std::string path = t.path;
+        if (ref == path) return &t;
+        if (t.directory && ref.rfind(path + "/", 0) == 0) return &t;
+    }
+    return nullptr;
+}
+
+// A .json file inside a mod is valid only when its path names a table.
+const ContentTable* table_by_file(const std::string& rel) {
+    for (const ContentTable& t : content_tables()) {
+        const std::string path = t.path;
+        if (!t.directory) {
+            if (rel == path) return &t;
+        } else if (rel.rfind(path + "/", 0) == 0 && rel.size() > path.size() + 1 &&
+                   rel.compare(rel.size() - 5, 5, ".json") == 0) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+bool required_table(const std::string& name) {
+    return name == "constants" || name == "equipment" || name == "buildings" ||
+           name == "technologies" || name == "laws" || name == "templates";
+}
+
+// The fields a definition may carry, derived from what the parser below reads.
+// A field that is absent is fine; a field that is present with the wrong type, or a
+// field the parser would ignore, is an error in a mod.
+const std::vector<VField>& table_fields(const std::string& table) {
+    static const std::map<std::string, std::vector<VField>> kFields = {
+        {"constants", {}},  // validated against the engine's known constant set
+        {"equipment",
+         {{"key", VKind::Str},        {"name", VKind::Str},       {"category", VKind::Str},
+          {"year", VKind::Num},       {"archetype", VKind::Str},  {"is_archetype", VKind::Bool},
+          {"soft_attack", VKind::Num}, {"hard_attack", VKind::Num}, {"air_attack", VKind::Num},
+          {"air_defence", VKind::Num}, {"ground_attack", VKind::Num}, {"agility", VKind::Num},
+          {"range", VKind::Num},      {"naval_attack", VKind::Num}, {"torpedo_attack", VKind::Num},
+          {"sub_detection", VKind::Num}, {"detection", VKind::Num}, {"visibility", VKind::Num},
+          {"defense", VKind::Num},    {"breakthrough", VKind::Num}, {"armor", VKind::Num},
+          {"piercing", VKind::Num},   {"hardness", VKind::Num},    {"reliability", VKind::Num},
+          {"speed", VKind::Num},      {"max_strength", VKind::Num}, {"organization", VKind::Num},
+          {"build_cost", VKind::Num}, {"fuel_use", VKind::Num},    {"supply_use", VKind::Num},
+          {"manpower", VKind::Num},   {"resources", VKind::Obj}}},
+        {"buildings",
+         {{"key", VKind::Str},   {"name", VKind::Str},     {"kind", VKind::Str},
+          {"base_cost", VKind::Num}, {"per_state", VKind::Bool}, {"max_level", VKind::Num}}},
+        {"technologies",
+         {{"key", VKind::Str},        {"name", VKind::Str},        {"category", VKind::Str},
+          {"year", VKind::Num},       {"cost_days", VKind::Num},   {"modifiers", VKind::Obj},
+          {"prerequisites", VKind::Arr}, {"unlock_equipment", VKind::Arr},
+          {"unlock_buildings", VKind::Arr}}},
+        {"laws",
+         {{"key", VKind::Str},      {"name", VKind::Str},        {"kind", VKind::Num},
+          {"level", VKind::Num},    {"cost", VKind::Num},        {"modifiers", VKind::Obj},
+          {"requires_law", VKind::Str}, {"requires_level", VKind::Num}}},
+        {"templates",
+         {{"key", VKind::Str}, {"name", VKind::Str}, {"train_days", VKind::Num},
+          {"battalions", VKind::Arr}}},
+        {"focuses",
+         {{"key", VKind::Str},            {"name", VKind::Str},       {"tree", VKind::Str},
+          {"x", VKind::Num},              {"y", VKind::Num},          {"days", VKind::Num},
+          {"prerequisites", VKind::Arr},  {"mutually_exclusive", VKind::Arr},
+          {"available", VKind::Obj},      {"bypass", VKind::Obj},     {"effects", VKind::Obj},
+          {"ai_weight", VKind::Num}}},
+        {"events",
+         {{"key", VKind::Str},      {"title", VKind::Str},        {"description", VKind::Str},
+          {"fire_only_once", VKind::Bool}, {"major", VKind::Bool}, {"trigger", VKind::Obj},
+          {"immediate", VKind::Obj}, {"options", VKind::Arr}}},
+        {"decisions",
+         {{"key", VKind::Str},         {"name", VKind::Str},      {"description", VKind::Str},
+          {"category", VKind::Num},    {"targets_state", VKind::Bool}, {"cost_pp", VKind::Num},
+          {"days_remove", VKind::Num}, {"days_cooldown", VKind::Num},
+          {"visible", VKind::Obj},     {"available", VKind::Obj}, {"effects", VKind::Obj},
+          {"remove_effect", VKind::Obj}, {"ai_weight", VKind::Num}}},
+        {"spirits",
+         {{"key", VKind::Str},  {"name", VKind::Str}, {"description", VKind::Str},
+          {"slots", VKind::Num}, {"available", VKind::Obj}, {"modifiers", VKind::Obj},
+          {"effects", VKind::Obj}}},
+        {"advisors",
+         {{"key", VKind::Str},  {"name", VKind::Str}, {"description", VKind::Str},
+          {"cost_pp", VKind::Num}, {"available", VKind::Obj}, {"modifiers", VKind::Obj}}},
+        {"components",
+         {{"key", VKind::Str},          {"name", VKind::Str},        {"slot", VKind::Str},
+          {"category", VKind::Str},     {"year", VKind::Num},        {"soft_attack", VKind::Num},
+          {"hard_attack", VKind::Num},  {"air_attack", VKind::Num},  {"air_defence", VKind::Num},
+          {"ground_attack", VKind::Num}, {"agility", VKind::Num},    {"armor", VKind::Num},
+          {"piercing", VKind::Num},     {"defense", VKind::Num},     {"breakthrough", VKind::Num},
+          {"hardness", VKind::Num},     {"max_strength", VKind::Num}, {"organization", VKind::Num},
+          {"speed", VKind::Num},        {"reliability", VKind::Num}, {"range", VKind::Num},
+          {"detection", VKind::Num},    {"sub_detection", VKind::Num},
+          {"naval_attack", VKind::Num}, {"torpedo_attack", VKind::Num},
+          {"visibility", VKind::Num},   {"build_cost_add", VKind::Num},
+          {"cost_multiplier", VKind::Num}, {"fuel_use", VKind::Num}, {"supply_use", VKind::Num},
+          {"manpower", VKind::Num},     {"resources", VKind::Obj},   {"available", VKind::Obj}}},
+    };
+    auto it = kFields.find(table);
+    return it == kFields.end() ? kFields.at("constants") : it->second;
+}
+
+bool kind_ok(const Json& v, VKind k) {
+    if (v.is_null()) return true;  // optional blocks may be declared null
+    switch (k) {
+        case VKind::Any: return true;
+        case VKind::Num: return v.is_number();
+        case VKind::Str: return v.is_string();
+        case VKind::Bool: return v.is_bool();
+        case VKind::Arr: return v.is_array();
+        case VKind::Obj: return v.is_object();
+    }
+    return false;
+}
+
+void check_named_numbers(const Json& obj, const char* what,
+                         int (*known)(const std::string&),
+                         std::vector<std::string>* reasons) {
+    if (obj.is_null()) return;
+    if (!obj.is_object()) {
+        reasons->push_back(std::string(what) + " must be an object");
+        return;
+    }
+    for (const auto& item : obj.object_items()) {
+        if (known(item.first) < 0) {
+            reasons->push_back("unknown " + std::string(what) + " '" + item.first + "'");
+        } else if (!item.second.is_number()) {
+            reasons->push_back(std::string(what) + " '" + item.first + "' must be a number");
+        }
+    }
+}
+
+void check_string_array(const Json& arr, const char* what, std::vector<std::string>* reasons) {
+    if (arr.is_null()) return;  // an absent optional array is not an error
+    if (!arr.is_array()) {
+        reasons->push_back(std::string(what) + " must be an array of strings");
+        return;
+    }
+    for (size_t i = 0; i < arr.size(); ++i) {
+        if (!arr[i].is_string() || arr[i].as_string().empty()) {
+            reasons->push_back(std::string(what) + "[" + std::to_string(i) +
+                               "] must be a non-empty string");
+        }
+    }
+}
+
+void check_entry_array(const Json& arr, const char* what, const std::vector<VField>& fields,
+                       std::vector<std::string>* reasons) {
+    if (arr.is_null()) return;  // an absent optional array is not an error
+    if (!arr.is_array()) {
+        reasons->push_back(std::string(what) + " must be an array");
+        return;
+    }
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const Json& e = arr[i];
+        if (!e.is_object()) {
+            reasons->push_back(std::string(what) + "[" + std::to_string(i) + "] must be an object");
+            continue;
+        }
+        for (const auto& item : e.object_items()) {
+            const VField* f = nullptr;
+            for (const VField& v : fields) {
+                if (item.first == v.name) {
+                    f = &v;
+                    break;
+                }
+            }
+            if (f == nullptr) {
+                reasons->push_back(std::string(what) + "[" + std::to_string(i) +
+                                   "]: unknown key '" + item.first + "'");
+            } else if (!kind_ok(item.second, f->kind)) {
+                reasons->push_back(std::string(what) + "[" + std::to_string(i) + "]." +
+                                   item.first + " expects " + kind_name(f->kind));
+            }
+        }
+    }
+}
+
+// Validates one entry of a mod against the fields the parser reads. `reasons` gets
+// one message per problem; an empty list means the entry is safe to merge.
+void validate_mod_entry(const std::string& table, const Json& e, std::vector<std::string>* reasons) {
+    const std::vector<VField>& fields = table_fields(table);
+    for (const auto& item : e.object_items()) {
+        if (item.first == "add") {
+            if (!item.second.is_bool()) reasons->push_back("add must be true or false");
+            continue;
+        }
+        const VField* f = nullptr;
+        for (const VField& v : fields) {
+            if (item.first == v.name) {
+                f = &v;
+                break;
+            }
+        }
+        if (f == nullptr) {
+            reasons->push_back("unknown key '" + item.first + "'");
+        } else if (!kind_ok(item.second, f->kind)) {
+            reasons->push_back("key '" + item.first + "' expects " + kind_name(f->kind));
+        }
+    }
+    if (table == "equipment" || table == "components") {
+        check_named_numbers(e["resources"], "resource", match_resource, reasons);
+    }
+    if (table == "technologies" || table == "laws" || table == "spirits" ||
+        table == "advisors") {
+        check_named_numbers(e["modifiers"], "modifier", match_modifier, reasons);
+    }
+    if (table == "technologies") {
+        check_string_array(e["prerequisites"], "prerequisites", reasons);
+        check_string_array(e["unlock_equipment"], "unlock_equipment", reasons);
+        check_string_array(e["unlock_buildings"], "unlock_buildings", reasons);
+    }
+    if (table == "focuses") {
+        check_string_array(e["prerequisites"], "prerequisites", reasons);
+        check_string_array(e["mutually_exclusive"], "mutually_exclusive", reasons);
+    }
+    if (table == "templates") {
+        static const std::vector<VField> kBattalion = {
+            {"equipment", VKind::Str}, {"count", VKind::Num}, {"support", VKind::Bool}};
+        check_entry_array(e["battalions"], "battalions", kBattalion, reasons);
+    }
+    if (table == "events") {
+        static const std::vector<VField> kOption = {
+            {"name", VKind::Str}, {"effects", VKind::Obj}, {"ai_weight", VKind::Num}};
+        check_entry_array(e["options"], "options", kOption, reasons);
+    }
+}
+
+// One content file merged from the base data root and its mods.
+struct SourceFile {
+    std::string rel;
+    std::string full;  // path used in diagnostics
+    std::string table;
+    Json doc;
+    std::vector<std::string> origin;  // per entry: which file defined it
+};
+
+SourceFile* find_source(std::vector<SourceFile>* files, const std::string& rel) {
+    for (SourceFile& f : *files) {
+        if (f.rel == rel) return &f;
+    }
+    return nullptr;
+}
+
+// Loads the base data root. Required tables must exist exactly as before mods.
+bool load_base_source(const std::string& root, std::vector<SourceFile>* files, std::string* err) {
+    namespace fs = std::filesystem;
+    for (const ContentTable& t : content_tables()) {
+        if (t.directory) {
+            std::error_code ec;
+            const std::string dir = root + "/" + t.path;
+            std::vector<std::string> names;
+            if (fs::is_directory(dir, ec)) {
+                for (const fs::directory_entry& entry : fs::directory_iterator(dir, ec)) {
+                    if (!entry.is_regular_file(ec)) continue;
+                    const std::string p = entry.path().string();
+                    if (p.size() > 5 && p.compare(p.size() - 5, 5, ".json") == 0) {
+                        names.push_back(entry.path().filename().string());
+                    }
+                }
+            }
+            std::sort(names.begin(), names.end());
+            for (const std::string& name : names) {
+                SourceFile sf;
+                sf.rel = std::string(t.path) + "/" + name;
+                sf.full = dir + "/" + name;
+                sf.table = t.name;
+                if (!load_json_file(sf.full, &sf.doc, err)) return false;
+                const Json& arr = sf.doc[t.array];
+                for (size_t i = 0; i < (arr.is_array() ? arr.size() : 0); ++i) {
+                    sf.origin.push_back(sf.full);
+                }
+                files->push_back(std::move(sf));
+            }
+            continue;
+        }
+        const std::string full = root + "/" + t.path;
+        if (!fs::exists(full) && !required_table(t.name)) continue;
+        SourceFile sf;
+        sf.rel = t.path;
+        sf.full = full;
+        sf.table = t.name;
+        if (!load_json_file(full, &sf.doc, err)) return false;
+        if (t.array[0] != '\0') {
+            const Json& arr = sf.doc[t.array];
+            for (size_t i = 0; i < (arr.is_array() ? arr.size() : 0); ++i) {
+                sf.origin.push_back(full);
+            }
+        }
+        files->push_back(std::move(sf));
+    }
+    return true;
+}
+
+// ------------------------------------------------------------- mod apply ----
+
+struct MergeEntry {
+    const ContentTable* table;
+    std::string rel;   // destination when the entry appends
+    std::string full;
+    std::string key;   // effective key (a leading `add_` is stripped)
+    std::string tree;  // focus files: the file's default tree, kept when the
+                       // destination file has to be created for an addition
+    Json entry;        // normalized: `add` removed, key set to the effective key
+    bool append = false;
+};
+
+// Collects the .json files a mod ships under <mod>/common, in path order.
+void collect_mod_files(const ModManifest& mod, std::vector<std::string>* rels,
+                       std::vector<std::string>* fulls) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const std::string base = mod.directory + "/";
+    std::vector<std::string> rel;
+    std::vector<std::string> full;
+    const std::string dir = mod.directory + "/common";
+    if (fs::is_directory(dir, ec)) {
+        for (const fs::directory_entry& entry : fs::recursive_directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file(ec)) continue;
+            const std::string p = entry.path().string();
+            if (p.size() <= 5 || p.compare(p.size() - 5, 5, ".json") != 0) continue;
+            std::string r = p.substr(base.size());
+            for (char& ch : r) {
+                if (ch == '\\') ch = '/';
+            }
+            rel.push_back(r);
+            full.push_back(p);
+        }
+    }
+    // Deterministic order independent of the directory iterator.
+    std::vector<size_t> order(rel.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&rel](size_t a, size_t b) { return rel[a] < rel[b]; });
+    for (size_t i : order) {
+        rels->push_back(rel[i]);
+        fulls->push_back(full[i]);
+    }
+}
+
+bool is_add_key(const std::string& key) {
+    return key.size() > 4 && key.compare(0, 4, "add_") == 0;
+}
+
+// Applies one mod to the merged source. Returns false when the mod was rejected:
+// nothing of it is merged and `events` holds one error per problem.
+bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
+                   std::vector<ModLoadEvent>* events) {
+    const auto event = [&](const std::string& table, const std::string& key,
+                           const std::string& action, const std::string& detail) {
+        events->push_back(ModLoadEvent{mod.name, table, key, action, detail});
+    };
+
+    std::vector<std::string> rels;
+    std::vector<std::string> fulls;
+    collect_mod_files(mod, &rels, &fulls);
+
+    for (const std::string& ref : mod.replace_paths) {
+        if (table_by_reference(ref) == nullptr) {
+            event(ref, "", "error", "replace_paths names unknown table '" + ref + "'");
+        }
+    }
+    bool skip = events->size() > 0;
+
+    // ---- phase 1: parse and validate every file before anything is merged ----
+    std::vector<MergeEntry> plan;
+    std::map<std::string, std::set<std::string>> seen;  // table -> keys from this mod
+    for (size_t fi = 0; fi < rels.size(); ++fi) {
+        const std::string& rel = rels[fi];
+        const std::string& full = fulls[fi];
+        const ContentTable* table = table_by_file(rel);
+        if (table == nullptr) {
+            event(rel, "", "unknown_file", "");
+            skip = true;
+            continue;
+        }
+        Json doc;
+        std::string parse_err;
+        if (!Json::parse_file(full, &doc, &parse_err)) {
+            event(rel, "", "parse", parse_err.empty() ? "cannot read file" : parse_err);
+            skip = true;
+            continue;
+        }
+        if (!doc.is_object()) {
+            event(rel, "", "error", "content file must be an object");
+            skip = true;
+            continue;
+        }
+        if (table->array[0] == '\0') {
+            // constants: every key must be one the engine reads.
+            const SourceFile* base = find_source(files, table->path);
+            for (const auto& item : doc.object_items()) {
+                if (item.first == "add") continue;
+                if (!item.second.is_number()) {
+                    event(table->name, item.first, "error", "constant must be a number");
+                    skip = true;
+                    continue;
+                }
+                if (base != nullptr && !base->doc.has(item.first)) {
+                    event(table->name, item.first, "error", "unknown constant");
+                    skip = true;
+                    continue;
+                }
+                std::set<std::string>& keys = seen[table->name];
+                if (!keys.insert(item.first).second) {
+                    event(table->name, item.first, "error", "duplicate key in this mod");
+                    skip = true;
+                    continue;
+                }
+                MergeEntry me;
+                me.table = table;
+                me.rel = rel;
+                me.full = full;
+                me.key = item.first;
+                me.entry = item.second;
+                plan.push_back(std::move(me));
+            }
+            continue;
+        }
+
+        // An array table accepts `<array>`, `add_<array>` and (focuses) `tree`.
+        const std::string add_member = std::string("add_") + table->array;
+        for (const auto& item : doc.object_items()) {
+            const std::string& k = item.first;
+            const bool is_entries = k == table->array;
+            const bool is_add = k == add_member;
+            const bool is_tree = std::string(table->name) == "focuses" && k == "tree";
+            if (!is_entries && !is_add && !is_tree) {
+                event(table->name, k, "error", "unknown table member '" + k + "'");
+                skip = true;
+                continue;
+            }
+            if (is_tree) {
+                if (!item.second.is_string()) {
+                    event(table->name, k, "error", "tree must be a string");
+                    skip = true;
+                }
+                continue;
+            }
+            if (!item.second.is_array()) {
+                event(table->name, k, "error", "expected an array");
+                skip = true;
+                continue;
+            }
+            const Json& arr = item.second;
+            for (size_t i = 0; i < arr.size(); ++i) {
+                const Json& e = arr[i];
+                if (!e.is_object()) {
+                    event(table->name, "<entry " + std::to_string(i) + ">", "error",
+                          "entry must be an object");
+                    skip = true;
+                    continue;
+                }
+                std::string key = e["key"].as_string();
+                if (key.empty()) {
+                    event(table->name, "<entry " + std::to_string(i) + ">", "error",
+                          "missing key");
+                    skip = true;
+                    continue;
+                }
+                MergeEntry me;
+                me.table = table;
+                me.rel = rel;
+                me.full = full;
+                me.tree = doc["tree"].as_string();
+                me.append = is_add || e["add"].as_bool(false) || is_add_key(key);
+                if (is_add_key(key)) key = key.substr(4);
+                me.key = key;
+                std::vector<std::string> reasons;
+                validate_mod_entry(table->name, e, &reasons);
+                for (const std::string& r : reasons) {
+                    event(table->name, key, "error", r);
+                    skip = true;
+                }
+                std::set<std::string>& keys = seen[table->name];
+                if (!keys.insert(key).second) {
+                    event(table->name, key, "error", "duplicate key in this mod");
+                    skip = true;
+                }
+                if (me.append) {
+                    for (const SourceFile& sf : *files) {
+                        if (sf.table != table->name || table->array[0] == '\0') continue;
+                        const Json& arr2 = sf.doc[table->array];
+                        for (size_t j = 0; j < (arr2.is_array() ? arr2.size() : 0); ++j) {
+                            if (arr2[j]["key"].as_string() == key) {
+                                event(table->name, key, "error",
+                                      "addition collides with an existing definition");
+                                skip = true;
+                            }
+                        }
+                    }
+                }
+                Json normalized = Json::object();
+                for (const auto& kv : e.object_items()) {
+                    if (kv.first == "add") continue;
+                    normalized.set(kv.first, kv.second);
+                }
+                normalized.set("key", Json(key));
+                me.entry = std::move(normalized);
+                plan.push_back(std::move(me));
+            }
+        }
+    }
+    if (skip) return false;
+
+    // ---- phase 2: replace_paths clears the tables this mod owns outright ----
+    for (const std::string& ref : mod.replace_paths) {
+        const ContentTable* t = table_by_reference(ref);
+        if (t == nullptr) continue;
+        for (SourceFile& sf : *files) {
+            if (sf.table != t->name) continue;
+            if (t->array[0] == '\0') {
+                sf.doc = Json::object();
+            } else {
+                sf.doc.set(t->array, Json::array());
+            }
+            sf.origin.clear();
+        }
+    }
+
+    // ---- phase 3: merge ----
+    for (const MergeEntry& me : plan) {
+        const ContentTable& t = *me.table;
+        std::string owner;
+        size_t owner_index = 0;
+        bool found = false;
+        if (t.array[0] != '\0') {
+            for (const SourceFile& sf : *files) {
+                if (sf.table != t.name) continue;
+                const Json& arr = sf.doc[t.array];
+                for (size_t j = 0; j < (arr.is_array() ? arr.size() : 0); ++j) {
+                    if (arr[j]["key"].as_string() == me.key) {
+                        owner = sf.rel;
+                        owner_index = j;
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) break;
+            }
+        }
+        if (t.array[0] == '\0') {
+            SourceFile* dst = find_source(files, t.path);
+            const bool existed = dst != nullptr && dst->doc.has(me.key);
+            if (dst == nullptr) {
+                SourceFile sf;
+                sf.rel = t.path;
+                sf.full = me.full;
+                sf.table = t.name;
+                sf.doc = Json::object();
+                files->push_back(std::move(sf));
+                dst = &files->back();
+            }
+            dst->doc.set(me.key, me.entry);
+            event(t.name, me.key, existed ? "replaced" : "added", "");
+            continue;
+        }
+        if (found) {
+            SourceFile* dst = find_source(files, owner);
+            Json arr = dst->doc[t.array];
+            Json rebuilt = Json::array();
+            for (size_t j = 0; j < arr.size(); ++j) {
+                rebuilt.push_back(j == owner_index ? me.entry : arr[j]);
+            }
+            dst->doc.set(t.array, std::move(rebuilt));
+            dst->origin[owner_index] = me.full;
+            event(t.name, me.key, "replaced", "");
+        } else {
+            SourceFile* dst = find_source(files, me.rel);
+            if (dst == nullptr) {
+                SourceFile sf;
+                sf.rel = me.rel;
+                sf.full = me.full;
+                sf.table = t.name;
+                sf.doc = Json::object();
+                // A focus file's `tree` is the default for its entries.
+                if (t.name == std::string("focuses")) {
+                    sf.doc.set("tree", Json(me.tree.empty() ? std::string("shared") : me.tree));
+                }
+                files->push_back(std::move(sf));
+                dst = &files->back();
+            }
+            Json arr = dst->doc[t.array];
+            if (!arr.is_array()) arr = Json::array();
+            arr.push_back(me.entry);
+            dst->doc.set(t.array, std::move(arr));
+            dst->origin.push_back(me.full);
+            event(t.name, me.key, "added", "");
+        }
+    }
+
+    std::stable_sort(events->begin(), events->end(),
+                     [](const ModLoadEvent& a, const ModLoadEvent& b) {
+                         if (a.table != b.table) return a.table < b.table;
+                         return a.key < b.key;
+                     });
+    return true;
+}
+
+void append_lines(const std::string& text, std::vector<std::string>* out) {
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t nl = text.find('\n', start);
+        const std::string line =
+            text.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+        if (!line.empty()) out->push_back(line);
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+}
+
+// Discovers every mods root, resolves the global load order and merges the accepted
+// mods into `files`. A rejected mod contributes nothing; its diagnostics land in
+// `diags` (and in the report when one was passed).
+void apply_mods(const std::vector<std::string>& mod_roots, std::vector<SourceFile>* files,
+                ModLoadReport* report, std::vector<std::string>* diags) {
+    if (mod_roots.empty()) return;
+    std::vector<ModManifest> manifests;
+    std::vector<std::string> notes;
+    for (const std::string& root : mod_roots) {
+        std::string err;
+        discover_mods(root, &manifests, &err);
+        append_lines(err, &notes);
+    }
+    std::string order_err;
+    const std::vector<const ModManifest*> order = resolve_load_order(manifests, &order_err);
+    append_lines(order_err, &notes);
+
+    if (report != nullptr) {
+        for (const std::string& n : notes) report->notes.push_back(n);
+        for (const ModManifest* m : order) report->load_order.push_back(m->name);
+    }
+    for (const std::string& n : notes) {
+        if (report != nullptr) report->errors.push_back(n);
+        diags->push_back(n);
+    }
+    for (const ModManifest* m : order) {
+        std::vector<ModLoadEvent> events;
+        const bool applied = apply_one_mod(*m, files, &events);
+        for (const ModLoadEvent& e : events) {
+            if (report != nullptr) report->events.push_back(e);
+            if (applied) continue;
+            const std::string line = mod_event_text(e);
+            if (report != nullptr) report->errors.push_back(line);
+            diags->push_back(line);
+        }
+    }
+}
+
 }  // namespace
 
 SimConstants SimConstants::from_json(const Json& j) {
@@ -665,42 +1385,52 @@ SimConstants SimConstants::from_json(const Json& j) {
     return c;
 }
 
-bool load_content(const std::string& data_root, Content* out, std::string* err) {
+bool load_content(const std::string& data_root, Content* out, std::string* err,
+                  const std::vector<std::string>& mod_roots, ModLoadReport* report) {
     if (out == nullptr) {
         if (err) *err = "load_content: null output";
         return false;
+    }
+    if (report != nullptr) {
+        report->events.clear();
+        report->notes.clear();
+        report->errors.clear();
+        report->load_order.clear();
     }
     out->load_errors.clear();
     std::vector<std::string>& errors = out->load_errors;
     std::string root = data_root;
     while (!root.empty() && (root.back() == '/' || root.back() == '\\')) root.pop_back();
 
-    const std::string f_constants = root + "/common/constants.json";
-    const std::string f_equipment = root + "/common/equipment.json";
-    const std::string f_buildings = root + "/common/buildings.json";
-    const std::string f_technologies = root + "/common/technologies.json";
-    const std::string f_laws = root + "/common/laws.json";
-    const std::string f_templates = root + "/common/templates.json";
-
-    Json doc;
+    // The base data root and every accepted mod are merged into one source before
+    // anything is parsed, so a rejected mod can never leave half-applied content.
+    std::vector<SourceFile> files;
     std::string file_err;
+    if (!load_base_source(root, &files, &file_err)) {
+        errors.push_back(file_err);
+        if (err) *err = file_err;
+        return false;
+    }
+    std::vector<std::string> mod_diags;
+    apply_mods(mod_roots, &files, report, &mod_diags);
+    errors.insert(errors.end(), mod_diags.begin(), mod_diags.end());
 
     // ---- constants -------------------------------------------------------
-    if (!load_json_file(f_constants, &doc, &file_err)) {
-        errors.push_back(file_err);
-        if (err) *err = file_err;
+    const SourceFile* sf_constants = find_source(&files, "common/constants.json");
+    const Json* doc_constants = sf_constants == nullptr ? nullptr : &sf_constants->doc;
+    if (doc_constants == nullptr) {
+        const std::string msg = root + "/common/constants.json: cannot read file";
+        errors.push_back(msg);
+        if (err) *err = msg;
         return false;
     }
-    out->constants = SimConstants::from_json(doc);
+    out->constants = SimConstants::from_json(*doc_constants);
 
     // ---- equipment -------------------------------------------------------
-    if (!load_json_file(f_equipment, &doc, &file_err)) {
-        errors.push_back(file_err);
-        if (err) *err = file_err;
-        return false;
-    }
     {
-        const Json& arr = doc["equipment"];
+        const SourceFile* sf = find_source(&files, "common/equipment.json");
+        const std::string f_equipment = sf == nullptr ? root + "/common/equipment.json" : sf->full;
+        const Json& arr = (*sf).doc["equipment"];
         if (!arr.is_array()) {
             const std::string msg = f_equipment + ":equipment: expected an array";
             errors.push_back(msg);
@@ -709,16 +1439,17 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         }
         for (size_t i = 0; i < arr.size(); ++i) {
             const Json& e = arr[i];
+            const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_equipment;
             const std::string key = e["key"].as_string();
             if (key.empty()) {
-                const std::string msg = f_equipment + ":<entry " + std::to_string(i) +
+                const std::string msg = f_entry + ":<entry " + std::to_string(i) +
                                         ">: missing key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
             }
             if (out->equipment_by_key.count(key) != 0) {
-                const std::string msg = f_equipment + ":" + key + ": duplicate equipment key";
+                const std::string msg = f_entry + ":" + key + ": duplicate equipment key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
@@ -730,7 +1461,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             const std::string category_name = e["category"].as_string();
             const int cat = match_equipment_category(category_name);
             if (cat < 0 && !category_name.empty()) {
-                errors.push_back(f_equipment + ":" + key + ": unknown category " + category_name);
+                errors.push_back(f_entry + ":" + key + ": unknown category " + category_name);
             }
             def.category = cat >= 0 ? static_cast<EquipmentCategory>(cat) : EquipmentCategory::Infantry;
             def.year = static_cast<int>(e["year"].as_int(def.year));
@@ -745,7 +1476,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             auto non_negative = [&](const char* field, double* dst) {
                 const double raw = e.has(field) ? e[field].as_double(*dst) : *dst;
                 if (raw < 0.0) {
-                    errors.push_back(f_equipment + ":" + key + ": negative " + field +
+                    errors.push_back(f_entry + ":" + key + ": negative " + field +
                                      " (" + std::to_string(raw) + ")");
                     *dst = 0.0;
                 } else {
@@ -776,28 +1507,26 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             def.fuel_use = e["fuel_use"].as_double(def.fuel_use);
             def.supply_use = e["supply_use"].as_double(def.supply_use);
             def.manpower = e["manpower"].as_double(def.manpower);
-            parse_resource_costs(e["resources"], def.resources, &errors, f_equipment, key);
+            parse_resource_costs(e["resources"], def.resources, &errors, f_entry, key);
             out->equipment_by_key[key] = def.id;
             out->equipment.push_back(std::move(def));
         }
         // Model archetypes must exist once every entry has an id.
-        for (EquipmentDef& def : out->equipment) {
+        for (size_t i = 0; i < out->equipment.size(); ++i) {
+            EquipmentDef& def = out->equipment[i];
             if (def.archetype.empty()) continue;
             if (out->equipment_by_key.count(def.archetype) == 0) {
-                errors.push_back(f_equipment + ":" + def.key + ": unknown archetype " +
-                                 def.archetype);
+                const std::string& src = i < sf->origin.size() ? sf->origin[i] : f_equipment;
+                errors.push_back(src + ":" + def.key + ": unknown archetype " + def.archetype);
             }
         }
     }
 
     // ---- buildings (before techs: technologies may unlock building keys) ---
-    if (!load_json_file(f_buildings, &doc, &file_err)) {
-        errors.push_back(file_err);
-        if (err) *err = file_err;
-        return false;
-    }
     {
-        const Json& arr = doc["buildings"];
+        const SourceFile* sf = find_source(&files, "common/buildings.json");
+        const std::string f_buildings = sf == nullptr ? root + "/common/buildings.json" : sf->full;
+        const Json& arr = (*sf).doc["buildings"];
         if (!arr.is_array()) {
             const std::string msg = f_buildings + ":buildings: expected an array";
             errors.push_back(msg);
@@ -806,10 +1535,11 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         }
         for (size_t i = 0; i < arr.size(); ++i) {
             const Json& b = arr[i];
+            const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_buildings;
             const std::string key = b["key"].as_string();
             if (key.empty()) {
                 const std::string msg =
-                    f_buildings + ":<entry " + std::to_string(i) + ">: missing key";
+                    f_entry + ":<entry " + std::to_string(i) + ">: missing key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
@@ -820,7 +1550,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             const std::string kind_name = b["kind"].as_string();
             const int kind = match_building_kind(kind_name);
             if (kind < 0) {
-                errors.push_back(f_buildings + ":" + key + ": unknown building kind " + kind_name);
+                errors.push_back(f_entry + ":" + key + ": unknown building kind " + kind_name);
             } else {
                 def.kind = static_cast<BuildingKind>(kind);
             }
@@ -832,12 +1562,12 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
     }
 
     // ---- technologies ----------------------------------------------------
-    if (!load_json_file(f_technologies, &doc, &file_err)) {
-        errors.push_back(file_err);
-        if (err) *err = file_err;
-        return false;
-    }
+    std::vector<std::string> tech_src;
     {
+        const SourceFile* sf = find_source(&files, "common/technologies.json");
+        const std::string f_technologies =
+            sf == nullptr ? root + "/common/technologies.json" : sf->full;
+        const Json& doc = (*sf).doc;
         const Json& arr = doc["technologies"];
         if (!arr.is_array()) {
             const std::string msg = f_technologies + ":technologies: expected an array";
@@ -847,16 +1577,17 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         }
         for (size_t i = 0; i < arr.size(); ++i) {
             const Json& t = arr[i];
+            const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_technologies;
             const std::string key = t["key"].as_string();
             if (key.empty()) {
                 const std::string msg =
-                    f_technologies + ":<entry " + std::to_string(i) + ">: missing key";
+                    f_entry + ":<entry " + std::to_string(i) + ">: missing key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
             }
             if (out->tech_by_key.count(key) != 0) {
-                const std::string msg = f_technologies + ":" + key + ": duplicate technology key";
+                const std::string msg = f_entry + ":" + key + ": duplicate technology key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
@@ -868,7 +1599,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             def.category = t["category"].as_string();
             def.year = static_cast<int>(t["year"].as_int(def.year));
             def.cost_days = t["cost_days"].as_double(def.cost_days);
-            def.modifiers = parse_modifiers(t["modifiers"], &errors, f_technologies, key);
+            def.modifiers = parse_modifiers(t["modifiers"], &errors, f_entry, key);
             const Json& unlocks_eq = t["unlock_equipment"];
             if (unlocks_eq.is_array()) {
                 for (size_t k = 0; k < unlocks_eq.size(); ++k) {
@@ -890,7 +1621,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
                         if (bd.key == bk) { known = true; break; }
                     }
                     if (!known) {
-                        errors.push_back(f_technologies + ":" + key +
+                        errors.push_back(f_entry + ":" + key +
                                          ": unlock_buildings references unknown building " + bk);
                     }
                     def.unlock_buildings.push_back(bk);
@@ -898,6 +1629,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             }
             out->tech_by_key[key] = def.id;
             out->techs.push_back(std::move(def));
+            tech_src.push_back(f_entry);
         }
         // Prerequisites resolve after every tech id exists.
         for (TechDef& def : out->techs) {
@@ -911,8 +1643,9 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
                     if (pk.empty()) continue;
                     auto it = out->tech_by_key.find(pk);
                     if (it == out->tech_by_key.end()) {
-                        errors.push_back(f_technologies + ":" + def.key +
-                                         ": unknown prerequisite " + pk);
+                        const std::string& src =
+                            i < sf->origin.size() ? sf->origin[i] : f_technologies;
+                        errors.push_back(src + ":" + def.key + ": unknown prerequisite " + pk);
                         continue;
                     }
                     def.prerequisites.push_back(it->second);
@@ -923,13 +1656,10 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
     }
 
     // ---- laws ------------------------------------------------------------
-    if (!load_json_file(f_laws, &doc, &file_err)) {
-        errors.push_back(file_err);
-        if (err) *err = file_err;
-        return false;
-    }
     {
-        const Json& arr = doc["laws"];
+        const SourceFile* sf = find_source(&files, "common/laws.json");
+        const std::string f_laws = sf == nullptr ? root + "/common/laws.json" : sf->full;
+        const Json& arr = (*sf).doc["laws"];
         if (!arr.is_array()) {
             const std::string msg = f_laws + ":laws: expected an array";
             errors.push_back(msg);
@@ -938,15 +1668,16 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         }
         for (size_t i = 0; i < arr.size(); ++i) {
             const Json& l = arr[i];
+            const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_laws;
             const std::string key = l["key"].as_string();
             if (key.empty()) {
-                const std::string msg = f_laws + ":<entry " + std::to_string(i) + ">: missing key";
+                const std::string msg = f_entry + ":<entry " + std::to_string(i) + ">: missing key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
             }
             if (out->law_index.count(key) != 0) {
-                const std::string msg = f_laws + ":" + key + ": duplicate law key";
+                const std::string msg = f_entry + ":" + key + ": duplicate law key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
@@ -957,29 +1688,29 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             def.kind = static_cast<int>(l["kind"].as_int(def.kind));
             def.level = static_cast<int>(l["level"].as_int(def.level));
             def.cost = l["cost"].as_double(def.cost);
-            def.modifiers = parse_modifiers(l["modifiers"], &errors, f_laws, key);
+            def.modifiers = parse_modifiers(l["modifiers"], &errors, f_entry, key);
             def.requires_law = l["requires_law"].as_string();
             def.requires_level = static_cast<int>(l["requires_level"].as_int(def.requires_level));
             out->law_index[key] = static_cast<int>(out->laws.size());
             out->laws.push_back(std::move(def));
         }
         // Law prerequisite keys must resolve to laws in the same file.
-        for (const LawDef& def : out->laws) {
+        for (size_t i = 0; i < out->laws.size(); ++i) {
+            const LawDef& def = out->laws[i];
             if (!def.requires_law.empty() && out->law_index.count(def.requires_law) == 0) {
-                errors.push_back(f_laws + ":" + def.key + ": unknown requires_law " +
+                const std::string& src = i < sf->origin.size() ? sf->origin[i] : f_laws;
+                errors.push_back(src + ":" + def.key + ": unknown requires_law " +
                                  def.requires_law);
             }
         }
     }
 
     // ---- division templates ----------------------------------------------
-    if (!load_json_file(f_templates, &doc, &file_err)) {
-        errors.push_back(file_err);
-        if (err) *err = file_err;
-        return false;
-    }
     {
-        const Json& arr = doc["templates"];
+        const SourceFile* sf = find_source(&files, "common/templates.json");
+        const std::string f_templates =
+            sf == nullptr ? root + "/common/templates.json" : sf->full;
+        const Json& arr = (*sf).doc["templates"];
         if (!arr.is_array()) {
             const std::string msg = f_templates + ":templates: expected an array";
             errors.push_back(msg);
@@ -988,16 +1719,17 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         }
         for (size_t i = 0; i < arr.size(); ++i) {
             const Json& t = arr[i];
+            const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_templates;
             const std::string key = t["key"].as_string();
             if (key.empty()) {
                 const std::string msg =
-                    f_templates + ":<entry " + std::to_string(i) + ">: missing key";
+                    f_entry + ":<entry " + std::to_string(i) + ">: missing key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
             }
             if (out->template_by_key.count(key) != 0) {
-                const std::string msg = f_templates + ":" + key + ": duplicate template key";
+                const std::string msg = f_entry + ":" + key + ": duplicate template key";
                 errors.push_back(msg);
                 if (err) *err = msg;
                 return false;
@@ -1014,7 +1746,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
                     const std::string eq_key = entry["equipment"].as_string();
                     const EquipmentId eq = out->equipment_id(eq_key);
                     if (!eq.valid() && !eq_key.empty()) {
-                        errors.push_back(f_templates + ":" + key +
+                        errors.push_back(f_entry + ":" + key +
                                          ": unknown equipment " + eq_key);
                         continue;
                     }
@@ -1023,7 +1755,7 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
                     slot.count = static_cast<int>(entry["count"].as_int(0));
                     slot.support = entry["support"].as_bool(false);
                     if (slot.count <= 0) {
-                        errors.push_back(f_templates + ":" + key +
+                        errors.push_back(f_entry + ":" + key +
                                          ": battalion with non-positive count");
                         continue;
                     }
@@ -1038,293 +1770,271 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
     }
 
     // ---- national focuses ------------------------------------------------
-    // Every data/common/focuses/*.json in sorted file order, so focus indices (and
-    // therefore save files) are stable. Each file is {"tree": "...", "focuses": []}.
+    // Every focus file in source order: base files sorted by path, then mod files in
+    // resolved load order, so focus indices (and therefore save files) are stable.
+    // Each file is {"tree": "...", "focuses": []}.
     std::vector<std::string> focus_src;
-    {
-        namespace fs = std::filesystem;
-        const std::string dir = root + "/common/focuses";
-        std::error_code ec;
-        // Optional content: a minimal data set may ship no focus trees at all.
-        // Only a file that exists and does not parse is a hard error.
-        std::vector<std::string> files;
-        if (fs::is_directory(dir, ec)) {
-            for (const fs::directory_entry& entry : fs::directory_iterator(dir, ec)) {
-                if (!entry.is_regular_file(ec)) continue;
-                const std::string p = entry.path().string();
-                if (p.size() > 5 && p.compare(p.size() - 5, 5, ".json") == 0) files.push_back(p);
-            }
+    for (const SourceFile& sf : files) {
+        if (sf.table != "focuses") continue;
+        const std::string& f = sf.full;
+        const Json& fd = sf.doc;
+        const std::string default_tree = fd["tree"].as_string("shared");
+        const Json& arr = fd["focuses"];
+        if (!arr.is_array()) {
+            errors.push_back(f + ":focuses: expected an array");
+            continue;
         }
-        std::sort(files.begin(), files.end());
-        for (const std::string& f : files) {
-            Json fd;
-            if (!load_json_file(f, &fd, &file_err)) {
-                errors.push_back(file_err);
-                if (err) *err = file_err;
-                return false;
-            }
-            const std::string default_tree = fd["tree"].as_string("shared");
-            const Json& arr = fd["focuses"];
-            if (!arr.is_array()) {
-                errors.push_back(f + ":focuses: expected an array");
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const Json& fj = arr[i];
+            const std::string& f_entry = i < sf.origin.size() ? sf.origin[i] : f;
+            const std::string key = fj["key"].as_string();
+            if (key.empty()) {
+                errors.push_back(f_entry + ":<entry " + std::to_string(i) + ">: missing key");
                 continue;
             }
-            for (size_t i = 0; i < arr.size(); ++i) {
-                const Json& fj = arr[i];
-                const std::string key = fj["key"].as_string();
-                if (key.empty()) {
-                    errors.push_back(f + ":<entry " + std::to_string(i) + ">: missing key");
-                    continue;
-                }
-                if (out->focus_index.count(key) != 0) {
-                    errors.push_back(f + ":" + key + ": duplicate focus key");
-                    continue;
-                }
-                FocusDef def;
-                def.index = static_cast<uint32_t>(out->focuses.size());
-                def.key = key;
-                def.name = fj["name"].as_string(key);
-                def.tree = fj["tree"].as_string(default_tree);
-                def.x = static_cast<int>(fj["x"].as_int(def.x));
-                def.y = static_cast<int>(fj["y"].as_int(def.y));
-                def.days = fj["days"].as_double(def.days);
-                if (!std::isfinite(def.days) || def.days <= 0.0) {
-                    errors.push_back(f + ":" + key + ": days must be a positive number");
-                    def.days = 70.0;
-                }
-                const Json& prereq = fj["prerequisites"];
-                if (prereq.is_array()) {
-                    for (size_t k = 0; k < prereq.size(); ++k) {
-                        const std::string pk = prereq[k].as_string();
-                        if (!pk.empty()) def.prerequisites.push_back(pk);
-                    }
-                }
-                const Json& excl = fj["mutually_exclusive"];
-                if (excl.is_array()) {
-                    for (size_t k = 0; k < excl.size(); ++k) {
-                        const std::string ek = excl[k].as_string();
-                        if (!ek.empty()) def.mutually_exclusive.push_back(ek);
-                    }
-                }
-                def.available = fj["available"];
-                def.bypass = fj["bypass"];
-                def.effects = fj["effects"];
-                def.ai_weight = fj["ai_weight"].as_double(def.ai_weight);
-                out->focus_index[key] = def.index;
-                out->focuses.push_back(std::move(def));
-                focus_src.push_back(f);
+            if (out->focus_index.count(key) != 0) {
+                errors.push_back(f_entry + ":" + key + ": duplicate focus key");
+                continue;
             }
+            FocusDef def;
+            def.index = static_cast<uint32_t>(out->focuses.size());
+            def.key = key;
+            def.name = fj["name"].as_string(key);
+            def.tree = fj["tree"].as_string(default_tree);
+            def.x = static_cast<int>(fj["x"].as_int(def.x));
+            def.y = static_cast<int>(fj["y"].as_int(def.y));
+            def.days = fj["days"].as_double(def.days);
+            if (!std::isfinite(def.days) || def.days <= 0.0) {
+                errors.push_back(f_entry + ":" + key + ": days must be a positive number");
+                def.days = 70.0;
+            }
+            const Json& prereq = fj["prerequisites"];
+            if (prereq.is_array()) {
+                for (size_t k = 0; k < prereq.size(); ++k) {
+                    const std::string pk = prereq[k].as_string();
+                    if (!pk.empty()) def.prerequisites.push_back(pk);
+                }
+            }
+            const Json& excl = fj["mutually_exclusive"];
+            if (excl.is_array()) {
+                for (size_t k = 0; k < excl.size(); ++k) {
+                    const std::string ek = excl[k].as_string();
+                    if (!ek.empty()) def.mutually_exclusive.push_back(ek);
+                }
+            }
+            def.available = fj["available"];
+            def.bypass = fj["bypass"];
+            def.effects = fj["effects"];
+            def.ai_weight = fj["ai_weight"].as_double(def.ai_weight);
+            out->focus_index[key] = def.index;
+            out->focuses.push_back(std::move(def));
+            focus_src.push_back(f_entry);
         }
     }
 
     // ---- events ----------------------------------------------------------
-    const std::string f_events = root + "/common/events.json";
     std::vector<std::string> event_src;
-    if (std::filesystem::exists(f_events)) {
-        Json fd;
-        if (!load_json_file(f_events, &fd, &file_err)) {
-            errors.push_back(file_err);
-            if (err) *err = file_err;
-            return false;
-        }
-        const Json& arr = fd["events"];
-        if (!arr.is_array()) {
-            const std::string msg = f_events + ":events: expected an array";
-            errors.push_back(msg);
-            if (err) *err = msg;
-            return false;
-        }
-        for (size_t i = 0; i < arr.size(); ++i) {
-            const Json& ej = arr[i];
-            const std::string key = ej["key"].as_string();
-            if (key.empty()) {
-                errors.push_back(f_events + ":<entry " + std::to_string(i) + ">: missing key");
-                continue;
+    {
+        const SourceFile* sf = find_source(&files, "common/events.json");
+        if (sf != nullptr) {
+            const std::string f_events = sf->full;
+            const Json& arr = sf->doc["events"];
+            if (!arr.is_array()) {
+                const std::string msg = f_events + ":events: expected an array";
+                errors.push_back(msg);
+                if (err) *err = msg;
+                return false;
             }
-            if (out->event_index.count(key) != 0) {
-                errors.push_back(f_events + ":" + key + ": duplicate event key");
-                continue;
-            }
-            EventDef def;
-            def.index = static_cast<uint32_t>(out->events.size());
-            def.key = key;
-            def.title = ej["title"].as_string(key);
-            def.description = ej["description"].as_string();
-            def.fire_only_once = ej["fire_only_once"].as_bool(def.fire_only_once);
-            def.major = ej["major"].as_bool(def.major);
-            def.trigger = ej["trigger"];
-            def.immediate = ej["immediate"];
-            const Json& options = ej["options"];
-            if (options.is_array()) {
-                for (size_t k = 0; k < options.size(); ++k) {
-                    const Json& oj = options[k];
-                    EventOptionDef opt;
-                    opt.name = oj["name"].as_string("Option " + std::to_string(k + 1));
-                    opt.effects = oj["effects"];
-                    opt.ai_weight = oj["ai_weight"].as_double(opt.ai_weight);
-                    def.options.push_back(std::move(opt));
+            for (size_t i = 0; i < arr.size(); ++i) {
+                const Json& ej = arr[i];
+                const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_events;
+                const std::string key = ej["key"].as_string();
+                if (key.empty()) {
+                    errors.push_back(f_entry + ":<entry " + std::to_string(i) + ">: missing key");
+                    continue;
                 }
+                if (out->event_index.count(key) != 0) {
+                    errors.push_back(f_entry + ":" + key + ": duplicate event key");
+                    continue;
+                }
+                EventDef def;
+                def.index = static_cast<uint32_t>(out->events.size());
+                def.key = key;
+                def.title = ej["title"].as_string(key);
+                def.description = ej["description"].as_string();
+                def.fire_only_once = ej["fire_only_once"].as_bool(def.fire_only_once);
+                def.major = ej["major"].as_bool(def.major);
+                def.trigger = ej["trigger"];
+                def.immediate = ej["immediate"];
+                const Json& options = ej["options"];
+                if (options.is_array()) {
+                    for (size_t k = 0; k < options.size(); ++k) {
+                        const Json& oj = options[k];
+                        EventOptionDef opt;
+                        opt.name = oj["name"].as_string("Option " + std::to_string(k + 1));
+                        opt.effects = oj["effects"];
+                        opt.ai_weight = oj["ai_weight"].as_double(opt.ai_weight);
+                        def.options.push_back(std::move(opt));
+                    }
+                }
+                if (def.options.empty()) {
+                    errors.push_back(f_entry + ":" + key + ": event has no options");
+                }
+                out->event_index[key] = def.index;
+                out->events.push_back(std::move(def));
+                event_src.push_back(f_entry);
             }
-            if (def.options.empty()) {
-                errors.push_back(f_events + ":" + key + ": event has no options");
-            }
-            out->event_index[key] = def.index;
-            out->events.push_back(std::move(def));
-            event_src.push_back(f_events);
         }
     }
 
     // ---- decisions -------------------------------------------------------
-    const std::string f_decisions = root + "/common/decisions.json";
     std::vector<std::string> decision_src;
-    if (std::filesystem::exists(f_decisions)) {
-        Json fd;
-        if (!load_json_file(f_decisions, &fd, &file_err)) {
-            errors.push_back(file_err);
-            if (err) *err = file_err;
-            return false;
-        }
-        const Json& arr = fd["decisions"];
-        if (!arr.is_array()) {
-            const std::string msg = f_decisions + ":decisions: expected an array";
-            errors.push_back(msg);
-            if (err) *err = msg;
-            return false;
-        }
-        for (size_t i = 0; i < arr.size(); ++i) {
-            const Json& dj = arr[i];
-            const std::string key = dj["key"].as_string();
-            if (key.empty()) {
-                errors.push_back(f_decisions + ":<entry " + std::to_string(i) + ">: missing key");
-                continue;
+    {
+        const SourceFile* sf = find_source(&files, "common/decisions.json");
+        if (sf != nullptr) {
+            const std::string f_decisions = sf->full;
+            const Json& arr = sf->doc["decisions"];
+            if (!arr.is_array()) {
+                const std::string msg = f_decisions + ":decisions: expected an array";
+                errors.push_back(msg);
+                if (err) *err = msg;
+                return false;
             }
-            if (out->decision_index.count(key) != 0) {
-                errors.push_back(f_decisions + ":" + key + ": duplicate decision key");
-                continue;
+            for (size_t i = 0; i < arr.size(); ++i) {
+                const Json& dj = arr[i];
+                const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_decisions;
+                const std::string key = dj["key"].as_string();
+                if (key.empty()) {
+                    errors.push_back(f_entry + ":<entry " + std::to_string(i) +
+                                     ">: missing key");
+                    continue;
+                }
+                if (out->decision_index.count(key) != 0) {
+                    errors.push_back(f_entry + ":" + key + ": duplicate decision key");
+                    continue;
+                }
+                DecisionDef def;
+                def.index = static_cast<uint32_t>(out->decisions.size());
+                def.key = key;
+                def.name = dj["name"].as_string(key);
+                def.description = dj["description"].as_string();
+                def.category = static_cast<int>(dj["category"].as_int(def.category));
+                def.targets_state = dj["targets_state"].as_bool(def.targets_state);
+                def.cost_pp = dj["cost_pp"].as_double(def.cost_pp);
+                def.days_remove = static_cast<int>(dj["days_remove"].as_int(def.days_remove));
+                def.days_cooldown = static_cast<int>(dj["days_cooldown"].as_int(def.days_cooldown));
+                def.visible = dj["visible"];
+                def.available = dj["available"];
+                def.effects = dj["effects"];
+                def.remove_effect = dj["remove_effect"];
+                def.ai_weight = dj["ai_weight"].as_double(def.ai_weight);
+                if (def.cost_pp < 0.0) {
+                    errors.push_back(f_entry + ":" + key + ": cost_pp must not be negative");
+                    def.cost_pp = 0.0;
+                }
+                if (def.days_remove < 0 || def.days_cooldown < 0) {
+                    errors.push_back(f_entry + ":" + key +
+                                     ": negative days_remove/days_cooldown");
+                    def.days_remove = def.days_remove < 0 ? 0 : def.days_remove;
+                    def.days_cooldown = def.days_cooldown < 0 ? 0 : def.days_cooldown;
+                }
+                out->decision_index[key] = def.index;
+                out->decisions.push_back(std::move(def));
+                decision_src.push_back(f_entry);
             }
-            DecisionDef def;
-            def.index = static_cast<uint32_t>(out->decisions.size());
-            def.key = key;
-            def.name = dj["name"].as_string(key);
-            def.description = dj["description"].as_string();
-            def.category = static_cast<int>(dj["category"].as_int(def.category));
-            def.targets_state = dj["targets_state"].as_bool(def.targets_state);
-            def.cost_pp = dj["cost_pp"].as_double(def.cost_pp);
-            def.days_remove = static_cast<int>(dj["days_remove"].as_int(def.days_remove));
-            def.days_cooldown = static_cast<int>(dj["days_cooldown"].as_int(def.days_cooldown));
-            def.visible = dj["visible"];
-            def.available = dj["available"];
-            def.effects = dj["effects"];
-            def.remove_effect = dj["remove_effect"];
-            def.ai_weight = dj["ai_weight"].as_double(def.ai_weight);
-            if (def.cost_pp < 0.0) {
-                errors.push_back(f_decisions + ":" + key + ": cost_pp must not be negative");
-                def.cost_pp = 0.0;
-            }
-            if (def.days_remove < 0 || def.days_cooldown < 0) {
-                errors.push_back(f_decisions + ":" + key + ": negative days_remove/days_cooldown");
-                def.days_remove = def.days_remove < 0 ? 0 : def.days_remove;
-                def.days_cooldown = def.days_cooldown < 0 ? 0 : def.days_cooldown;
-            }
-            out->decision_index[key] = def.index;
-            out->decisions.push_back(std::move(def));
-            decision_src.push_back(f_decisions);
         }
     }
 
     // ---- national spirits ------------------------------------------------
-    // Optional file: a data set with no spirits simply ships none. A file that
-    // exists but does not parse is a hard error, exactly like the focus trees.
-    // Modifiers use the same vocabulary as laws and technologies.
-    const std::string f_spirits = root + "/common/spirits.json";
+    // Optional file: a data set with no spirits simply ships none. Modifiers use the
+    // same vocabulary as laws and technologies.
     std::vector<std::string> spirit_src;
-    if (std::filesystem::exists(f_spirits)) {
-        Json fd;
-        if (!load_json_file(f_spirits, &fd, &file_err)) {
-            errors.push_back(file_err);
-            if (err) *err = file_err;
-            return false;
-        }
-        const Json& arr = fd["spirits"];
-        if (!arr.is_array()) {
-            const std::string msg = f_spirits + ":spirits: expected an array";
-            errors.push_back(msg);
-            if (err) *err = msg;
-            return false;
-        }
-        for (size_t i = 0; i < arr.size(); ++i) {
-            const Json& sj = arr[i];
-            const std::string key = sj["key"].as_string();
-            if (key.empty()) {
-                errors.push_back(f_spirits + ":<entry " + std::to_string(i) + ">: missing key");
-                continue;
+    {
+        const SourceFile* sf = find_source(&files, "common/spirits.json");
+        if (sf != nullptr) {
+            const std::string f_spirits = sf->full;
+            const Json& arr = sf->doc["spirits"];
+            if (!arr.is_array()) {
+                const std::string msg = f_spirits + ":spirits: expected an array";
+                errors.push_back(msg);
+                if (err) *err = msg;
+                return false;
             }
-            if (out->spirit_index.count(key) != 0) {
-                errors.push_back(f_spirits + ":" + key + ": duplicate spirit key");
-                continue;
+            for (size_t i = 0; i < arr.size(); ++i) {
+                const Json& sj = arr[i];
+                const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_spirits;
+                const std::string key = sj["key"].as_string();
+                if (key.empty()) {
+                    errors.push_back(f_entry + ":<entry " + std::to_string(i) +
+                                     ">: missing key");
+                    continue;
+                }
+                if (out->spirit_index.count(key) != 0) {
+                    errors.push_back(f_entry + ":" + key + ": duplicate spirit key");
+                    continue;
+                }
+                SpiritDef def;
+                def.index = static_cast<uint32_t>(out->spirits.size());
+                def.key = key;
+                def.name = sj["name"].as_string(key);
+                def.description = sj["description"].as_string();
+                def.slots = static_cast<int>(sj["slots"].as_int(def.slots));
+                if (def.slots < 1) {
+                    errors.push_back(f_entry + ":" + key + ": slots must be at least 1");
+                    def.slots = 1;
+                }
+                def.available = sj["available"];
+                def.modifiers = parse_modifiers(sj["modifiers"], &errors, f_entry, key);
+                def.effects = sj["effects"];
+                out->spirit_index[key] = def.index;
+                out->spirits.push_back(std::move(def));
+                spirit_src.push_back(f_entry);
             }
-            SpiritDef def;
-            def.index = static_cast<uint32_t>(out->spirits.size());
-            def.key = key;
-            def.name = sj["name"].as_string(key);
-            def.description = sj["description"].as_string();
-            def.slots = static_cast<int>(sj["slots"].as_int(def.slots));
-            if (def.slots < 1) {
-                errors.push_back(f_spirits + ":" + key + ": slots must be at least 1");
-                def.slots = 1;
-            }
-            def.available = sj["available"];
-            def.modifiers = parse_modifiers(sj["modifiers"], &errors, f_spirits, key);
-            def.effects = sj["effects"];
-            out->spirit_index[key] = def.index;
-            out->spirits.push_back(std::move(def));
-            spirit_src.push_back(f_spirits);
         }
     }
 
     // ---- political advisors ----------------------------------------------
-    const std::string f_advisors = root + "/common/advisors.json";
     std::vector<std::string> advisor_src;
-    if (std::filesystem::exists(f_advisors)) {
-        Json fd;
-        if (!load_json_file(f_advisors, &fd, &file_err)) {
-            errors.push_back(file_err);
-            if (err) *err = file_err;
-            return false;
-        }
-        const Json& arr = fd["advisors"];
-        if (!arr.is_array()) {
-            const std::string msg = f_advisors + ":advisors: expected an array";
-            errors.push_back(msg);
-            if (err) *err = msg;
-            return false;
-        }
-        for (size_t i = 0; i < arr.size(); ++i) {
-            const Json& aj = arr[i];
-            const std::string key = aj["key"].as_string();
-            if (key.empty()) {
-                errors.push_back(f_advisors + ":<entry " + std::to_string(i) + ">: missing key");
-                continue;
+    {
+        const SourceFile* sf = find_source(&files, "common/advisors.json");
+        if (sf != nullptr) {
+            const std::string f_advisors = sf->full;
+            const Json& arr = sf->doc["advisors"];
+            if (!arr.is_array()) {
+                const std::string msg = f_advisors + ":advisors: expected an array";
+                errors.push_back(msg);
+                if (err) *err = msg;
+                return false;
             }
-            if (out->advisor_index.count(key) != 0) {
-                errors.push_back(f_advisors + ":" + key + ": duplicate advisor key");
-                continue;
+            for (size_t i = 0; i < arr.size(); ++i) {
+                const Json& aj = arr[i];
+                const std::string& f_entry = i < sf->origin.size() ? sf->origin[i] : f_advisors;
+                const std::string key = aj["key"].as_string();
+                if (key.empty()) {
+                    errors.push_back(f_entry + ":<entry " + std::to_string(i) +
+                                     ">: missing key");
+                    continue;
+                }
+                if (out->advisor_index.count(key) != 0) {
+                    errors.push_back(f_entry + ":" + key + ": duplicate advisor key");
+                    continue;
+                }
+                AdvisorDef def;
+                def.index = static_cast<uint32_t>(out->advisors.size());
+                def.key = key;
+                def.name = aj["name"].as_string(key);
+                def.description = aj["description"].as_string();
+                def.cost_pp = aj["cost_pp"].as_double(def.cost_pp);
+                if (def.cost_pp < 0.0) {
+                    errors.push_back(f_entry + ":" + key + ": cost_pp must not be negative");
+                    def.cost_pp = 0.0;
+                }
+                def.available = aj["available"];
+                def.modifiers = parse_modifiers(aj["modifiers"], &errors, f_entry, key);
+                out->advisor_index[key] = def.index;
+                out->advisors.push_back(std::move(def));
+                advisor_src.push_back(f_entry);
             }
-            AdvisorDef def;
-            def.index = static_cast<uint32_t>(out->advisors.size());
-            def.key = key;
-            def.name = aj["name"].as_string(key);
-            def.description = aj["description"].as_string();
-            def.cost_pp = aj["cost_pp"].as_double(def.cost_pp);
-            if (def.cost_pp < 0.0) {
-                errors.push_back(f_advisors + ":" + key + ": cost_pp must not be negative");
-                def.cost_pp = 0.0;
-            }
-            def.available = aj["available"];
-            def.modifiers = parse_modifiers(aj["modifiers"], &errors, f_advisors, key);
-            out->advisor_index[key] = def.index;
-            out->advisors.push_back(std::move(def));
-            advisor_src.push_back(f_advisors);
         }
     }
 
@@ -1340,23 +2050,19 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
     // [0.1, 1.0]. Only a negative *cost* is a data error (it would let a design
     // undercut its own archetype for free); negative stat deltas are legitimate
     // (a heavy gun slows the design, a heavy airframe trades agility for armour).
-    const std::string f_components = root + "/common/components.json";
-    if (std::filesystem::exists(f_components)) {
-        Json fd;
-        if (!load_json_file(f_components, &fd, &file_err)) {
-            errors.push_back(file_err);
-            if (err) *err = file_err;
-            return false;
-        }
-        const Json& arr = fd["components"];
+    const SourceFile* sf_components = find_source(&files, "common/components.json");
+    if (sf_components != nullptr) {
+        const Json& arr = sf_components->doc["components"];
         if (!arr.is_array()) {
-            const std::string msg = f_components + ":components: expected an array";
+            const std::string msg = sf_components->full + ":components: expected an array";
             errors.push_back(msg);
             if (err) *err = msg;
             return false;
         }
         for (size_t i = 0; i < arr.size(); ++i) {
             const Json& cj = arr[i];
+            const std::string& f_components =
+                i < sf_components->origin.size() ? sf_components->origin[i] : sf_components->full;
             const std::string key = cj["key"].as_string();
             if (key.empty()) {
                 errors.push_back(f_components + ":<entry " + std::to_string(i) +
@@ -1524,10 +2230,12 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
     }
     // Technologies may gate an equipment model or a designer component by key; both
     // tables are complete here, so the reference is resolved now.
-    for (const TechDef& t : out->techs) {
+    for (size_t i = 0; i < out->techs.size(); ++i) {
+        const TechDef& t = out->techs[i];
+        const std::string file = i < tech_src.size() ? tech_src[i] : std::string();
         for (const std::string& ek : t.unlock_equipment) {
             if (out->equipment_by_key.count(ek) == 0 && out->component_index.count(ek) == 0) {
-                errors.push_back(f_technologies + ":" + t.key +
+                errors.push_back(file + ":" + t.key +
                                  ": unlock_equipment references unknown equipment or component " +
                                  ek);
             }

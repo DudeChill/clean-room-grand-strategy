@@ -1,6 +1,6 @@
 # CONTINUE FROM HERE
 
-State of the project at the end of the session that shipped v0.8.0. Read this first when
+State of the project at the end of the session that shipped v0.9.0. Read this first when
 resuming; then `DEVLOG.md` (top entry), `docs/PARITY_MATRIX.md` and
 `docs/DISCREPANCIES.md`.
 
@@ -11,7 +11,8 @@ resuming; then `DEVLOG.md` (top entry), `docs/PARITY_MATRIX.md` and
 * Releases published: v0.1.0 (foundation), v0.2.0 (air), v0.3.0/v0.3.1 (naval),
   v0.4.0 (focus trees and decisions), v0.5.0 (national spirits and advisers),
   v0.6.0 (trade, convoys, blockade), v0.7.0 (equipment designers, scarce resources),
-  **v0.8.0 (equipment variants and continuous replacement)**.
+  v0.8.0 (equipment variants and continuous replacement), **v0.9.0 (mod layer, content
+  validator, mod test pack)**.
 * Build directories in use: `build/` (main), plus per-slice dirs (`build-air/`,
   `build-navy/`, `build-pol/`, `build-spirit/`, `build-trade/`, `build-des/`, ...).
   Never build two agents into the same directory.
@@ -20,8 +21,9 @@ Last verified commands (all green on a clean Release build):
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-build/hoi_tests                            # 252 passed, 0 failed
-scripts/verify.sh                          # release gate
+build/hoi_tests                            # 268 passed, 0 failed
+scripts/verify.sh                          # release gate, now 9 checks
+game --validate-content --mods data/mods   # mod layer + validator
 build/game --days 365 --audit --summary    # world audit: OK, 0 content warnings
 build/game --days 30 --inspect-trade       # 9/10 countries in deficit, 12 routes
 build/game --days 365 --inspect-country VEL  # designs owned and on production lines
@@ -49,7 +51,8 @@ browser client that plays the whole game over `/api/state` + `/api/command`.
 
 1. **INT-001 (MAJOR)**: intelligence - agencies, networks, operations, decryption.
 2. **MP-001 (MAJOR)**: multiplayer transport over the existing command/save layer.
-3. **MOD-002/003 (MINOR)**: mod load order, content validator CLI, mod test pack.
+3. **MOD-004 (MINOR)**: a mod cannot override the scenario or map yet - `load_scenario`
+   (src/data/scenario.cpp) does not take mod roots the way `load_content` now does.
 4. **ECON-004 (MINOR)**: the AI piles up gear the army cannot use (307,478 units of one
    design in a depot at day 365 against 2,589 in the field); net depot stock out of the
    production baseline and taper line factories as stock covers the army.

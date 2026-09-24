@@ -1,0 +1,7 @@
+{
+  "name": "gamma_late",
+  "version": "1.0.0",
+  "dependencies": [],
+  "load_after": ["hint_early"],
+  "replace_paths": []
+}

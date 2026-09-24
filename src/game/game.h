@@ -10,6 +10,7 @@
 #include "core/rng.h"
 #include "core/types.h"
 #include "data/content.h"
+#include "data/mod.h"
 #include "save/save.h"
 #include "sim/ai/ai.h"
 #include "sim/commands.h"
@@ -87,8 +88,16 @@ struct Game {
     uint64_t ticks_run = 0;
 
     // Builds a game from data + scenario, seeding RNG streams deterministically.
+    // Loads content + scenario. `mod_roots` are mods roots (each holding
+    // `<root>/<mod>/mod.json`), exactly as the CLI `--mods` takes them; they are
+    // discovered, ordered deterministically and merged after the base content. Empty
+    // means base content only, which is byte-identical to a run without the mod system.
+    // `report` collects the deterministic mod load report (replacements, additions,
+    // skipped mods) when the caller wants to print it.
     static bool create(const std::string& data_root, const std::string& scenario_path,
-                       uint64_t seed, Game* out, std::string* err);
+                       uint64_t seed, Game* out, std::string* err,
+                       const std::vector<std::string>& mod_roots = {},
+                       ModLoadReport* report = nullptr);
 
     // Advances exactly one simulation hour through the fixed phase order.
     void tick_once();

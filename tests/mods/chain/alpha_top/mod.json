@@ -1,0 +1,7 @@
+{
+  "name": "alpha_top",
+  "version": "1.0.0",
+  "dependencies": ["zeta_base"],
+  "load_after": [],
+  "replace_paths": []
+}

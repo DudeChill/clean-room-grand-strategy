@@ -1,0 +1,6 @@
+{
+  "laws": [
+    {"key": "mod_typo_law", "name": "Typo Law", "kind": 0, "level": 5, "cost": 30.0,
+     "modifiers": {"NoSuchModifier": 1.0}}
+  ]
+}
