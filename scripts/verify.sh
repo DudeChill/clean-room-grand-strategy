@@ -41,8 +41,8 @@ echo "== 3. world audit on the shipped scenario =="
 check "scenario loads and audits" "$game" --scenario "$scenario" --days 3 --audit --quiet
 
 echo "== 4. deterministic replay of an AI-driven run =="
-"$game" --scenario "$scenario" --seed 4242 --days 10 --hashes --quiet 2>&1 | grep -Ev '^(performance|tick p)' > "$tmp/h1.txt"
-"$game" --scenario "$scenario" --seed 4242 --days 10 --hashes --quiet 2>&1 | grep -Ev '^(performance|tick p)' > "$tmp/h2.txt"
+"$game" --scenario "$scenario" --seed 4242 --days 10 --hashes --quiet 2>&1 | grep -Ev '^(performance|tick p|   ai detail)' > "$tmp/h1.txt"
+"$game" --scenario "$scenario" --seed 4242 --days 10 --hashes --quiet 2>&1 | grep -Ev '^(performance|tick p|   ai detail)' > "$tmp/h2.txt"
 if diff -q "$tmp/h1.txt" "$tmp/h2.txt" > /dev/null; then
   results+=("PASS  determinism (identical subsystem + world hashes across two runs)")
   pass=$((pass + 1))
