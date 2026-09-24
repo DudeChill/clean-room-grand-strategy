@@ -706,6 +706,53 @@ void enrich(Game& g) {
         decision.ai_weight = 0.8;
         c.decisions.push_back(decision);
         c.decision_index[decision.key] = 0;
+
+        // National spirits and political advisors: the political layer reads their
+        // modifiers and availability triggers, so they travel with the save like the
+        // focus/event/decision tables. Non-empty script blocks exercise the
+        // canonical-JSON round trip for both.
+        SpiritDef spirit;
+        spirit.index = 0;
+        spirit.key = "war_economy";
+        spirit.name = "War Economy";
+        spirit.description = "Industry on a war footing.";
+        spirit.slots = 2;
+        spirit.available = Json::parse(R"({"at_war": true})");
+        spirit.modifiers.set(ModifierKind::FactoryOutput, 0.15);
+        spirit.effects = Json::parse(R"({"add_stability": -0.02})");
+        c.spirits.push_back(spirit);
+
+        SpiritDef second_spirit = spirit;
+        second_spirit.index = 1;
+        second_spirit.key = "national_unity";
+        second_spirit.name = "National Unity";
+        second_spirit.slots = 1;
+        second_spirit.available = Json::parse(R"({"stability": {"gte": 0.5}})");
+        second_spirit.effects = Json();
+        c.spirits.push_back(second_spirit);
+        c.spirit_index[spirit.key] = 0;
+        c.spirit_index[second_spirit.key] = 1;
+
+        AdvisorDef advisor;
+        advisor.index = 0;
+        advisor.key = "armaments_minister";
+        advisor.name = "Armaments Minister";
+        advisor.description = "Speeds up military production.";
+        advisor.cost_pp = 150.0;
+        advisor.available = Json::parse(R"({"political_power": {"gte": 150}})");
+        advisor.modifiers.set(ModifierKind::PoliticalPowerGain, 0.10);
+        c.advisors.push_back(advisor);
+
+        AdvisorDef second_advisor = advisor;
+        second_advisor.index = 1;
+        second_advisor.key = "propaganda_minister";
+        second_advisor.name = "Propaganda Minister";
+        second_advisor.cost_pp = 75.0;
+        second_advisor.available = Json();
+        second_advisor.modifiers.set(ModifierKind::Stability, 0.05);
+        c.advisors.push_back(second_advisor);
+        c.advisor_index[advisor.key] = 0;
+        c.advisor_index[second_advisor.key] = 1;
     }
 
     // Political state that only the scripted layer produces: focus progression, an
@@ -728,6 +775,27 @@ void enrich(Game& g) {
         timed.days_left = 20 + static_cast<int>(id.v);
         timed.mods.set(ModifierKind::FactoryOutput, 0.1 + 0.01 * id.v);
         c.timed_modifiers.push_back(timed);
+
+        // The held national spirits are permanent (days_left = -1), keyed into the
+        // content roster by index; the advisor roster and both slot capacities are
+        // part of the political state too.
+        TimedModifier spirit;
+        spirit.source = g.content.spirits.empty() ? "war_economy" : g.content.spirits.front().key;
+        spirit.days_left = -1;
+        spirit.mods.set(ModifierKind::FactoryOutput, 0.15);
+        c.national_spirits.push_back(spirit);
+        if (g.content.spirits.size() > 1) {
+            TimedModifier second;
+            second.source = g.content.spirits[1].key;
+            second.days_left = -1;
+            second.mods.set(ModifierKind::Stability, 0.05);
+            c.national_spirits.push_back(second);
+        }
+        c.spirit_keys.clear();
+        for (uint32_t i = 0; i < g.content.spirits.size(); ++i) c.spirit_keys.push_back(i);
+        c.advisors.push_back(id.v % (g.content.advisors.empty() ? 1u : g.content.advisors.size()));
+        c.spirit_slots = 6 + static_cast<int>(id.v);
+        c.advisor_slots = 3 + static_cast<int>(id.v);
     });
     w.script_vars["war_effort"] = 3.5;
     w.script_vars["preparedness"] = 0.25;
@@ -914,6 +982,13 @@ Fixture build_fixture() {
     CHECK_GT(f.source.content.focuses.size(), 0u);
     CHECK_GT(f.source.content.events.size(), 0u);
     CHECK_GT(f.source.content.decisions.size(), 0u);
+    // The spirit/advisor slice must be exercised too: an empty content table or an
+    // empty roster would serialise nothing and prove nothing.
+    CHECK_GT(f.source.content.spirits.size(), 0u);
+    CHECK_GT(f.source.content.advisors.size(), 0u);
+    CHECK(!f.source.world.countries[CountryId(0)].national_spirits.empty());
+    CHECK(!f.source.world.countries[CountryId(0)].spirit_keys.empty());
+    CHECK(!f.source.world.countries[CountryId(0)].advisors.empty());
     CHECK(!f.source.world.script_vars.empty());
     CHECK(!f.source.world.delayed_events.empty());
     CHECK(!f.source.world.countries[CountryId(0)].completed_focuses.empty());
@@ -1539,6 +1614,21 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"decision.effects", +[](Game& g) { for (auto& d : g.content.decisions) d.effects = Json(true); }},
         {"decision.remove_effect", +[](Game& g) { for (auto& d : g.content.decisions) d.remove_effect = Json(true); }},
         {"decision.ai_weight", +[](Game& g) { for (auto& d : g.content.decisions) d.ai_weight += 0.1; }},
+        {"spirit.index", +[](Game& g) { for (auto& s : g.content.spirits) s.index += 1; }},
+        {"spirit.key", +[](Game& g) { for (auto& s : g.content.spirits) s.key += "x"; }},
+        {"spirit.name", +[](Game& g) { for (auto& s : g.content.spirits) s.name += "x"; }},
+        {"spirit.description", +[](Game& g) { for (auto& s : g.content.spirits) s.description += "x"; }},
+        {"spirit.slots", +[](Game& g) { for (auto& s : g.content.spirits) s.slots += 1; }},
+        {"spirit.available", +[](Game& g) { for (auto& s : g.content.spirits) s.available = Json(true); }},
+        {"spirit.modifiers", +[](Game& g) { for (auto& s : g.content.spirits) s.modifiers.v[0] += 0.01; }},
+        {"spirit.effects", +[](Game& g) { for (auto& s : g.content.spirits) s.effects = Json(true); }},
+        {"advisor.index", +[](Game& g) { for (auto& a : g.content.advisors) a.index += 1; }},
+        {"advisor.key", +[](Game& g) { for (auto& a : g.content.advisors) a.key += "x"; }},
+        {"advisor.name", +[](Game& g) { for (auto& a : g.content.advisors) a.name += "x"; }},
+        {"advisor.description", +[](Game& g) { for (auto& a : g.content.advisors) a.description += "x"; }},
+        {"advisor.cost_pp", +[](Game& g) { for (auto& a : g.content.advisors) a.cost_pp += 1.0; }},
+        {"advisor.available", +[](Game& g) { for (auto& a : g.content.advisors) a.available = Json(true); }},
+        {"advisor.modifiers", +[](Game& g) { for (auto& a : g.content.advisors) a.modifiers.v[0] += 0.01; }},
         {"country.completed_focuses", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.completed_focuses.push_back(1); }); }},
         {"country.selected_focus", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.selected_focus += 1; }); }},
         {"country.focus_progress", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.focus_progress += 1.0; }); }},
@@ -1552,6 +1642,14 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"country.timed_modifier.source", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.timed_modifiers) m.source += "x"; }); }},
         {"country.timed_modifier.mods", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.timed_modifiers) m.mods.v[0] += 0.01; }); }},
         {"country.timed_modifier.days_left", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.timed_modifiers) m.days_left += 1; }); }},
+        {"country.national_spirits", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.national_spirits.push_back(TimedModifier{}); }); }},
+        {"country.national_spirit.source", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.national_spirits) m.source += "x"; }); }},
+        {"country.national_spirit.mods", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.national_spirits) m.mods.v[0] += 0.01; }); }},
+        {"country.national_spirit.days_left", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.national_spirits) m.days_left -= 1; }); }},
+        {"country.spirit_keys", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.spirit_keys.push_back(1); }); }},
+        {"country.advisors", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.advisors.push_back(1); }); }},
+        {"country.spirit_slots", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.spirit_slots += 1; }); }},
+        {"country.advisor_slots", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.advisor_slots += 1; }); }},
         {"world.script_vars.value", +[](Game& g) { for (auto& e : g.world.script_vars) e.second += 1.0; }},
         {"world.script_vars.key", +[](Game& g) { g.world.script_vars["added"] = 1.0; }},
         {"world.delayed_events", +[](Game& g) { g.world.delayed_events.push_back(DelayedEvent{}); }},
@@ -1728,6 +1826,8 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
     CHECK_EQ(empty.content.focuses.size(), f.source.content.focuses.size());
     CHECK_EQ(empty.content.events.size(), f.source.content.events.size());
     CHECK_EQ(empty.content.decisions.size(), f.source.content.decisions.size());
+    CHECK_EQ(empty.content.spirits.size(), f.source.content.spirits.size());
+    CHECK_EQ(empty.content.advisors.size(), f.source.content.advisors.size());
     CHECK(empty.content.constants.ic_per_military_factory ==
           f.source.content.constants.ic_per_military_factory);
     // Derived key -> id maps are rebuilt, not stored: lookups must work after a load.
@@ -1754,6 +1854,23 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
         CHECK(empty.content.decision_id(decision.key) != 0xFFFFFFFFu);
         CHECK(empty.content.decision(empty.content.decision_id(decision.key)) != nullptr);
     }
+    // National spirits and advisors are addressed by key through the rebuilt indexes.
+    for (const SpiritDef& spirit : f.source.content.spirits) {
+        CHECK(empty.content.spirit_id(spirit.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.spirit(empty.content.spirit_id(spirit.key)) != nullptr);
+    }
+    for (const AdvisorDef& advisor : f.source.content.advisors) {
+        CHECK(empty.content.advisor_id(advisor.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.advisor(empty.content.advisor_id(advisor.key)) != nullptr);
+    }
+    // The per-country spirit/advisor state survives the load into an empty Game.
+    const Country& src_country = f.source.world.countries[CountryId(0)];
+    const Country& loaded_country = empty.world.countries[CountryId(0)];
+    CHECK_EQ(loaded_country.national_spirits.size(), src_country.national_spirits.size());
+    CHECK_EQ(loaded_country.spirit_keys.size(), src_country.spirit_keys.size());
+    CHECK_EQ(loaded_country.advisors.size(), src_country.advisors.size());
+    CHECK_EQ(loaded_country.spirit_slots, src_country.spirit_slots);
+    CHECK_EQ(loaded_country.advisor_slots, src_country.advisor_slots);
 
     // Continuing both runs must stay identical: this is what a lost field would break.
     Game original = f.source;

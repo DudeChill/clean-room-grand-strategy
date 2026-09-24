@@ -1,0 +1,43 @@
+{
+  "advisors": [
+    {"key": "chief_of_staff", "name": "Chief of Staff", "cost_pp": 150,
+     "description": "A seasoned commander who tightens army doctrine and staff work in wartime.",
+     "available": {"at_war": true},
+     "modifiers": {"DivisionAttack": 0.05}},
+
+    {"key": "armaments_minister", "name": "Armaments Minister", "cost_pp": 200,
+     "description": "An industrial organiser who streamlines factory output and procurement.",
+     "available": {"factories": {"gte": 20}},
+     "modifiers": {"FactoryOutput": 0.08, "EquipmentCostFactor": -0.05}},
+
+    {"key": "intelligence_director", "name": "Intelligence Director", "cost_pp": 160,
+     "description": "Runs the signals and analysis services, feeding research and convoy protection.",
+     "available": {"has_tech": "fighter_airframe"},
+     "modifiers": {"ResearchSpeed": 0.05, "ConvoyDefense": 0.10}},
+
+    {"key": "propaganda_minister", "name": "Propaganda Minister", "cost_pp": 100,
+     "description": "Whips up popular enthusiasm for the war effort at some cost to public calm.",
+     "available": {"stability": {"gte": 0.4}},
+     "modifiers": {"WarSupport": 0.05, "Stability": -0.02}},
+
+    {"key": "finance_minister", "name": "Finance Minister", "cost_pp": 250,
+     "description": "A fiscal conservative who expands construction credit and state revenue.",
+     "available": {"political_power": {"gte": 100}},
+     "modifiers": {"ConstructionSpeed": 0.10, "PoliticalPowerGain": 0.05}},
+
+    {"key": "infantry_advisor", "name": "Infantry Advisor", "cost_pp": 120,
+     "description": "A veteran of the trenches who drills the infantry in defence and cohesion.",
+     "available": {"war_support": {"gte": 0.4}},
+     "modifiers": {"DivisionDefense": 0.05, "DivisionOrganization": 0.03}},
+
+    {"key": "naval_advisor", "name": "Naval Advisor", "cost_pp": 180,
+     "description": "An admiral who oversees the dockyards and the protection of sea lanes.",
+     "available": {"owns_state": "s297"},
+     "modifiers": {"DockyardOutput": 0.08, "ConvoyDefense": 0.10}},
+
+    {"key": "air_advisor", "name": "Air Advisor", "cost_pp": 180,
+     "description": "An airman who pushes tactical aviation and combined-arms support.",
+     "available": {"at_war": true},
+     "modifiers": {"DivisionBreakthrough": 0.03, "ResearchSpeed": 0.03}}
+  ]
+}

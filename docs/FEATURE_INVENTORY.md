@@ -165,7 +165,8 @@ implemented.
 * [x] Decisions (visibility, availability, political-power cost, timers, removal
       effects, cooldowns, AI evaluation)
 * [x] Scripted/timed modifiers feeding the country modifier stack
-* [ ] National spirits and government/advisor slots
+* [x] National spirits (permanent named modifiers with triggers and slot costs)
+* [x] Political advisors (appointed with political power, slot-limited)
 * [ ] Ideology drift, elections and coups
 
 ## 11. Diplomacy and war

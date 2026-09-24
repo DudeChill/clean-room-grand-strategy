@@ -133,6 +133,9 @@
         "economy_civilian",
         "trade_free"
       ],
+      "spirits": [
+        "heavy_industrial_base"
+      ],
       "political_power": 48.0,
       "stability": 0.62,
       "war_support": 0.35,
@@ -375,6 +378,9 @@
         "conscription_extensive",
         "economy_partial_mobilization",
         "trade_free"
+      ],
+      "spirits": [
+        "colonial_administration"
       ],
       "political_power": 48.5,
       "stability": 0.55,

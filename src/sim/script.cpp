@@ -38,6 +38,7 @@
 #include "sim/industry.h"
 #include "sim/politics.h"
 #include "sim/research.h"
+#include "sim/spirits.h"
 #include "sim/units.h"
 #include "sim/world.h"
 
@@ -857,6 +858,61 @@ void apply_clear_state_flag(const ScriptScope& sc, const std::string& key, const
                        state->flags.end());
 }
 
+// Resolves a spirit key; reports and returns INVALID_ID when it names nothing.
+uint32_t resolve_spirit(const Game& g, const std::string& key, const Json& value) {
+    if (!value.is_string()) {
+        report_problem(key, "expected a national spirit key string");
+        return INVALID_ID;
+    }
+    const uint32_t spirit = g.content.spirit_id(value.as_string());
+    if (spirit == INVALID_ID || g.content.spirit(spirit) == nullptr) {
+        report_problem(key, "unknown national spirit '" + value.as_string() + "'");
+        return INVALID_ID;
+    }
+    return spirit;
+}
+
+void apply_add_national_spirit(const ScriptScope& sc, const std::string& key, const Json& value) {
+    Game* g = sc.game;
+    if (effect_country(sc, key) == nullptr) return;
+    const uint32_t spirit = resolve_spirit(*g, key, value);
+    if (spirit == INVALID_ID) return;
+    if (has_spirit(g->world, sc.country, value.as_string())) return;  // already held: no-op
+    // Effects grant: no trigger gate and no political-power cost, but the slot
+    // invariant still holds (spirit_grant refuses when no slot is free).
+    if (!spirit_grant(*g, sc.country, spirit)) {
+        report_problem(key, "national spirit '" + value.as_string() + "' could not be granted");
+    }
+}
+
+void apply_remove_national_spirit(const ScriptScope& sc, const std::string& key, const Json& value) {
+    Game* g = sc.game;
+    if (effect_country(sc, key) == nullptr) return;
+    const uint32_t spirit = resolve_spirit(*g, key, value);
+    if (spirit == INVALID_ID) return;
+    spirit_remove(*g, sc.country, spirit);
+}
+
+void apply_add_advisor(const ScriptScope& sc, const std::string& key, const Json& value) {
+    Game* g = sc.game;
+    if (effect_country(sc, key) == nullptr) return;
+    if (!value.is_string()) {
+        report_problem(key, "expected an advisor key string");
+        return;
+    }
+    const uint32_t advisor = g->content.advisor_id(value.as_string());
+    if (advisor == INVALID_ID || g->content.advisor(advisor) == nullptr) {
+        report_problem(key, "unknown advisor '" + value.as_string() + "'");
+        return;
+    }
+    if (has_advisor(g->world, sc.country, value.as_string())) return;  // already appointed
+    // Effects grant the appointment for free; the command layer is what charges
+    // political power. advisor_grant still enforces the free-slot invariant.
+    if (!advisor_grant(*g, sc.country, advisor)) {
+        report_problem(key, "advisor '" + value.as_string() + "' could not be granted");
+    }
+}
+
 void apply_effect_key(const ScriptScope& sc, const std::string& key, const Json& value) {
     if (key == "add_political_power") return apply_add_political_power(sc, key, value);
     if (key == "add_stability") return apply_stability(sc, key, value);
@@ -877,6 +933,9 @@ void apply_effect_key(const ScriptScope& sc, const std::string& key, const Json&
     if (key == "set_variable") return apply_set_variable(sc, key, value, false);
     if (key == "add_to_variable") return apply_set_variable(sc, key, value, true);
     if (key == "add_claim") return apply_add_claim(sc, key, value);
+    if (key == "add_national_spirit") return apply_add_national_spirit(sc, key, value);
+    if (key == "remove_national_spirit") return apply_remove_national_spirit(sc, key, value);
+    if (key == "add_advisor") return apply_add_advisor(sc, key, value);
     report_unknown("effect", key);
 }
 

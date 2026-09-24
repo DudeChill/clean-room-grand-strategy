@@ -53,6 +53,10 @@ enum class CommandType : uint8_t {
     CancelFocus,
     ChooseEventOption,  // text = event key, value = option index
     TakeDecision,       // text = decision key, state = target state when required
+    AppointAdvisor,     // text = advisor key
+    DismissAdvisor,     // text = advisor key
+    AddNationalSpirit,  // text = spirit key (content-driven; commands keep it scriptable)
+    RemoveNationalSpirit,
     CancelDecision,
     SetLaw,
     SetTradePolicy,

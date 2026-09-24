@@ -22,15 +22,16 @@
 //              (Country::wings), the fleet roster (Country::fleets) and the
 //              character store
 //   Economy    the content snapshot - equipment, division templates, technologies,
-//              laws, buildings, focuses, events, decisions and SimConstants, i.e.
-//              every table the simulation reads - plus per country: production
+//              laws, buildings, focuses, events, decisions, national spirits,
+//              political advisors and SimConstants, i.e. every table the simulation
+//              reads - plus per country: production
 //              lines, construction queue, research state and the template roster
 //              (Country::templates). Content lives here because it is what industry
 //              and research consume, and it travels with the save so a
 //              default-constructed Game can continue from a file without help from
-//              data/; each script block (FocusDef/EventDef/DecisionDef Json fields)
-//              travels structurally and the derived key -> id maps are rebuilt on
-//              load instead of being stored twice
+//              data/; each script block (FocusDef/EventDef/DecisionDef/SpiritDef/
+//              AdvisorDef Json fields) travels structurally and the derived
+//              key -> id maps are rebuilt on load instead of being stored twice
 //   Military   per country: division/army rosters and the training list; then the
 //              army store, the division store, the air wing store, and the naval
 //              area: the ship store, the task force store, the fleet store and the
@@ -47,11 +48,12 @@
 //              focus / event / decision state (completed_focuses, selected_focus,
 //              focus_progress, pending_events, fired_events, active_decisions,
 //              decision_days_left, decision_cooldown, country_flags,
-//              timed_modifiers); then the world-level script variables
+//              timed_modifiers, national_spirits, spirit_keys, advisors,
+//              spirit_slots, advisor_slots); then the world-level script variables
 //              (World::script_vars, an ordered map) and the scheduled events
-//              (World::delayed_events). Politics owns them because focuses, events
-//              and decisions are the political layer and these are the fields they
-//              mutate
+//              (World::delayed_events). Politics owns them because focuses, events,
+//              decisions, spirits and advisors are the political layer and these
+//              are the fields they mutate
 //   Ai         the six AI layer states (last run tick, interval, reasons), the
 //              strategic posture vector, the decision/command counters, the
 //              per-country AI control bitmap and the player country
@@ -824,6 +826,48 @@ bool read_decision(ByteReader& r, DecisionDef* d) {
     return r.f64(&d->ai_weight);
 }
 
+// National spirits and political advisors travel with the rest of the content
+// database: the simulation reads their modifiers and availability triggers, and the
+// AI plans appointments from them, so a save that omitted them would continue from a
+// different rule set. Derived key -> index maps are rebuilt on load like the rest.
+void write_spirit(ByteWriter& w, const SpiritDef& s) {
+    w.u32(s.index);
+    w.str(s.key);
+    w.str(s.name);
+    w.str(s.description);
+    w.i32(s.slots);
+    write_json(w, s.available);
+    write_modifiers(w, s.modifiers);
+    write_json(w, s.effects);
+}
+
+bool read_spirit(ByteReader& r, SpiritDef* s) {
+    if (!r.u32(&s->index)) return false;
+    if (!r.str(&s->key) || !r.str(&s->name) || !r.str(&s->description)) return false;
+    if (!r.i32(&s->slots)) return false;
+    if (!read_json(r, &s->available)) return false;
+    if (!read_modifiers(r, &s->modifiers)) return false;
+    return read_json(r, &s->effects);
+}
+
+void write_advisor(ByteWriter& w, const AdvisorDef& a) {
+    w.u32(a.index);
+    w.str(a.key);
+    w.str(a.name);
+    w.str(a.description);
+    w.f64(a.cost_pp);
+    write_json(w, a.available);
+    write_modifiers(w, a.modifiers);
+}
+
+bool read_advisor(ByteReader& r, AdvisorDef* a) {
+    if (!r.u32(&a->index)) return false;
+    if (!r.str(&a->key) || !r.str(&a->name) || !r.str(&a->description)) return false;
+    if (!r.f64(&a->cost_pp)) return false;
+    if (!read_json(r, &a->available)) return false;
+    return read_modifiers(r, &a->modifiers);
+}
+
 // SimConstants in declaration order; every balance number the simulation reads is
 // part of the state, so a data change cannot slip past a hash comparison.
 void write_constants(ByteWriter& w, const SimConstants& k) {
@@ -1015,6 +1059,10 @@ void write_content(ByteWriter& w, const Content& c) {
     for (const EventDef& e : c.events) write_event(w, e);
     w.u32(static_cast<uint32_t>(c.decisions.size()));
     for (const DecisionDef& d : c.decisions) write_decision(w, d);
+    w.u32(static_cast<uint32_t>(c.spirits.size()));
+    for (const SpiritDef& s : c.spirits) write_spirit(w, s);
+    w.u32(static_cast<uint32_t>(c.advisors.size()));
+    for (const AdvisorDef& a : c.advisors) write_advisor(w, a);
     write_constants(w, c.constants);
 }
 
@@ -1037,6 +1085,10 @@ void rebuild_content_index(Content& c) {
     for (size_t i = 0; i < c.decisions.size(); ++i) {
         c.decision_index[c.decisions[i].key] = static_cast<uint32_t>(i);
     }
+    c.spirit_index.clear();
+    for (size_t i = 0; i < c.spirits.size(); ++i) c.spirit_index[c.spirits[i].key] = static_cast<uint32_t>(i);
+    c.advisor_index.clear();
+    for (size_t i = 0; i < c.advisors.size(); ++i) c.advisor_index[c.advisors[i].key] = static_cast<uint32_t>(i);
     c.load_errors.clear();
 }
 
@@ -1089,6 +1141,18 @@ bool read_content(ByteReader& r, Content* c) {
     c->decisions.resize(n);
     for (uint32_t i = 0; i < n; ++i) {
         if (!read_decision(r, &c->decisions[i])) return false;
+    }
+    if (!read_count(r, 40, &n)) return false;
+    c->spirits.clear();
+    c->spirits.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_spirit(r, &c->spirits[i])) return false;
+    }
+    if (!read_count(r, 40, &n)) return false;
+    c->advisors.clear();
+    c->advisors.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_advisor(r, &c->advisors[i])) return false;
     }
     if (!read_constants(r, &c->constants)) return false;
     rebuild_content_index(*c);
@@ -1895,6 +1959,14 @@ void write_country_politics(ByteWriter& w, const Country& c) {
     write_strs(w, c.country_flags);
     w.u32(static_cast<uint32_t>(c.timed_modifiers.size()));
     for (const TimedModifier& m : c.timed_modifiers) write_timed_modifier(w, m);
+    // The held national spirits (permanent named modifiers, days_left = -1), the
+    // Content::spirits / Content::advisors rosters by index, and the slot capacities.
+    w.u32(static_cast<uint32_t>(c.national_spirits.size()));
+    for (const TimedModifier& m : c.national_spirits) write_timed_modifier(w, m);
+    write_u32s(w, c.spirit_keys);
+    write_u32s(w, c.advisors);
+    w.i32(c.spirit_slots);
+    w.i32(c.advisor_slots);
 }
 
 bool read_country_politics(ByteReader& r, Country* c) {
@@ -1919,6 +1991,15 @@ bool read_country_politics(ByteReader& r, Country* c) {
     for (uint32_t i = 0; i < n; ++i) {
         if (!read_timed_modifier(r, &c->timed_modifiers[i])) return false;
     }
+    if (!read_count(r, 16, &n)) return false;  // empty source + modifiers + days_left
+    c->national_spirits.clear();
+    c->national_spirits.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_timed_modifier(r, &c->national_spirits[i])) return false;
+    }
+    if (!read_u32s(r, &c->spirit_keys)) return false;
+    if (!read_u32s(r, &c->advisors)) return false;
+    if (!r.i32(&c->spirit_slots) || !r.i32(&c->advisor_slots)) return false;
     return true;
 }
 

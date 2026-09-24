@@ -31,6 +31,7 @@
 #include "sim/navy.h"
 #include "sim/politics.h"
 #include "sim/research.h"
+#include "sim/spirits.h"
 #include "sim/supply.h"
 #include "sim/units.h"
 #include "sim/world.h"
@@ -881,6 +882,62 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
             decisions.push_back(j);
         }
         player.set("decisions", decisions);
+
+        Json spirits = Json::array();
+        for (const TimedModifier& tm : c->national_spirits) {
+            Json j = Json::object();
+            j.set("key", Json(tm.source));
+            const uint32_t sidx = g.content.spirit_id(tm.source);
+            const SpiritDef* def = g.content.spirit(sidx);
+            j.set("name", Json(def ? def->name : tm.source));
+            j.set("description", Json(def ? def->description : std::string("")));
+            spirits.push_back(j);
+        }
+        player.set("spirits", spirits);
+        Json spirit_choices = Json::array();
+        for (uint32_t i = 0; i < g.content.spirits.size(); ++i) {
+            const SpiritDef* def = g.content.spirit(i);
+            if (!def) continue;
+            bool held = false;
+            for (uint32_t k : c->spirit_keys) {
+                if (k == i) held = true;
+            }
+            if (held || !spirit_available(g, viewer, i)) continue;
+            Json j = Json::object();
+            j.set("key", Json(def->key));
+            j.set("name", Json(def->name));
+            j.set("description", Json(def->description));
+            j.set("slots", Json(def->slots));
+            spirit_choices.push_back(j);
+        }
+        player.set("spirit_choices", spirit_choices);
+        player.set("spirit_slots", Json(spirit_slots_free(g, viewer)));
+        player.set("spirit_capacity", Json(c->spirit_slots));
+
+        Json advisors = Json::array();
+        for (uint32_t idx : c->advisors) {
+            const AdvisorDef* def = g.content.advisor(idx);
+            Json j = Json::object();
+            j.set("key", Json(def ? def->key : std::string("?")));
+            j.set("name", Json(def ? def->name : std::string("?")));
+            advisors.push_back(j);
+        }
+        player.set("advisors", advisors);
+        Json advisor_choices = Json::array();
+        for (uint32_t i = 0; i < g.content.advisors.size(); ++i) {
+            const AdvisorDef* def = g.content.advisor(i);
+            if (!def) continue;
+            if (!advisor_available(g, viewer, i)) continue;
+            Json j = Json::object();
+            j.set("key", Json(def->key));
+            j.set("name", Json(def->name));
+            j.set("description", Json(def->description));
+            j.set("cost", Json(def->cost_pp));
+            advisor_choices.push_back(j);
+        }
+        player.set("advisor_choices", advisor_choices);
+        player.set("advisor_slots", Json(advisor_slots_free(g, viewer)));
+        player.set("advisor_capacity", Json(c->advisor_slots));
 
         Json player_states = Json::array();
         w.states.for_each([&](StateId sid, const State& s) {

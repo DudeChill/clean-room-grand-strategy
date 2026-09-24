@@ -731,6 +731,48 @@ bool load_scenario(const std::string& scenario_path, Content& content, World* wo
             }
         }
 
+        // Starting national spirits. The scenario lists content keys; each is
+        // resolved through the spirit index and added with the same bookkeeping the
+        // AddNationalSpirit command uses (the content index plus one permanent
+        // TimedModifier keyed by the spirit's own source key). Effects are not run
+        // in this pass, so scenario starts use spirits whose value is entirely in
+        // their modifiers.
+        const Json& spirits = c["spirits"];
+        if (spirits.is_array()) {
+            for (size_t k = 0; k < spirits.size(); ++k) {
+                const std::string skey = spirits[k].as_string();
+                const uint32_t sidx = content.spirit_id(skey);
+                const SpiritDef* def = content.spirit(sidx);
+                if (def == nullptr) {
+                    warnings.push_back(scenario_path + ": country " + country.tag +
+                                       ": unknown national spirit " + skey);
+                    continue;
+                }
+                if (std::find(country.spirit_keys.begin(), country.spirit_keys.end(), sidx) !=
+                    country.spirit_keys.end()) {
+                    continue;
+                }
+                // Same slot invariant spirit_add enforces: a scenario cannot stack
+                // more spirit slots than the country's capacity.
+                int used_slots = 0;
+                for (uint32_t held : country.spirit_keys) {
+                    const SpiritDef* held_def = content.spirit(held);
+                    if (held_def != nullptr) used_slots += held_def->slots;
+                }
+                if (used_slots + def->slots > country.spirit_slots) {
+                    warnings.push_back(scenario_path + ": country " + country.tag +
+                                       ": no free spirit slots for " + def->key);
+                    continue;
+                }
+                country.spirit_keys.push_back(sidx);
+                TimedModifier tm;
+                tm.source = def->key;
+                tm.mods = def->modifiers;
+                tm.days_left = -1;
+                country.national_spirits.push_back(std::move(tm));
+            }
+        }
+
         const Json& stock = c["stockpile"];
         if (stock.is_object()) {
             for (const auto& item : stock.object_items()) {

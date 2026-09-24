@@ -165,6 +165,9 @@ runtime state-key index yet; see "Known uncertainty".
 | `set_variable` | `{"name": "x", "value": 1}` | sets a `World::script_vars` entry |
 | `add_to_variable` | `{"name": "x", "value": 1}` | adds to a variable (missing = 0) |
 | `add_claim` | state key | adds the claimant to `State::core_owners` (once) |
+| `add_national_spirit` | spirit key | grants the national spirit (`spirit_grant`; no cost, free slot required) |
+| `remove_national_spirit` | spirit key | removes the national spirit (`spirit_remove`) |
+| `add_advisor` | advisor key | appoints the advisor (`advisor_grant`; no cost, free slot required) |
 
 Details:
 
@@ -184,6 +187,14 @@ Details:
   scope; without one they are a reported no-op.
 * `add_claim` adds the claimant to `State::core_owners`, the list the war and peace
   code reads, and never adds a duplicate.
+* `add_national_spirit` / `remove_national_spirit` use the spirits API. Adding goes
+  through `spirit_grant`: no availability trigger and no political-power cost, but
+  it still requires a free spirit slot. Adding is idempotent; an unknown spirit key
+  (or one that cannot be granted) is reported and ignored. The spirit's own effects
+  run through the same script engine, so the effect recursion guard applies here too.
+* `add_advisor` goes through `advisor_grant`: no trigger gate and no political-power
+  cost (only the command layer charges for a player appointment), but it still
+  requires a free advisor slot.
 * `complete_focus` guards against already-completed focuses and against content
   recursion (effect depth limit).
 

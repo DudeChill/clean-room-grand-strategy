@@ -1181,6 +1181,30 @@ function politicsPanel() {
     }
   }
 
+  const spirits = p.spirits || [];
+  const spiritChoices = p.spirit_choices || [];
+  html += '<h3>National spirits <span class="dim">(' + (p.spirit_slots) + ' free)</span></h3>';
+  html += '<div class="small">' + (spirits.map((s2) => `<b>${s2.name}</b>`).join(' · ') || '<span class="dim">none</span>') + '</div>';
+  if (spiritChoices.length) {
+    html += '<table>';
+    for (const s2 of spiritChoices) {
+      html += `<tr><td>${s2.name}<br><span class="dim">${s2.description || ''}</span></td>` +
+        `<td class="num">${s2.slots} slot</td><td><button data-spirit="${s2.key}">Adopt</button></td></tr>`;
+    }
+    html += '</table>';
+  }
+
+  const advisors = p.advisors || [];
+  const advisorChoices = p.advisor_choices || [];
+  html += '<h3>Advisors <span class="dim">(' + (p.advisor_slots) + ' free)</span></h3>';
+  html += '<div class="small">' + (advisors.map((a2) => `<b>${a2.name}</b>`).join(' · ') || '<span class="dim">none</span>') + '</div>';
+  html += '<table>';
+  for (const a2 of advisorChoices) {
+    html += `<tr><td>${a2.name}<br><span class="dim">${a2.description || ''}</span></td>` +
+      `<td class="num">${a2.cost.toFixed(0)} pp</td><td><button data-advisor="${a2.key}">Appoint</button></td></tr>`;
+  }
+  html += '</table>';
+
   const decisions = p.decisions || [];
   html += '<h3>Decisions</h3><table><tr><th>Decision</th><th class="num">Cost</th><th>State</th><th></th></tr>';
   if (decisions.length === 0) html += '<tr><td colspan="4" class="dim">none available</td></tr>';
@@ -1207,6 +1231,16 @@ function politicsPanel() {
   for (const b of el.querySelectorAll('button[data-event]')) {
     b.addEventListener('click', async () => {
       if (await sendCommand({ type: 'choose_event_option', text: b.dataset.event, value: Number(b.dataset.option) })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-spirit]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'add_national_spirit', text: b.dataset.spirit })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-advisor]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'appoint_advisor', text: b.dataset.advisor })) refresh();
     });
   }
   for (const b of el.querySelectorAll('button[data-decision]')) {

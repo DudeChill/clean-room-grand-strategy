@@ -84,6 +84,29 @@ struct DecisionDef {
     double ai_weight = 1.0;
 };
 
+// A national spirit: a permanent named modifier with an availability trigger.
+struct SpiritDef {
+    uint32_t index = 0;
+    std::string key;
+    std::string name;
+    std::string description;
+    int slots = 1;      // slots the spirit occupies
+    Json available;     // trigger: may the country hold it
+    Modifiers modifiers;
+    Json effects;       // applied when the spirit is added (optional)
+};
+
+// A political advisor: bought with political power, occupies a slot, grants modifiers.
+struct AdvisorDef {
+    uint32_t index = 0;
+    std::string key;
+    std::string name;
+    std::string description;
+    double cost_pp = 150.0;
+    Json available;     // trigger
+    Modifiers modifiers;
+};
+
 // Tunable simulation constants. All balance-relevant numbers live here so that
 // data can be tuned without touching engine code (spec section 168).
 struct SimConstants {
@@ -260,6 +283,10 @@ struct Content {
     std::map<std::string, uint32_t> event_index;
     std::vector<DecisionDef> decisions;
     std::map<std::string, uint32_t> decision_index;
+    std::vector<SpiritDef> spirits;
+    std::map<std::string, uint32_t> spirit_index;
+    std::vector<AdvisorDef> advisors;
+    std::map<std::string, uint32_t> advisor_index;
     SimConstants constants;
     std::vector<std::string> load_errors;  // actionable, file:line + reason
 
@@ -301,6 +328,20 @@ struct Content {
     [[nodiscard]] uint32_t event_id(const std::string& key) const {
         auto it = event_index.find(key);
         return it == event_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    [[nodiscard]] const SpiritDef* spirit(uint32_t index) const {
+        return index < spirits.size() ? &spirits[index] : nullptr;
+    }
+    [[nodiscard]] uint32_t spirit_id(const std::string& key) const {
+        auto it = spirit_index.find(key);
+        return it == spirit_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    [[nodiscard]] const AdvisorDef* advisor(uint32_t index) const {
+        return index < advisors.size() ? &advisors[index] : nullptr;
+    }
+    [[nodiscard]] uint32_t advisor_id(const std::string& key) const {
+        auto it = advisor_index.find(key);
+        return it == advisor_index.end() ? 0xFFFFFFFFu : it->second;
     }
     [[nodiscard]] const DecisionDef* decision(uint32_t index) const {
         return index < decisions.size() ? &decisions[index] : nullptr;

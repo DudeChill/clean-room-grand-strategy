@@ -86,7 +86,8 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | POL-003 | Decisions (visibility, cost, timers, targeting) | PARITY_TESTING | MODERATE | yes | yes | yes | unit |
 | POL-004 | Script engine (triggers, effects, scopes, variables) | PARITY_TESTING | HIGH | part | yes | yes | unit |
 | POL-005 | Timed/scripted modifiers feeding the modifier stack | FUNCTIONAL | MODERATE | part | yes | yes | unit |
-| POL-006 | National spirits and advisors | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| POL-007 | Ideology drift, elections, coups | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| POL-006 | National spirits and advisors | PARITY_TESTING | MODERATE | yes | yes | yes | unit + observer run |
 | DIP-001 | Relations and drift | FUNCTIONAL | MODERATE | part | yes | yes | unit |
 | DIP-002 | Factions (join/leave, leader succession) | PARITY_TESTING | HIGH | yes | yes | yes | unit |
 | DIP-003 | Guarantees and military access | PARTIAL | MODERATE | - | yes | yes | unit |

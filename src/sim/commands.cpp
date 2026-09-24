@@ -28,6 +28,7 @@
 #include "sim/phases.h"
 #include "sim/politics.h"
 #include "sim/research.h"
+#include "sim/spirits.h"
 #include "sim/units.h"
 
 namespace hoi {
@@ -588,6 +589,34 @@ CommandResult do_cancel_decision(Game& g, const Command& cmd) {
     return CommandResult::Applied;
 }
 
+CommandResult do_appoint_advisor(Game& g, const Command& cmd) {
+    const uint32_t advisor = g.content.advisor_id(cmd.text);
+    if (advisor == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+    return advisor_appoint(g, cmd.country, advisor) ? CommandResult::Applied
+                                                    : CommandResult::PrerequisitesMissing;
+}
+
+CommandResult do_dismiss_advisor(Game& g, const Command& cmd) {
+    const uint32_t advisor = g.content.advisor_id(cmd.text);
+    if (advisor == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+    advisor_dismiss(g, cmd.country, advisor);
+    return CommandResult::Applied;
+}
+
+CommandResult do_add_spirit(Game& g, const Command& cmd) {
+    const uint32_t spirit = g.content.spirit_id(cmd.text);
+    if (spirit == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+    return spirit_add(g, cmd.country, spirit) ? CommandResult::Applied
+                                             : CommandResult::PrerequisitesMissing;
+}
+
+CommandResult do_remove_spirit(Game& g, const Command& cmd) {
+    const uint32_t spirit = g.content.spirit_id(cmd.text);
+    if (spirit == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+    return spirit_remove(g, cmd.country, spirit) ? CommandResult::Applied
+                                                : CommandResult::UnknownEntity;
+}
+
 CommandResult do_create_fleet(Game& g, const Command& cmd) {
     Country& c = g.world.countries[cmd.country];
     Fleet fleet;
@@ -679,6 +708,10 @@ const char* command_type_name(CommandType t) {
         case CommandType::CancelFocus: return "cancel_focus";
         case CommandType::ChooseEventOption: return "choose_event_option";
         case CommandType::TakeDecision: return "take_decision";
+        case CommandType::AppointAdvisor: return "appoint_advisor";
+        case CommandType::DismissAdvisor: return "dismiss_advisor";
+        case CommandType::AddNationalSpirit: return "add_national_spirit";
+        case CommandType::RemoveNationalSpirit: return "remove_national_spirit";
         case CommandType::CancelDecision: return "cancel_decision";
         case CommandType::SetLaw: return "set_law";
         case CommandType::SetTradePolicy: return "set_trade_policy";
@@ -1054,6 +1087,30 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (decision == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
             return CommandResult::Applied;
         }
+        case CommandType::AppointAdvisor: {
+            const uint32_t advisor = g.content.advisor_id(cmd.text);
+            if (advisor == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            if (!advisor_available(g, cmd.country, advisor)) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            return CommandResult::Applied;
+        }
+        case CommandType::DismissAdvisor: {
+            if (g.content.advisor_id(cmd.text) == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            return CommandResult::Applied;
+        }
+        case CommandType::AddNationalSpirit: {
+            const uint32_t spirit = g.content.spirit_id(cmd.text);
+            if (spirit == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            if (!spirit_available(g, cmd.country, spirit)) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            return CommandResult::Applied;
+        }
+        case CommandType::RemoveNationalSpirit: {
+            if (g.content.spirit_id(cmd.text) == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            return CommandResult::Applied;
+        }
         case CommandType::SetLaw: {
             const LawDef* law = g.content.law(cmd.text);
             if (!law) return CommandResult::UnknownEntity;
@@ -1134,6 +1191,10 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::CancelFocus: return do_cancel_focus(g, cmd);
         case CommandType::ChooseEventOption: return do_choose_event_option(g, cmd);
         case CommandType::TakeDecision: return do_take_decision(g, cmd);
+        case CommandType::AppointAdvisor: return do_appoint_advisor(g, cmd);
+        case CommandType::DismissAdvisor: return do_dismiss_advisor(g, cmd);
+        case CommandType::AddNationalSpirit: return do_add_spirit(g, cmd);
+        case CommandType::RemoveNationalSpirit: return do_remove_spirit(g, cmd);
         case CommandType::CancelDecision: return do_cancel_decision(g, cmd);
         case CommandType::SetLaw: return do_set_law(g, cmd);
         case CommandType::SetTradePolicy: return do_set_trade_policy(g, cmd);

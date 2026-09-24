@@ -1,0 +1,51 @@
+{
+  "spirits": [
+    {"key": "war_economy", "name": "War Economy", "slots": 1,
+     "description": "Industry has been placed on a war footing; the civilian economy is subordinated to armament production.",
+     "available": {"at_war": true},
+     "modifiers": {"FactoryOutput": 0.10, "ConstructionSpeed": 0.05},
+     "effects": {"add_war_support": 0.02}},
+
+    {"key": "national_unity", "name": "National Unity", "slots": 1,
+     "description": "With the public divided, a national unity government rallies the country behind the state.",
+     "available": {"stability": {"lt": 0.5}},
+     "modifiers": {"Stability": 0.10, "WarSupport": 0.05}},
+
+    {"key": "mobilisation_drive", "name": "Mobilisation Drive", "slots": 1,
+     "description": "A mass recruitment campaign brings volunteers and conscripts into the ranks.",
+     "available": {"war_support": {"gte": 0.5}},
+     "modifiers": {"RecruitablePopulation": 0.015, "TrainingTime": -0.10},
+     "effects": {"add_manpower": 5000}},
+
+    {"key": "fortress_doctrine", "name": "Fortress Doctrine", "slots": 1,
+     "description": "The army plans around fortified defensive lines and prepared positions.",
+     "available": {"owns_state": "s1"},
+     "modifiers": {"DivisionDefense": 0.15, "EntrenchmentSpeed": 0.20}},
+
+    {"key": "scientific_institutes", "name": "Scientific Institutes", "slots": 1,
+     "description": "A network of state research institutes accelerates applied science and engineering.",
+     "available": {"has_tech": "production_lines"},
+     "modifiers": {"ResearchSpeed": 0.10},
+     "effects": {"add_political_power": 15}},
+
+    {"key": "officer_purge_aftermath", "name": "Officer Purge Aftermath", "slots": 1,
+     "description": "Political purges have hollowed out the officer corps; command initiative suffers.",
+     "modifiers": {"DivisionOrganization": -0.05, "DivisionAttack": -0.05}},
+
+    {"key": "colonial_administration", "name": "Colonial Administration", "slots": 1,
+     "description": "A sprawling colonial bureaucracy channels manpower and resources to the metropole.",
+     "modifiers": {"ConstructionSpeed": 0.05, "ManpowerGrowth": 0.02}},
+
+    {"key": "trade_dependency", "name": "Trade Dependency", "slots": 1,
+     "description": "The economy depends on foreign markets and shipping lanes it does not control.",
+     "modifiers": {"FactoryOutput": -0.05, "ConvoyDefense": -0.10}},
+
+    {"key": "heavy_industrial_base", "name": "Heavy Industrial Base", "slots": 2,
+     "description": "A large pre-war industrial base of steelworks, machine shops and shipyards anchors the economy.",
+     "modifiers": {"FactoryOutput": 0.15, "ConstructionSpeed": 0.10}},
+
+    {"key": "general_staff_reform", "name": "General Staff Reform", "slots": 1,
+     "description": "A reformed general staff improves operational planning and staff work.",
+     "modifiers": {"MaxPlanning": 0.10, "PlanningSpeed": 0.10}}
+  ]
+}

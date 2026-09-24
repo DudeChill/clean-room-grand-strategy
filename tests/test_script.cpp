@@ -15,6 +15,7 @@
 #include "sim/diplomacy.h"
 #include "sim/research.h"
 #include "sim/script.h"
+#include "sim/spirits.h"
 #include "sim/units.h"
 #include "test.h"
 #include "test_util.h"
@@ -102,6 +103,30 @@ TechId add_tech(Content& c, const std::string& key, ModifierKind kind, double va
     c.tech_by_key[key] = t.id;
     c.techs.push_back(t);
     return t.id;
+}
+
+uint32_t add_spirit(Content& c, const std::string& key, ModifierKind kind, double value) {
+    SpiritDef s;
+    s.index = static_cast<uint32_t>(c.spirits.size());
+    s.key = key;
+    s.name = key;
+    s.slots = 1;
+    s.modifiers.set(kind, value);
+    c.spirit_index[key] = s.index;
+    c.spirits.push_back(s);
+    return s.index;
+}
+
+uint32_t add_advisor(Content& c, const std::string& key, ModifierKind kind, double value) {
+    AdvisorDef a;
+    a.index = static_cast<uint32_t>(c.advisors.size());
+    a.key = key;
+    a.name = key;
+    a.cost_pp = 0.0;
+    a.modifiers.set(kind, value);
+    c.advisor_index[key] = a.index;
+    c.advisors.push_back(a);
+    return a.index;
 }
 
 // ------------------------------------------------------------------- triggers --
@@ -449,6 +474,40 @@ HOI_TEST(script_effect_variables_and_claim) {
     CHECK(std::find(sa.core_owners.begin(), sa.core_owners.end(), m.a) != sa.core_owners.end());
     fx(m, m.a, R"({"add_claim":"s9999"})");
     CHECK(!g.world.script_vars.count("claim:9998"));
+}
+
+HOI_TEST(script_effect_spirits_and_advisors) {
+    MiniWorld m = make_mini_world();
+    Game& g = m.game;
+    add_spirit(g.content, "war_economy", ModifierKind::FactoryOutput, 0.05);
+    add_advisor(g.content, "chief_of_staff", ModifierKind::DivisionAttack, 0.05);
+    // An advisor that would normally cost political power: effects still grant free.
+    const uint32_t costed = add_advisor(g.content, "armaments_minister", ModifierKind::FactoryOutput, 0.05);
+    g.content.advisors[costed].cost_pp = 500.0;
+
+    const double pp = g.world.countries[m.a].political_power;
+
+    fx(m, m.a, R"({"add_national_spirit":"war_economy"})");
+    CHECK(has_spirit(g.world, m.a, "war_economy"));
+    fx(m, m.a, R"({"add_national_spirit":"war_economy"})");  // already held: no-op
+    CHECK_NEAR(g.world.countries[m.a].political_power, pp, 1e-9);
+
+    fx(m, m.a, R"({"add_national_spirit":"no_such_spirit"})");
+    CHECK(!has_spirit(g.world, m.a, "no_such_spirit"));
+
+    fx(m, m.a, R"({"remove_national_spirit":"war_economy"})");
+    CHECK(!has_spirit(g.world, m.a, "war_economy"));
+    fx(m, m.a, R"({"remove_national_spirit":"no_such_spirit"})");  // reported, ignored
+
+    CHECK(!has_advisor(g.world, m.a, "chief_of_staff"));
+    fx(m, m.a, R"({"add_advisor":"chief_of_staff"})");
+    CHECK(has_advisor(g.world, m.a, "chief_of_staff"));
+    fx(m, m.a, R"({"add_advisor":"chief_of_staff"})");  // already appointed: no-op
+    fx(m, m.a, R"({"add_advisor":"no_such_advisor"})");
+    CHECK(!has_advisor(g.world, m.a, "no_such_advisor"));
+    fx(m, m.a, R"({"add_advisor":"armaments_minister"})");
+    CHECK(has_advisor(g.world, m.a, "armaments_minister"));
+    CHECK_NEAR(g.world.countries[m.a].political_power, pp, 1e-9);  // effects never charge PP
 }
 
 HOI_TEST(script_effect_state_flags) {

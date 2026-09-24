@@ -70,6 +70,7 @@ Politics scripting (in progress, v0.4.0):
 * national focus trees: prerequisites, exclusions, bypass, effects, AI weighting
 * events with options and chains; decisions with cost, timers, targeting
 * timed and scripted modifiers feeding the country modifier stack
+* national spirits and political advisors (slots, costs, triggers)
 
 Earlier in this milestone:
 

@@ -1233,6 +1233,102 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         }
     }
 
+    // ---- national spirits ------------------------------------------------
+    // Optional file: a data set with no spirits simply ships none. A file that
+    // exists but does not parse is a hard error, exactly like the focus trees.
+    // Modifiers use the same vocabulary as laws and technologies.
+    const std::string f_spirits = root + "/common/spirits.json";
+    std::vector<std::string> spirit_src;
+    if (std::filesystem::exists(f_spirits)) {
+        Json fd;
+        if (!load_json_file(f_spirits, &fd, &file_err)) {
+            errors.push_back(file_err);
+            if (err) *err = file_err;
+            return false;
+        }
+        const Json& arr = fd["spirits"];
+        if (!arr.is_array()) {
+            const std::string msg = f_spirits + ":spirits: expected an array";
+            errors.push_back(msg);
+            if (err) *err = msg;
+            return false;
+        }
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const Json& sj = arr[i];
+            const std::string key = sj["key"].as_string();
+            if (key.empty()) {
+                errors.push_back(f_spirits + ":<entry " + std::to_string(i) + ">: missing key");
+                continue;
+            }
+            if (out->spirit_index.count(key) != 0) {
+                errors.push_back(f_spirits + ":" + key + ": duplicate spirit key");
+                continue;
+            }
+            SpiritDef def;
+            def.index = static_cast<uint32_t>(out->spirits.size());
+            def.key = key;
+            def.name = sj["name"].as_string(key);
+            def.description = sj["description"].as_string();
+            def.slots = static_cast<int>(sj["slots"].as_int(def.slots));
+            if (def.slots < 1) {
+                errors.push_back(f_spirits + ":" + key + ": slots must be at least 1");
+                def.slots = 1;
+            }
+            def.available = sj["available"];
+            def.modifiers = parse_modifiers(sj["modifiers"], &errors, f_spirits, key);
+            def.effects = sj["effects"];
+            out->spirit_index[key] = def.index;
+            out->spirits.push_back(std::move(def));
+            spirit_src.push_back(f_spirits);
+        }
+    }
+
+    // ---- political advisors ----------------------------------------------
+    const std::string f_advisors = root + "/common/advisors.json";
+    std::vector<std::string> advisor_src;
+    if (std::filesystem::exists(f_advisors)) {
+        Json fd;
+        if (!load_json_file(f_advisors, &fd, &file_err)) {
+            errors.push_back(file_err);
+            if (err) *err = file_err;
+            return false;
+        }
+        const Json& arr = fd["advisors"];
+        if (!arr.is_array()) {
+            const std::string msg = f_advisors + ":advisors: expected an array";
+            errors.push_back(msg);
+            if (err) *err = msg;
+            return false;
+        }
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const Json& aj = arr[i];
+            const std::string key = aj["key"].as_string();
+            if (key.empty()) {
+                errors.push_back(f_advisors + ":<entry " + std::to_string(i) + ">: missing key");
+                continue;
+            }
+            if (out->advisor_index.count(key) != 0) {
+                errors.push_back(f_advisors + ":" + key + ": duplicate advisor key");
+                continue;
+            }
+            AdvisorDef def;
+            def.index = static_cast<uint32_t>(out->advisors.size());
+            def.key = key;
+            def.name = aj["name"].as_string(key);
+            def.description = aj["description"].as_string();
+            def.cost_pp = aj["cost_pp"].as_double(def.cost_pp);
+            if (def.cost_pp < 0.0) {
+                errors.push_back(f_advisors + ":" + key + ": cost_pp must not be negative");
+                def.cost_pp = 0.0;
+            }
+            def.available = aj["available"];
+            def.modifiers = parse_modifiers(aj["modifiers"], &errors, f_advisors, key);
+            out->advisor_index[key] = def.index;
+            out->advisors.push_back(std::move(def));
+            advisor_src.push_back(f_advisors);
+        }
+    }
+
     // ---- cross-reference validation --------------------------------------
     // Runs after every file is registered so a focus may reference an event or a
     // decision declared later, and vice versa.
@@ -1272,6 +1368,22 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
         validate_trigger(d.available, *out, state_keys, &errors, file, d.key, "available");
         validate_effects(d.effects, *out, state_keys, &errors, file, d.key, "effects");
         validate_effects(d.remove_effect, *out, state_keys, &errors, file, d.key, "remove_effect");
+    }
+    // Spirits and advisors are country-scoped: their triggers take no state scope,
+    // so the state-key cross-reference set is deliberately empty here. Everything
+    // else in the trigger/effect vocabulary (shape, known modifiers, referenced
+    // technologies and focuses) is still checked.
+    const std::set<std::string> no_states;
+    for (size_t i = 0; i < out->spirits.size(); ++i) {
+        const SpiritDef& d = out->spirits[i];
+        const std::string file = i < spirit_src.size() ? spirit_src[i] : std::string();
+        validate_trigger(d.available, *out, no_states, &errors, file, d.key, "available");
+        validate_effects(d.effects, *out, no_states, &errors, file, d.key, "effects");
+    }
+    for (size_t i = 0; i < out->advisors.size(); ++i) {
+        const AdvisorDef& d = out->advisors[i];
+        const std::string file = i < advisor_src.size() ? advisor_src[i] : std::string();
+        validate_trigger(d.available, *out, no_states, &errors, file, d.key, "available");
     }
 
     if (err) *err = errors.empty() ? std::string() : errors.front();

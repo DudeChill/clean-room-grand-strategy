@@ -21,7 +21,8 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | NAV-011 | MINOR | Naval | An invading army gathers and crosses as a whole | AI staging is verified for a free army: it commits the army, marches its divisions and refuses to launch until they are in the port. Reproduced open case: when the AI assigns an additional engaged division to the staging army, that division cannot be pulled out of its battle, so the gather step waits and the crossing stalls (the AI now avoids committing such armies, but an assignment made before commitment can still race) | OPEN (reproduction in tests/test_ai.cpp, the avoided case is covered) |
 | POL-001 | BLOCKER | Politics | Focus trees drive national progression | No focus system | OPEN |
 | POL-002 | MAJOR | Politics | Events and decisions with triggers/options | No event/decision scripting | OPEN |
-| POL-003 | MAJOR | Politics | National spirits and advisors | Not modelled | OPEN |
+| POL-003 | MAJOR | Politics | National spirits and advisors | Implemented: spirits and advisors are real slot-limited modifier sources, granted by content or bought with political power | CLOSED (v0.5.0) |
+| POL-007 | MINOR | Politics | Ideology drift, elections and coups | Not modelled | OPEN |
 | ECON-001 | MAJOR | Economy | Trade, convoys, blockades | Not modelled; resources are domestic only | OPEN |
 | ECON-002 | MAJOR | Economy | Equipment designers with components | Equipment is fixed data; no designer | OPEN |
 | INT-001 | MAJOR | Intelligence | Agencies, networks, operations | Not modelled | OPEN |

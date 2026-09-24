@@ -37,6 +37,8 @@ void phase_politics(Game& g);
 void phase_focuses(Game& g);
 // 9c. Events (automatic firing, delayed firing) and decision timers.
 void phase_events(Game& g);
+// 9d. National spirits: upkeep and expiry of spirit effects.
+void phase_spirits(Game& g);
 // 10. Weather per strategic region.
 void phase_weather(Game& g);
 // 11. AI planning; issues commands into the queue for the next tick.

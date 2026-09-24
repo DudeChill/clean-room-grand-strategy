@@ -21,6 +21,7 @@
 #include "save/save.h"
 #include "sim/industry.h"
 #include "sim/research.h"
+#include "sim/spirits.h"
 #include "sim/supply.h"
 #include "sim/units.h"
 
@@ -294,6 +295,22 @@ void inspect_country(const Game& g, const std::string& tag) {
                         left > 0 ? std::to_string(static_cast<int>(left)).c_str() : "permanent");
         }
         std::printf("\n");
+    }
+    if (!c.spirit_keys.empty() || !c.national_spirits.empty()) {
+        std::printf("    spirits:");
+        for (uint32_t idx : c.spirit_keys) {
+            const SpiritDef* def = g.content.spirit(idx);
+            std::printf(" %s", def ? def->key.c_str() : "?");
+        }
+        std::printf("   (slots free %d of %d)\n", spirit_slots_free(g, cid), c.spirit_slots);
+    }
+    if (!c.advisors.empty()) {
+        std::printf("    advisors:");
+        for (uint32_t idx : c.advisors) {
+            const AdvisorDef* def = g.content.advisor(idx);
+            std::printf(" %s", def ? def->key.c_str() : "?");
+        }
+        std::printf("   (slots free %d of %d)\n", advisor_slots_free(g, cid), c.advisor_slots);
     }
     if (!c.timed_modifiers.empty()) {
         std::printf("    timed modifiers:");

@@ -44,6 +44,7 @@
 #include "sim/diplomacy.h"
 #include "sim/events.h"
 #include "sim/focus.h"
+#include "sim/spirits.h"
 #include "sim/industry.h"
 #include "sim/map.h"
 #include "sim/navy.h"
@@ -2972,6 +2973,7 @@ void ai_politics_layer(Game& g, Country& c) {
     ai_focus_layer(g, c);
     ai_event_layer(g, c);
     ai_decision_layer(g, c);
+    ai_spirit_advisor_layer(g, c);
 }
 
 void phase_ai(Game& g) {

@@ -98,6 +98,7 @@ void Game::tick_once() {
     HOI_PHASE(phase_politics, ms_politics);
     HOI_PHASE(phase_focuses, ms_focuses);
     HOI_PHASE(phase_events, ms_events);
+    HOI_PHASE(phase_spirits, ms_spirits);
     HOI_PHASE(phase_weather, ms_weather);
     HOI_PHASE(phase_ai, ms_ai);
     HOI_PHASE(phase_cleanup, ms_cleanup);

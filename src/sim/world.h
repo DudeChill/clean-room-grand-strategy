@@ -501,6 +501,11 @@ struct Country {
     std::vector<double> decision_cooldown;    // per decision index, days until re-takeable
     std::vector<std::string> country_flags;   // script flags (add_country_flag)
     std::vector<TimedModifier> timed_modifiers;  // focus/event/decision modifiers
+    std::vector<TimedModifier> national_spirits;  // permanent named modifiers (seconds/keys)
+    std::vector<uint32_t> spirit_keys;            // Content::spirits indices held
+    std::vector<uint32_t> advisors;               // Content::advisors indices appointed
+    int spirit_slots = 6;                         // national spirit capacity
+    int advisor_slots = 3;                        // political advisor capacity
     uint32_t faction = 0;  // 0 = none
 
     double consumer_goods_ratio = 0.35;
@@ -522,6 +527,7 @@ struct Country {
         m.add(law_modifiers);
         m.add(national_modifiers);
         for (const TimedModifier& tm : timed_modifiers) m.add(tm.mods);
+        for (const TimedModifier& tm : national_spirits) m.add(tm.mods);
         return m;
     }
 };

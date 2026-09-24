@@ -20,7 +20,10 @@ inline constexpr uint32_t SAVE_MAGIC = 0x34494F48;  // "HOI4" little-endian
 // 4: Politics gained the per-country focus/event/decision state and the script
 //    variables + delayed events; Economy gained the focus/event/decision content
 //    tables. Version 3 files have none of those fields and are rejected.
-inline constexpr uint32_t SAVE_VERSION = 4;
+// 5: Politics gained the per-country national spirits, spirit/advisor rosters and
+//    slot capacities; Economy gained the national spirit and political advisor
+//    content tables. Layout changed, so version 4 files are rejected.
+inline constexpr uint32_t SAVE_VERSION = 5;
 
 enum class Subsystem : uint8_t {
     Map = 0,

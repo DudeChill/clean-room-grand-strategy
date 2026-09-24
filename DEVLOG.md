@@ -3,6 +3,46 @@
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /
 NEW DISCREPANCIES / PERFORMANCE / TEST RESULTS / NEXT PRIORITY.
 
+## 2026-09-24 — v0.5.0 national spirits and political advisors (POL-006 closed)
+
+IMPLEMENTED
+* National spirits: permanent named modifier blocks with availability triggers, slot
+  costs and optional effect blocks; they feed the same modifier stack as technology
+  and laws and are granted by content through the script effect `add_national_spirit`.
+* Political advisors: appointments costing political power, occupying advisor slots,
+  granting modifiers until dismissed; the script effect `add_advisor` grants one.
+* Raw grant entry points (`spirit_grant` / `advisor_grant`) so content effects grant
+  without a trigger or cost while slot capacity stays an invariant that no path can
+  break.
+* AI: the politics layer appoints advisors and adopts spirits scored against posture
+  (military modifiers at war, industry and research in peace), acting only through
+  commands, with reasons recorded on `AiLayer::Politics`.
+* Client: the Politics tab lists held spirits with free slots and the advisors in
+  office, plus the available choices; `--inspect-country` reports both pools.
+* Content: 10 spirits (5 trigger-gated, one costing two slots) and 8 advisors, with
+  per-country starting spirits in the scenario for the two largest powers.
+* Save format version 5 (spirits, advisors and their content tables serialized).
+
+FIXED
+* The script engine granted appointments through the command path, which charged
+  political power and enforced content triggers; effects now use the grant variants,
+  so a focus can hand out a spirit whose trigger does not pass while capacity stays
+  enforced (found by cross-checking two agents' semantics against each other).
+
+TEST RESULTS
+* `hoi_tests`: 215 passed, 0 failed (16 new spirit/advisor tests).
+* `scripts/verify.sh`: 8 checks passed, 0 failed.
+* 400-day observer run: an AI country holds five spirits (including two trigger-gated
+  ones) and three advisors, with both slot pools fully used, and the audit is clean.
+* Client verified live: adopting a spirit through the panel changed state and slot
+  accounting; advisor choices were correctly gated by political power.
+
+NEW DISCREPANCIES
+* Ideology drift, elections and coups remain unmodelled (a new POL-007 entry).
+
+NEXT PRIORITY
+* Trade and convoys as an economic system (ECON-001, MAJOR), then equipment designers.
+
 ## 2026-09-24 — v0.4.0 politics: script engine, focus trees, events, decisions (POL-001 closed)
 
 IMPLEMENTED
