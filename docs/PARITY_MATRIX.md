@@ -81,10 +81,12 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | NAV-005 | Ports as supply sources, convoys, blockade | SPECIFIED | LOW | yes | yes | yes | unit |
 | NAV-006 | Repair and port facilities | SPECIFIED | LOW | yes | yes | yes | unit |
 | NAV-007 | Carrier air power | SPECIFIED | LOW | part | yes | yes | unit |
-| POL-001 | Focus trees | NOT_IMPLEMENTED | LOW | - | - | - | - |
-| POL-002 | Events | NOT_IMPLEMENTED | LOW | - | - | - | - |
-| POL-003 | Decisions | NOT_IMPLEMENTED | LOW | - | - | - | - |
-| POL-004 | National spirits/advisors | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| POL-001 | Focus trees (prerequisites, exclusions, bypass, effects, AI) | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
+| POL-002 | Events (triggers, options, chains, delays) | PARITY_TESTING | MODERATE | yes | yes | yes | unit + golden |
+| POL-003 | Decisions (visibility, cost, timers, targeting) | PARITY_TESTING | MODERATE | yes | yes | yes | unit |
+| POL-004 | Script engine (triggers, effects, scopes, variables) | PARITY_TESTING | HIGH | part | yes | yes | unit |
+| POL-005 | Timed/scripted modifiers feeding the modifier stack | FUNCTIONAL | MODERATE | part | yes | yes | unit |
+| POL-006 | National spirits and advisors | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | DIP-001 | Relations and drift | FUNCTIONAL | MODERATE | part | yes | yes | unit |
 | DIP-002 | Factions (join/leave, leader succession) | PARITY_TESTING | HIGH | yes | yes | yes | unit |
 | DIP-003 | Guarantees and military access | PARTIAL | MODERATE | - | yes | yes | unit |

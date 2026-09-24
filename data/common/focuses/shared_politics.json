@@ -1,0 +1,112 @@
+{
+  "tree": "shared",
+  "focuses": [
+    {
+      "key": "pol_government",
+      "name": "Government Reorganization",
+      "x": 0,
+      "y": 0,
+      "days": 35,
+      "available": {},
+      "effects": {
+        "add_modifier": { "kind": "PoliticalPowerGain", "value": 0.10 },
+        "add_stability": 0.02
+      },
+      "ai_weight": 1.3
+    },
+    {
+      "key": "pol_civil_service",
+      "name": "Civil Service Reform",
+      "x": 1,
+      "y": 1,
+      "days": 50,
+      "prerequisites": ["pol_government"],
+      "effects": {
+        "add_political_power": 50,
+        "add_modifier": { "kind": "PoliticalPowerGain", "value": 0.05 }
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "pol_broadcast",
+      "name": "National Broadcast Service",
+      "x": 1,
+      "y": 2,
+      "days": 60,
+      "prerequisites": ["pol_government"],
+      "effects": {
+        "add_war_support": 0.05,
+        "add_modifier": { "kind": "WarSupport", "value": 0.03 }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "pol_labour",
+      "name": "Labour Reforms",
+      "x": 2,
+      "y": 1,
+      "days": 80,
+      "prerequisites": ["pol_civil_service"],
+      "effects": {
+        "set_law": "economy_partial_mobilization",
+        "add_modifier": { "kind": "RecruitablePopulation", "value": 0.02 }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "pol_conscription_reform",
+      "name": "Conscription Reform",
+      "x": 2,
+      "y": 3,
+      "days": 80,
+      "prerequisites": ["pol_broadcast"],
+      "mutually_exclusive": ["pol_volunteer_army"],
+      "effects": {
+        "set_law": "conscription_extensive",
+        "add_war_support": 0.03
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "pol_volunteer_army",
+      "name": "Professional Volunteer Army",
+      "x": 2,
+      "y": 2,
+      "days": 80,
+      "prerequisites": ["pol_broadcast"],
+      "mutually_exclusive": ["pol_conscription_reform"],
+      "effects": {
+        "add_modifier": { "kind": "DivisionDefense", "value": 0.05 },
+        "add_stability": 0.03
+      },
+      "ai_weight": 0.9
+    },
+    {
+      "key": "pol_security",
+      "name": "Interior Security Service",
+      "x": 3,
+      "y": 1,
+      "days": 100,
+      "prerequisites": ["pol_labour"],
+      "effects": {
+        "add_modifier": { "kind": "Stability", "value": 0.05 },
+        "set_flag": "pol_security",
+        "trigger_event": { "key": "ev_political_scandal", "days": 20 }
+      },
+      "ai_weight": 0.9
+    },
+    {
+      "key": "pol_national_unity",
+      "name": "National Unity Campaign",
+      "x": 4,
+      "y": 1,
+      "days": 120,
+      "prerequisites": ["pol_security"],
+      "effects": {
+        "add_stability": 0.05,
+        "add_war_support": 0.05
+      },
+      "ai_weight": 1.0
+    }
+  ]
+}

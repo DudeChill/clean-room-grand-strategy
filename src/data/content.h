@@ -31,6 +31,59 @@ struct TechDef {
     Modifiers modifiers;
 };
 
+// A national focus. Everything except its position and duration is a script block
+// evaluated by the script engine (src/sim/script.h).
+struct FocusDef {
+    uint32_t index = 0;  // position in Content::focuses
+    std::string key;
+    std::string name;
+    std::string tree;  // country tag or "shared"
+    int x = 0;
+    int y = 0;
+    double days = 70.0;
+    std::vector<std::string> prerequisites;         // focus keys
+    std::vector<std::string> mutually_exclusive;    // focus keys
+    Json available;  // trigger (null = always available)
+    Json bypass;     // trigger (null = never bypassed)
+    Json effects;    // effect block applied on completion
+    double ai_weight = 1.0;  // base weight multiplies the scripted score
+};
+
+struct EventOptionDef {
+    std::string name;
+    Json effects;    // effect block
+    double ai_weight = 1.0;
+};
+
+struct EventDef {
+    uint32_t index = 0;
+    std::string key;
+    std::string title;
+    std::string description;
+    bool fire_only_once = true;
+    bool major = false;  // pauses the game for a human player
+    Json trigger;        // automatic firing condition (null = only fired by effects)
+    std::vector<EventOptionDef> options;
+    Json immediate;      // effects applied when the event fires, before the choice
+};
+
+struct DecisionDef {
+    uint32_t index = 0;
+    std::string key;
+    std::string name;
+    std::string description;
+    int category = 0;
+    bool targets_state = false;  // otherwise the decision is country-scoped
+    double cost_pp = 0.0;
+    int days_remove = 0;   // 0 = permanent while taken
+    int days_cooldown = 0; // time before it may be taken again after removal
+    Json visible;    // trigger: show the decision at all
+    Json available;  // trigger: may be taken now
+    Json effects;    // effect block when taken
+    Json remove_effect;  // effect block when the timer runs out
+    double ai_weight = 1.0;
+};
+
 // Tunable simulation constants. All balance-relevant numbers live here so that
 // data can be tuned without touching engine code (spec section 168).
 struct SimConstants {
@@ -161,6 +214,7 @@ struct SimConstants {
 
     // Politics.
     double political_power_per_day = 2.0;
+    double focus_progress_speed = 1.0;  // days of focus progress per elapsed day
     double stability_drift = 0.01;
     double war_support_drift = 0.01;
 
@@ -200,6 +254,12 @@ struct Content {
     std::vector<LawDef> laws;
     std::map<std::string, int> law_index;  // key -> index in `laws`
     std::vector<BuildingDef> buildings;
+    std::vector<FocusDef> focuses;
+    std::map<std::string, uint32_t> focus_index;  // focus key -> index
+    std::vector<EventDef> events;
+    std::map<std::string, uint32_t> event_index;
+    std::vector<DecisionDef> decisions;
+    std::map<std::string, uint32_t> decision_index;
     SimConstants constants;
     std::vector<std::string> load_errors;  // actionable, file:line + reason
 
@@ -227,6 +287,27 @@ struct Content {
     [[nodiscard]] const LawDef* law(const std::string& key) const {
         auto it = law_index.find(key);
         return it == law_index.end() ? nullptr : &laws[it->second];
+    }
+    [[nodiscard]] const FocusDef* focus(uint32_t index) const {
+        return index < focuses.size() ? &focuses[index] : nullptr;
+    }
+    [[nodiscard]] uint32_t focus_id(const std::string& key) const {
+        auto it = focus_index.find(key);
+        return it == focus_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    [[nodiscard]] const EventDef* event(uint32_t index) const {
+        return index < events.size() ? &events[index] : nullptr;
+    }
+    [[nodiscard]] uint32_t event_id(const std::string& key) const {
+        auto it = event_index.find(key);
+        return it == event_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    [[nodiscard]] const DecisionDef* decision(uint32_t index) const {
+        return index < decisions.size() ? &decisions[index] : nullptr;
+    }
+    [[nodiscard]] uint32_t decision_id(const std::string& key) const {
+        auto it = decision_index.find(key);
+        return it == decision_index.end() ? 0xFFFFFFFFu : it->second;
     }
 };
 

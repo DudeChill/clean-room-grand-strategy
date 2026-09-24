@@ -21,6 +21,7 @@ enum class AiLayer : uint8_t {
     Research,
     Production,
     Military,
+    Politics,
     Diplomacy,
     Count
 };
@@ -53,6 +54,10 @@ struct AiState {
 // Plans for every AI-controlled country and pushes commands into `g.queue`.
 // Runs in phase 11 so the commands apply at the start of the next tick.
 void phase_ai(Game& g);
+
+// Politics layer: focus selection, event choices and decisions. Declared here and
+// defined in sim/focus.cpp and sim/events.cpp.
+void ai_politics_layer(Game& g, Country& c);
 
 // Single-country entry points, used by tests to exercise one layer in isolation.
 void ai_industry_layer(Game& g, Country& c);

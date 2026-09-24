@@ -42,6 +42,8 @@
 #include "game/game.h"
 #include "sim/air.h"
 #include "sim/diplomacy.h"
+#include "sim/events.h"
+#include "sim/focus.h"
 #include "sim/industry.h"
 #include "sim/map.h"
 #include "sim/navy.h"
@@ -62,6 +64,8 @@ const char* ai_layer_name(AiLayer l) {
             return "production";
         case AiLayer::Military:
             return "military";
+        case AiLayer::Politics:
+            return "politics";
         case AiLayer::Diplomacy:
             return "diplomacy";
         case AiLayer::Count:
@@ -2954,12 +2958,21 @@ void run_layer(Game& g, AiLayer l, Country& c) {
         case AiLayer::Research: ai_research_layer(g, c); break;
         case AiLayer::Production: ai_production_layer(g, c); break;
         case AiLayer::Military: ai_military_layer(g, c); break;
+        case AiLayer::Politics: ai_politics_layer(g, c); break;
         case AiLayer::Diplomacy: ai_diplomacy_layer(g, c); break;
         case AiLayer::Count: break;
     }
 }
 
 }  // namespace
+
+// The politics layer aggregates focus selection, event choices and decisions; the
+// individual parts live in src/sim/focus.cpp and src/sim/events.cpp.
+void ai_politics_layer(Game& g, Country& c) {
+    ai_focus_layer(g, c);
+    ai_event_layer(g, c);
+    ai_decision_layer(g, c);
+}
 
 void phase_ai(Game& g) {
     const Tick now = g.world.tick;

@@ -1,0 +1,228 @@
+{
+  "decisions": [
+    {
+      "key": "dec_public_works",
+      "name": "Emergency Public Works",
+      "description": "Put the unemployed to work building roads, dams and docks.",
+      "category": 1,
+      "cost_pp": 60,
+      "days_remove": 180,
+      "days_cooldown": 90,
+      "visible": {},
+      "available": { "political_power": { "gte": 60 } },
+      "effects": {
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.05, "days": 180, "source": "dec_public_works" },
+        "add_stability": 0.02
+      },
+      "ai_weight": 1.2
+    },
+    {
+      "key": "dec_industrial_subsidies",
+      "name": "Industrial Subsidies",
+      "description": "Subsidise private industry to expand plant and tooling.",
+      "category": 1,
+      "cost_pp": 80,
+      "days_remove": 240,
+      "days_cooldown": 120,
+      "visible": { "not": { "at_war": true } },
+      "available": { "political_power": { "gte": 80 } },
+      "effects": {
+        "add_modifier": { "kind": "ConstructionSpeed", "value": 0.10, "days": 240, "source": "dec_industrial_subsidies" }
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "dec_rearmament_program",
+      "name": "Rearmament Programme",
+      "description": "Convert civilian capacity to military production ahead of schedule.",
+      "category": 1,
+      "cost_pp": 70,
+      "days_remove": 240,
+      "days_cooldown": 100,
+      "visible": {},
+      "available": { "war_support": { "gte": 0.30 } },
+      "effects": {
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.08, "days": 240, "source": "dec_rearmament_program" },
+        "add_war_support": 0.03
+      },
+      "ai_weight": 1.2
+    },
+    {
+      "key": "dec_labour_conscription",
+      "name": "Labour Conscription",
+      "description": "Direct the labour force into essential war industries.",
+      "category": 1,
+      "cost_pp": 50,
+      "days_remove": 0,
+      "days_cooldown": 0,
+      "visible": {},
+      "available": { "manpower": { "gte": 50000 } },
+      "effects": {
+        "set_law": "conscription_extensive",
+        "add_modifier": { "kind": "RecruitablePopulation", "value": 0.02 }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "dec_army_expansion",
+      "name": "Army Expansion",
+      "description": "Raise new formations from the manpower pool.",
+      "category": 2,
+      "cost_pp": 65,
+      "days_remove": 200,
+      "days_cooldown": 60,
+      "visible": {},
+      "available": { "manpower": { "gte": 10000 } },
+      "effects": {
+        "add_modifier": { "kind": "DivisionOrganization", "value": 0.03, "days": 200, "source": "dec_army_expansion" },
+        "add_manpower": 20000
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "dec_officer_academy",
+      "name": "Officer Academy",
+      "description": "Found a national academy to speed the training of officers.",
+      "category": 2,
+      "cost_pp": 55,
+      "days_remove": 200,
+      "days_cooldown": 80,
+      "visible": {},
+      "available": {},
+      "effects": {
+        "add_modifier": { "kind": "TrainingTime", "value": -0.05, "days": 200, "source": "dec_officer_academy" }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "dec_naval_expansion",
+      "name": "Naval Expansion",
+      "description": "Widen the shipyards and lay down new keels.",
+      "category": 2,
+      "cost_pp": 75,
+      "days_remove": 240,
+      "days_cooldown": 120,
+      "visible": {},
+      "available": {},
+      "effects": {
+        "add_modifier": { "kind": "DockyardOutput", "value": 0.08, "days": 240, "source": "dec_naval_expansion" }
+      },
+      "ai_weight": 0.9
+    },
+    {
+      "key": "dec_aircraft_programme",
+      "name": "Aircraft Programme",
+      "description": "Fund a national aircraft programme with the established works.",
+      "category": 2,
+      "cost_pp": 70,
+      "days_remove": 180,
+      "days_cooldown": 90,
+      "visible": {},
+      "available": { "factories": { "gte": 5 } },
+      "effects": {
+        "add_tech": "aircraft_design",
+        "add_modifier": { "kind": "ResearchSpeed", "value": 0.05, "days": 180, "source": "dec_aircraft_programme" }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "dec_goodwill_mission",
+      "name": "Diplomatic Overture",
+      "description": "Fund a diplomatic overture to steady relations abroad.",
+      "category": 3,
+      "cost_pp": 40,
+      "days_remove": 120,
+      "days_cooldown": 120,
+      "visible": { "not": { "at_war": true } },
+      "available": {},
+      "effects": {
+        "add_modifier": { "kind": "PoliticalPowerGain", "value": 0.05, "days": 120, "source": "dec_goodwill_mission" },
+        "add_political_power": 5
+      },
+      "ai_weight": 0.9
+    },
+    {
+      "key": "dec_non_aggression_pact",
+      "name": "Non-Aggression Pact",
+      "description": "Propose a pact to remove the threat of a surprise attack.",
+      "category": 3,
+      "cost_pp": 50,
+      "days_remove": 0,
+      "days_cooldown": 0,
+      "visible": { "not": { "at_war": true } },
+      "available": { "opinion": { "target": "KOR", "gte": 0 } },
+      "effects": {
+        "add_opinion": { "target": "KOR", "value": 15 },
+        "set_flag": "dec_nap"
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "dec_develop_colony",
+      "name": "Develop the Territory",
+      "description": "Invest in the infrastructure of a frontier territory.",
+      "category": 4,
+      "targets_state": true,
+      "cost_pp": 45,
+      "days_remove": 180,
+      "days_cooldown": 60,
+      "visible": {},
+      "available": { "political_power": { "gte": 45 } },
+      "effects": {
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.05, "days": 180, "source": "dec_develop_colony" },
+        "add_stability": 0.01
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "dec_garrison_state",
+      "name": "Garrison the Territory",
+      "description": "Station troops to keep order in a restive frontier territory.",
+      "category": 4,
+      "targets_state": true,
+      "cost_pp": 30,
+      "days_remove": 0,
+      "days_cooldown": 90,
+      "visible": {},
+      "available": { "not": { "has_flag": "dec_garrisoned" } },
+      "effects": {
+        "add_stability": 0.02,
+        "set_flag": "dec_garrisoned",
+        "add_claim": "s12"
+      },
+      "ai_weight": 0.9
+    },
+    {
+      "key": "dec_wartime_industry",
+      "name": "Wartime Industry",
+      "description": "Put the economy on a war footing for the duration.",
+      "category": 1,
+      "cost_pp": 100,
+      "days_remove": 300,
+      "days_cooldown": 150,
+      "visible": { "at_war": true },
+      "available": { "political_power": { "gte": 100 } },
+      "effects": {
+        "set_law": "economy_war",
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.10, "days": 300, "source": "dec_wartime_industry" }
+      },
+      "ai_weight": 1.3
+    },
+    {
+      "key": "dec_veteran_pensions",
+      "name": "Veteran Pensions",
+      "description": "Provide for veterans and their families to steady the home front.",
+      "category": 2,
+      "cost_pp": 35,
+      "days_remove": 0,
+      "days_cooldown": 0,
+      "visible": {},
+      "available": { "war_support": { "gte": 0.40 } },
+      "effects": {
+        "add_stability": 0.03,
+        "add_modifier": { "kind": "WarSupport", "value": 0.02 }
+      },
+      "ai_weight": 0.9
+    }
+  ]
+}

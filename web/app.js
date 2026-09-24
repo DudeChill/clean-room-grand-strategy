@@ -453,7 +453,7 @@ document.addEventListener('keydown', (e) => {
     renderLeft();
   }
   const tabKeys = { m: 'military', p: 'production', c: 'construction', r: 'research',
-                    d: 'diplomacy', l: 'log', a: 'air', n: 'navy' };
+                    d: 'diplomacy', l: 'log', a: 'air', n: 'navy', t: 'politics' };
   const tab = tabKeys[e.key.toLowerCase()];
   if (tab && !e.ctrlKey && !e.metaKey) {
     App.tab = tab;
@@ -1130,11 +1130,103 @@ function navyPanel() {
   }
 }
 
+function politicsPanel() {
+  const p = App.snap.player;
+  const el = document.getElementById('panel-politics');
+  const focus = p.focus || { selected: '', progress: 0, days: 0, completed: [], available: [] };
+  const defs = (App.snap.focus_defs || []).filter((f) => f.tree === 'shared' || f.tree === p.tag);
+  const byKey = new Map(defs.map((f) => [f.key, f]));
+
+  let html = '<h3>National focus</h3>';
+  if (focus.selected) {
+    const def = byKey.get(focus.selected);
+    const pct = focus.days > 0 ? Math.min(100, (focus.progress / focus.days) * 100) : 0;
+    html += `<div class="section"><b>${def ? def.name : focus.selected}</b>` +
+      `<div class="bar"><span style="width:${pct.toFixed(1)}%"></span></div>` +
+      `<span class="small dim">${focus.progress.toFixed(0)} / ${focus.days} days</span> ` +
+      `<button data-cancel-focus="1">Cancel</button></div>`;
+  } else {
+    html += '<div class="small dim">no focus selected</div>';
+  }
+
+  const trees = [...new Set(defs.map((f) => f.tree))];
+  for (const tree of trees) {
+    const list = defs.filter((f) => f.tree === tree);
+    list.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    html += `<h3>${tree === 'shared' ? 'Shared' : tree} tree</h3>`;
+    html += '<table><tr><th>Focus</th><th class="num">Days</th><th>Prerequisites</th><th></th></tr>';
+    for (const f of list) {
+      const state = f.completed ? '<span class="good">completed</span>'
+        : focus.available.includes(f.key) ? '<button data-focus="' + f.key + '">Start</button>'
+        : '<span class="dim">locked</span>';
+      const prereqs = (f.prerequisites || []).map((k) => {
+        const d = byKey.get(k);
+        return (d && d.completed) ? `<span class="good">${d.name}</span>` : `<span class="dim">${d ? d.name : k}</span>`;
+      }).join(' → ');
+      const excl = (f.mutually_exclusive || []).length ? ' <span class="dim">(excludes ' +
+        (f.mutually_exclusive || []).map((k) => (byKey.get(k) || { name: k }).name).join(', ') + ')</span>' : '';
+      html += `<tr><td>${f.name}${excl}</td><td class="num">${f.days}</td><td>${prereqs || '—'}</td><td>${state}</td></tr>`;
+    }
+    html += '</table>';
+  }
+
+  const events = p.events || [];
+  if (events.length > 0) {
+    html += '<h3>Events</h3>';
+    for (const e of events) {
+      html += `<div class="section"><b>${e.title || e.key}</b>` +
+        `<div class="small">${e.description || ''}</div><div class="row-actions">` +
+        e.options.map((o, i) => `<button data-event="${e.key}" data-option="${i}">${o}</button>`).join(' ') +
+        '</div></div>';
+    }
+  }
+
+  const decisions = p.decisions || [];
+  html += '<h3>Decisions</h3><table><tr><th>Decision</th><th class="num">Cost</th><th>State</th><th></th></tr>';
+  if (decisions.length === 0) html += '<tr><td colspan="4" class="dim">none available</td></tr>';
+  for (const d of decisions) {
+    const state = d.active ? `<span class="good">active${d.days_left > 0 ? ' ' + d.days_left.toFixed(0) + 'd' : ''}</span>`
+      : d.available ? '<button data-decision="' + d.key + '">Take</button>'
+      : '<span class="dim">unavailable</span>';
+    html += `<tr><td>${d.name}<br><span class="dim">${d.description || ''}</span></td>` +
+      `<td class="num">${d.cost.toFixed(0)}</td><td>${state}</td>` +
+      `<td>${d.active ? `<button data-cancel-decision="${d.key}">×</button>` : ''}</td></tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = html;
+
+  for (const b of el.querySelectorAll('button[data-focus]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'select_focus', text: b.dataset.focus })) refresh();
+    });
+  }
+  const cancel = el.querySelector('button[data-cancel-focus]');
+  if (cancel) cancel.addEventListener('click', async () => {
+    if (await sendCommand({ type: 'cancel_focus' })) refresh();
+  });
+  for (const b of el.querySelectorAll('button[data-event]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'choose_event_option', text: b.dataset.event, value: Number(b.dataset.option) })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-decision]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'take_decision', text: b.dataset.decision })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-cancel-decision]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'cancel_decision', text: b.dataset.cancelDecision })) refresh();
+    });
+  }
+}
+
 function renderPanels() {
   if (!App.snap || !App.snap.player) return;
   if (App.tab === 'production') productionPanel();
   if (App.tab === 'construction') constructionPanel();
   if (App.tab === 'research') researchPanel();
+  if (App.tab === 'politics') politicsPanel();
   if (App.tab === 'military') militaryPanel();
   if (App.tab === 'air') airPanel();
   if (App.tab === 'navy') navyPanel();
@@ -1148,7 +1240,9 @@ let lastPanelRender = 0;
 
 async function refresh() {
   const snap = await api('/api/state');
-  if (!snap || !snap.tick) return;
+  // tick 0 is a valid snapshot (a paused, freshly started game): check the field's
+  // type, not its truthiness.
+  if (!snap || typeof snap.tick !== 'number') return;
   const before = App.snap ? App.snap.tick : -1;
   App.snap = snap;
   App.navalControl = new Map();

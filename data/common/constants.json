@@ -109,5 +109,6 @@
   "naval_invasion_interception_base": 0.5,
   "naval_invasion_interception_threat_scale": 200.0,
   "naval_invasion_escort_mitigation": 0.5,
-  "naval_large_hull_hp": 800.0
+  "naval_large_hull_hp": 800.0,
+  "focus_progress_speed": 1.0
 }

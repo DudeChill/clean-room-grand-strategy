@@ -62,7 +62,16 @@ Naval:
 * ports as supply sources with convoys and blockade; naval invasions end to end
 * AI naval layer; client navy panel and sea-zone control colouring
 
-## 0.7 Politics, Diplomacy & Occupation (in progress)
+## 0.7 Politics, Diplomacy & Occupation (focus trees in progress)
+
+Politics scripting (in progress, v0.4.0):
+
+* data-driven script engine: triggers, effects, scopes, variables, timers
+* national focus trees: prerequisites, exclusions, bypass, effects, AI weighting
+* events with options and chains; decisions with cost, timers, targeting
+* timed and scripted modifiers feeding the country modifier stack
+
+Earlier in this milestone:
 
 * political power, laws, stability, war support, national focuses
 * events and decisions (data-driven scripting)

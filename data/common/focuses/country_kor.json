@@ -1,0 +1,85 @@
+{
+  "tree": "KOR",
+  "focuses": [
+    {
+      "key": "kor_officer_corps",
+      "name": "National Officer Corps",
+      "x": 0,
+      "y": 1,
+      "days": 45,
+      "prerequisites": ["arm_doctrine"],
+      "available": { "owns_state": "s5" },
+      "effects": {
+        "add_modifier": { "kind": "TrainingTime", "value": -0.05 },
+        "add_political_power": 15
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "kor_artillery_works",
+      "name": "State Artillery Works",
+      "x": 1,
+      "y": 0,
+      "days": 65,
+      "prerequisites": ["kor_officer_corps"],
+      "effects": {
+        "add_tech": "field_artillery",
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.06 }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "kor_railways",
+      "name": "Interior Railways",
+      "x": 1,
+      "y": 2,
+      "days": 70,
+      "prerequisites": ["kor_officer_corps"],
+      "effects": {
+        "add_modifier": { "kind": "ConstructionSpeed", "value": 0.08 }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "kor_border_forts",
+      "name": "Border Fortifications",
+      "x": 2,
+      "y": 2,
+      "days": 85,
+      "prerequisites": ["kor_railways"],
+      "effects": {
+        "add_modifier": { "kind": "DivisionDefense", "value": 0.06 },
+        "set_flag": "kor_forts",
+        "trigger_event": { "key": "ev_kor_fortification", "days": 10 }
+      },
+      "ai_weight": 1.2
+    },
+    {
+      "key": "kor_mobilization",
+      "name": "Rapid Mobilization",
+      "x": 3,
+      "y": 2,
+      "days": 100,
+      "prerequisites": ["kor_border_forts"],
+      "effects": {
+        "set_law": "conscription_extensive",
+        "add_modifier": { "kind": "RecruitablePopulation", "value": 0.03 }
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "kor_national_spirit",
+      "name": "National Resolve",
+      "x": 4,
+      "y": 2,
+      "days": 120,
+      "prerequisites": ["kor_mobilization"],
+      "effects": {
+        "add_war_support": 0.06,
+        "add_stability": 0.03,
+        "add_modifier": { "kind": "WarSupport", "value": 0.02 }
+      },
+      "ai_weight": 1.0
+    }
+  ]
+}

@@ -37,6 +37,8 @@ struct SimMetrics {
     double ms_research = 0.0;
     double ms_training = 0.0;
     double ms_politics = 0.0;
+    double ms_focuses = 0.0;
+    double ms_events = 0.0;
     double ms_weather = 0.0;
     double ms_ai = 0.0;
     double ms_cleanup = 0.0;

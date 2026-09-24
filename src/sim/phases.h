@@ -33,6 +33,10 @@ void phase_research(Game& g);
 void phase_training(Game& g);
 // 9. Political power, laws, stability/war support, manpower growth.
 void phase_politics(Game& g);
+// 9b. Focus progress and completion, and timed modifier expiry.
+void phase_focuses(Game& g);
+// 9c. Events (automatic firing, delayed firing) and decision timers.
+void phase_events(Game& g);
 // 10. Weather per strategic region.
 void phase_weather(Game& g);
 // 11. AI planning; issues commands into the queue for the next tick.

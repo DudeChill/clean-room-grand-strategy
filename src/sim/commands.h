@@ -49,6 +49,11 @@ enum class CommandType : uint8_t {
     AssignShipToTaskForce,  // ship joins `task_force` (falls back to `task_force` name)
     LaunchNavalInvasion,    // army invades `province_b` from `province`
     CancelNavalInvasion,
+    SelectFocus,        // start a national focus (text = focus key)
+    CancelFocus,
+    ChooseEventOption,  // text = event key, value = option index
+    TakeDecision,       // text = decision key, state = target state when required
+    CancelDecision,
     SetLaw,
     SetTradePolicy,
     SetStance,             // aggressive / defensive / garrison posture for an army

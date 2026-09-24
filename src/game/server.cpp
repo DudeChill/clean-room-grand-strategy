@@ -24,6 +24,8 @@
 #include "core/math.h"
 #include "save/save.h"
 #include "sim/commands.h"
+#include "sim/events.h"
+#include "sim/focus.h"
 #include "sim/industry.h"
 #include "sim/map.h"
 #include "sim/navy.h"
@@ -788,6 +790,97 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
             templates.push_back(j);
         }
         player.set("templates", templates);
+
+        // Politics: focus tree state, pending events and decisions.
+        Json focus_state = Json::object();
+        {
+            const FocusDef* selected = g.content.focus(c->selected_focus);
+            focus_state.set("selected", Json(selected ? selected->key : std::string("")));
+            focus_state.set("progress", Json(c->focus_progress));
+            focus_state.set("days", Json(selected ? selected->days : 0.0));
+            Json done_focuses = Json::array();
+            for (uint32_t f : c->completed_focuses) {
+                const FocusDef* def = g.content.focus(f);
+                if (def) done_focuses.push_back(Json(def->key));
+            }
+            focus_state.set("completed", done_focuses);
+            Json open_focuses = Json::array();
+            for (uint32_t i = 0; i < g.content.focuses.size(); ++i) {
+                if (focus_available(g, viewer, i)) {
+                    const FocusDef* def = g.content.focus(i);
+                    if (def) open_focuses.push_back(Json(def->key));
+                }
+            }
+            focus_state.set("available", open_focuses);
+        }
+        player.set("focus", focus_state);
+
+        Json focus_defs = Json::array();
+        for (const FocusDef& def : g.content.focuses) {
+            Json j = Json::object();
+            j.set("key", Json(def.key));
+            j.set("name", Json(def.name));
+            j.set("tree", Json(def.tree));
+            j.set("x", Json(def.x));
+            j.set("y", Json(def.y));
+            j.set("days", Json(def.days));
+            Json prereqs = Json::array();
+            for (const std::string& pkey : def.prerequisites) prereqs.push_back(Json(pkey));
+            j.set("prerequisites", prereqs);
+            Json excl = Json::array();
+            for (const std::string& ekey : def.mutually_exclusive) excl.push_back(Json(ekey));
+            j.set("mutually_exclusive", excl);
+            bool done = false;
+            for (uint32_t f : c->completed_focuses) {
+                if (f == def.index) done = true;
+            }
+            j.set("completed", Json(done));
+            focus_defs.push_back(j);
+        }
+        root.set("focus_defs", focus_defs);
+
+        Json pending = Json::array();
+        for (uint32_t e : c->pending_events) {
+            const EventDef* def = g.content.event(e);
+            if (!def) continue;
+            Json j = Json::object();
+            j.set("key", Json(def->key));
+            j.set("title", Json(def->title));
+            j.set("description", Json(def->description));
+            j.set("major", Json(def->major));
+            Json options = Json::array();
+            for (const EventOptionDef& o : def->options) options.push_back(Json(o.name));
+            j.set("options", options);
+            pending.push_back(j);
+        }
+        player.set("events", pending);
+
+        Json decisions = Json::array();
+        for (uint32_t i = 0; i < g.content.decisions.size(); ++i) {
+            const DecisionDef* def = g.content.decision(i);
+            if (!def) continue;
+            if (!decision_visible(g, viewer, i)) continue;
+            Json j = Json::object();
+            j.set("key", Json(def->key));
+            j.set("name", Json(def->name));
+            j.set("description", Json(def->description));
+            j.set("cost", Json(def->cost_pp));
+            j.set("targets_state", Json(def->targets_state));
+            j.set("available", Json(decision_available(g, viewer, i)));
+            bool active = false;
+            double days_left = 0.0;
+            for (size_t k = 0; k < c->active_decisions.size(); ++k) {
+                if (c->active_decisions[k] == i) {
+                    active = true;
+                    if (k < c->decision_days_left.size()) days_left = c->decision_days_left[k];
+                }
+            }
+            j.set("active", Json(active));
+            j.set("days_left", Json(days_left));
+            j.set("ai_weight", Json(def->ai_weight));
+            decisions.push_back(j);
+        }
+        player.set("decisions", decisions);
 
         Json player_states = Json::array();
         w.states.for_each([&](StateId sid, const State& s) {

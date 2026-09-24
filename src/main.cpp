@@ -261,6 +261,48 @@ void inspect_country(const Game& g, const std::string& tag) {
             std::printf("    slot %zu: idle\n", i);
         }
     }
+    std::printf("  politics: pp %.0f  focus '",
+                c.political_power);
+    if (const FocusDef* sel = g.content.focus(c.selected_focus)) {
+        std::printf("%s' %.0f/%.0f days", sel->key.c_str(), c.focus_progress, sel->days);
+    } else {
+        std::printf("none'");
+    }
+    std::printf("  completed focuses %zu\n", c.completed_focuses.size());
+    if (!c.completed_focuses.empty()) {
+        std::printf("    completed:");
+        for (uint32_t f : c.completed_focuses) {
+            const FocusDef* def = g.content.focus(f);
+            std::printf(" %s", def ? def->key.c_str() : "?");
+        }
+        std::printf("\n");
+    }
+    if (!c.pending_events.empty()) {
+        std::printf("    pending events:");
+        for (uint32_t e : c.pending_events) {
+            const EventDef* def = g.content.event(e);
+            std::printf(" %s", def ? def->key.c_str() : "?");
+        }
+        std::printf("\n");
+    }
+    if (!c.active_decisions.empty()) {
+        std::printf("    decisions:");
+        for (size_t i = 0; i < c.active_decisions.size(); ++i) {
+            const DecisionDef* def = g.content.decision(c.active_decisions[i]);
+            const double left = i < c.decision_days_left.size() ? c.decision_days_left[i] : 0.0;
+            std::printf(" %s(%s)", def ? def->key.c_str() : "?",
+                        left > 0 ? std::to_string(static_cast<int>(left)).c_str() : "permanent");
+        }
+        std::printf("\n");
+    }
+    if (!c.timed_modifiers.empty()) {
+        std::printf("    timed modifiers:");
+        for (const TimedModifier& tm : c.timed_modifiers) {
+            std::printf(" %s(%s)", tm.source.c_str(),
+                        tm.days_left < 0 ? "permanent" : std::to_string(tm.days_left).c_str());
+        }
+        std::printf("\n");
+    }
     std::printf("  stockpile:\n");
     for (size_t i = 0; i < c.equipment_stockpile.size(); ++i) {
         if (c.equipment_stockpile[i] <= 0.0) continue;

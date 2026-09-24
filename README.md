@@ -76,6 +76,9 @@ What you can do in the client:
   mission (patrol, strike force, convoy escort, convoy raiding, invasion support,
   training), watch naval control per sea zone, and launch naval invasions from a port
   onto a hostile coast.
+* **Politics**: pick national focuses from your focus trees and watch them complete and
+  apply their effects, answer events with options, and take (or cancel) decisions that
+  cost political power and run on timers.
 * **Diplomacy**: declare war, join a faction, enact laws; watch wars, factions and
   country strength.
 * **Details**: selecting a province shows the live battle breakdown (per division

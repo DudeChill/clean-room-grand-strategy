@@ -20,6 +20,8 @@
 #include "sim/air.h"
 #include "sim/combat.h"
 #include "sim/diplomacy.h"
+#include "sim/events.h"
+#include "sim/focus.h"
 #include "sim/industry.h"
 #include "sim/map.h"
 #include "sim/navy.h"
@@ -553,6 +555,39 @@ CommandResult do_disband_air_wing(Game& g, const Command& cmd) {
     return CommandResult::Applied;
 }
 
+CommandResult do_select_focus(Game& g, const Command& cmd) {
+    const uint32_t focus = g.content.focus_id(cmd.text);
+    if (focus == INVALID_FOCUS) return CommandResult::UnknownEntity;
+    return focus_select(g, cmd.country, focus) ? CommandResult::Applied
+                                               : CommandResult::PrerequisitesMissing;
+}
+
+CommandResult do_cancel_focus(Game& g, const Command& cmd) {
+    focus_cancel(g, cmd.country);
+    return CommandResult::Applied;
+}
+
+CommandResult do_choose_event_option(Game& g, const Command& cmd) {
+    const uint32_t event = g.content.event_id(cmd.text);
+    if (event == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+    return choose_event_option(g, cmd.country, event, cmd.value) ? CommandResult::Applied
+                                                                 : CommandResult::InvalidValue;
+}
+
+CommandResult do_take_decision(Game& g, const Command& cmd) {
+    const uint32_t decision = g.content.decision_id(cmd.text);
+    if (decision == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+    return decision_take(g, cmd.country, decision) ? CommandResult::Applied
+                                                   : CommandResult::PrerequisitesMissing;
+}
+
+CommandResult do_cancel_decision(Game& g, const Command& cmd) {
+    const uint32_t decision = g.content.decision_id(cmd.text);
+    if (decision == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+    decision_cancel(g, cmd.country, decision);
+    return CommandResult::Applied;
+}
+
 CommandResult do_create_fleet(Game& g, const Command& cmd) {
     Country& c = g.world.countries[cmd.country];
     Fleet fleet;
@@ -640,6 +675,11 @@ const char* command_type_name(CommandType t) {
         case CommandType::AssignShipToTaskForce: return "assign_ship_to_task_force";
         case CommandType::LaunchNavalInvasion: return "launch_naval_invasion";
         case CommandType::CancelNavalInvasion: return "cancel_naval_invasion";
+        case CommandType::SelectFocus: return "select_focus";
+        case CommandType::CancelFocus: return "cancel_focus";
+        case CommandType::ChooseEventOption: return "choose_event_option";
+        case CommandType::TakeDecision: return "take_decision";
+        case CommandType::CancelDecision: return "cancel_decision";
         case CommandType::SetLaw: return "set_law";
         case CommandType::SetTradePolicy: return "set_trade_policy";
         case CommandType::SetStance: return "set_stance";
@@ -975,6 +1015,45 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (!owns_army(g.world, cmd, &a)) return CommandResult::UnknownEntity;
             return CommandResult::Applied;
         }
+        case CommandType::SelectFocus: {
+            const uint32_t focus = g.content.focus_id(cmd.text);
+            if (focus == INVALID_FOCUS) return CommandResult::UnknownEntity;
+            if (!focus_available(g, cmd.country, focus)) return CommandResult::PrerequisitesMissing;
+            return CommandResult::Applied;
+        }
+        case CommandType::CancelFocus: {
+            if (c->selected_focus == INVALID_FOCUS) return CommandResult::InvalidValue;
+            return CommandResult::Applied;
+        }
+        case CommandType::ChooseEventOption: {
+            const uint32_t event = g.content.event_id(cmd.text);
+            if (event == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            const EventDef* def = g.content.event(event);
+            if (!def) return CommandResult::UnknownEntity;
+            if (cmd.value < 0 || cmd.value >= static_cast<int>(def->options.size())) {
+                return CommandResult::InvalidValue;
+            }
+            bool pending = false;
+            for (uint32_t e : c->pending_events) {
+                if (e == event) pending = true;
+            }
+            if (!pending) return CommandResult::InvalidTarget;
+            return CommandResult::Applied;
+        }
+        case CommandType::TakeDecision: {
+            const uint32_t decision = g.content.decision_id(cmd.text);
+            if (decision == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            if (!decision_visible(g, cmd.country, decision)) return CommandResult::InvalidTarget;
+            if (!decision_available(g, cmd.country, decision)) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            return CommandResult::Applied;
+        }
+        case CommandType::CancelDecision: {
+            const uint32_t decision = g.content.decision_id(cmd.text);
+            if (decision == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            return CommandResult::Applied;
+        }
         case CommandType::SetLaw: {
             const LawDef* law = g.content.law(cmd.text);
             if (!law) return CommandResult::UnknownEntity;
@@ -1051,6 +1130,11 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::AssignShipToTaskForce: return do_assign_ship(g, cmd);
         case CommandType::LaunchNavalInvasion: return do_launch_invasion(g, cmd);
         case CommandType::CancelNavalInvasion: return do_cancel_invasion(g, cmd);
+        case CommandType::SelectFocus: return do_select_focus(g, cmd);
+        case CommandType::CancelFocus: return do_cancel_focus(g, cmd);
+        case CommandType::ChooseEventOption: return do_choose_event_option(g, cmd);
+        case CommandType::TakeDecision: return do_take_decision(g, cmd);
+        case CommandType::CancelDecision: return do_cancel_decision(g, cmd);
         case CommandType::SetLaw: return do_set_law(g, cmd);
         case CommandType::SetTradePolicy: return do_set_trade_policy(g, cmd);
         case CommandType::SetStance: return do_set_stance(g, cmd);

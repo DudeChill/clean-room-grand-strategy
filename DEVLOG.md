@@ -3,6 +3,64 @@
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /
 NEW DISCREPANCIES / PERFORMANCE / TEST RESULTS / NEXT PRIORITY.
 
+## 2026-09-24 — v0.4.0 politics: script engine, focus trees, events, decisions (POL-001 closed)
+
+IMPLEMENTED
+* Script engine (src/sim/script.cpp, docs/mechanics/scripting.md): 30 trigger keys and
+  19 effect keys over country/state scopes, comparators, boolean combinators,
+  randomness on the events RNG stream, script variables, timed and permanent
+  modifiers, chained and delayed events, claims, wars, laws and technologies — one
+  vocabulary shared by every content type, so no engine code knows about a specific
+  focus, event or decision.
+* Focus trees (src/sim/focus.cpp): prerequisites, mutual exclusions, availability and
+  bypass triggers, daily progress with a data-driven speed, completion applying the
+  focus's effects through the script engine, AI scoring per available focus with
+  recorded reasons on a new `AiLayer::Politics`.
+* Events (src/sim/events.cpp): automatic firing per country per day, chained firing,
+  delayed firing, `fire_only_once` bookkeeping, immediate and per-option effects, AI
+  option choice by weight.
+* Decisions: visibility and availability triggers, political-power cost, active timers
+  with removal effects, cooldowns, state-targeted decisions, AI evaluation.
+* Scripted modifiers: timed or permanent modifier blocks granted by content feed the
+  same country modifier stack as technology and laws, tagged with their source so the
+  inspector and client can attribute them.
+* Content: three shared focus trees (industry, army, politics) plus country trees for
+  the two largest powers (36 focuses), 12 events, 14 decisions, with cross-reference
+  validation that names the file and key for every broken reference.
+* Client: a Politics tab — focus trees with prerequisites and completion state, the
+  active focus with progress and cancel, pending events with their options, decisions
+  with cost and timers; plus politics detail in `--inspect-country`.
+* Save format version 4 (section layout change) with the new state and content
+  serialized and the constants drift guard at 112.
+
+FIXED
+* The client rejected a legitimate snapshot when `tick` was 0 (a paused, freshly
+  started game) because it tested truthiness instead of the field's type; the whole
+  politics panel was unreachable until the game was unpaused. Found by verifying the
+  new UI against the live server.
+* `add_claim` and state script flags were variable-key workarounds; they now use
+  `State::core_owners` and a real `State::flags` field.
+* The loader treated missing event/decision content files as hard errors, which broke
+  minimal data sets (and three content tests); politics content is optional again.
+
+TEST RESULTS
+* `hoi_tests`: 202 passed, 0 failed (was 170): 16 script, 8 focus, 9 event/decision,
+  10 persistence plus the existing suites.
+* `scripts/verify.sh`: 8 checks passed, 0 failed.
+* 365-day observer run: `world audit: OK`; the largest power completed five focuses,
+  is working a sixth, holds six active decisions and carries modifiers granted by
+  events and decisions.
+* UI verified against the live server: 36 focuses rendered, a focus started from the
+  panel and progressing, decisions listed with costs.
+
+NEW DISCREPANCIES
+* POL-006 (national spirits and advisors) remains open; ideology drift, elections and
+  coups are not modelled.
+
+NEXT PRIORITY
+* National spirits and advisors (POL-006), then trade and convoys as an economic
+  system, then equipment designers.
+
 ## 2026-09-23 — v0.3.1: AI invasion staging (release-artifact correction)
 
 FIXED

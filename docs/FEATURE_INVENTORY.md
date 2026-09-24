@@ -158,9 +158,13 @@ implemented.
 
 * [x] Political power accumulation and spending on laws
 * [x] Laws changing modifiers and consumer goods
-* [ ] Focus trees (prerequisites, exclusions, bypass, effects, AI weighting)
-* [ ] Events (triggers, options, effects, chains, scopes)
-* [ ] Decisions (visibility, cost, timers, targeting, completion, AI evaluation)
+* [x] Script engine: triggers, effects, scopes, variables, randomness (one vocabulary
+      shared by focuses, events and decisions)
+* [x] Focus trees (prerequisites, exclusions, bypass, availability, effects, AI scoring)
+* [x] Events (automatic and chained triggers, delays, options, fire-once)
+* [x] Decisions (visibility, availability, political-power cost, timers, removal
+      effects, cooldowns, AI evaluation)
+* [x] Scripted/timed modifiers feeding the country modifier stack
 * [ ] National spirits and government/advisor slots
 * [ ] Ideology drift, elections and coups
 

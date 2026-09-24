@@ -325,6 +325,7 @@ void build_world(Game* g) {
         s->synthetic_refineries = i % 3;
         s->building_slots = 6 + i;
         s->manpower_pool = 100000.0 * (i + 1);
+        s->flags.push_back(std::string("state_flag_") + std::to_string(i));
     }
 
     const int state_of[7] = {0, 0, 0, 1, 1, 2, 3};
@@ -637,6 +638,105 @@ void build_world(Game* g) {
 void enrich(Game& g) {
     World& w = g.world;
 
+    // Content tables for the political layer: focuses, events and decisions. Built
+    // here (after the tick loop) so the phases never act on this hand-built world,
+    // and each entry carries non-empty script blocks so the canonical-JSON round
+    // trip is exercised. Event triggers are never-true conditions: an event only
+    // fires when content or a test asks it to.
+    {
+        Content& c = g.content;
+        FocusDef focus;
+        focus.index = 0;
+        focus.key = "industrial_effort";
+        focus.name = "Industrial Effort";
+        focus.tree = "ALB";
+        focus.x = 1;
+        focus.y = 2;
+        focus.days = 70.0;
+        focus.prerequisites = {"army_effort"};
+        focus.mutually_exclusive = {"naval_effort"};
+        focus.available = Json::parse(R"({"political_power": {"gte": 10}})");
+        focus.bypass = Json::parse(R"({"year": {"gte": 1938}})");
+        focus.effects = Json::parse(R"({"add_political_power": 50, "add_tech": "infantry_weapons"})");
+        focus.ai_weight = 1.5;
+        c.focuses.push_back(focus);
+
+        FocusDef second = focus;
+        second.index = 1;
+        second.key = "army_effort";
+        second.name = "Army Effort";
+        second.tree = "shared";
+        second.days = 50.0;
+        second.prerequisites.clear();
+        c.focuses.push_back(second);
+        c.focus_index[focus.key] = 0;
+        c.focus_index[second.key] = 1;
+
+        EventDef event;
+        event.index = 0;
+        event.key = "the_landing";
+        event.title = "The Landing";
+        event.description = "Troops come ashore.";
+        event.fire_only_once = true;
+        event.major = true;
+        event.trigger = Json::parse(R"({"year": {"gte": 9999}})");  // never fires on its own
+        EventOptionDef option;
+        option.name = "Fight";
+        option.effects = Json::parse(R"({"add_war_support": 0.05})");
+        option.ai_weight = 2.0;
+        event.options.push_back(option);
+        event.immediate = Json::parse(R"({"set_flag": "landing"})");
+        c.events.push_back(event);
+        c.event_index[event.key] = 0;
+
+        DecisionDef decision;
+        decision.index = 0;
+        decision.key = "rearm";
+        decision.name = "Rearm";
+        decision.description = "Rush the factories.";
+        decision.category = 1;
+        decision.targets_state = false;
+        decision.cost_pp = 50.0;
+        decision.days_remove = 30;
+        decision.days_cooldown = 10;
+        decision.visible = Json::parse(R"({"has_tech": "infantry_weapons"})");
+        decision.available = Json::parse(R"({"political_power": {"gte": 50}})");
+        decision.effects = Json::parse(R"({"add_stability": 0.02})");
+        decision.remove_effect = Json::parse(R"({"add_stability": -0.02})");
+        decision.ai_weight = 0.8;
+        c.decisions.push_back(decision);
+        c.decision_index[decision.key] = 0;
+    }
+
+    // Political state that only the scripted layer produces: focus progression, an
+    // event awaiting a choice, the fired-event and decision bookkeeping, script
+    // flags, the modifiers those grant, the world script variables and one scheduled
+    // event. Built here so no phase can clear it before the round trip hashes it.
+    w.countries.for_each([&](CountryId id, Country& c) {
+        c.completed_focuses = {0};
+        c.selected_focus = 1;
+        c.focus_progress = 12.5 + static_cast<double>(id.v);
+        c.pending_events = {0};
+        c.fired_events = {0, 1};
+        c.active_decisions = {0};
+        c.decision_days_left = {7.5 + static_cast<double>(id.v)};
+        c.decision_cooldown.assign(g.content.decisions.size(), 0.0);
+        if (!c.decision_cooldown.empty()) c.decision_cooldown[0] = 3.0 + static_cast<double>(id.v);
+        c.country_flags = {std::string("flag_") + c.tag};
+        TimedModifier timed;
+        timed.source = "industrial_effort";
+        timed.days_left = 20 + static_cast<int>(id.v);
+        timed.mods.set(ModifierKind::FactoryOutput, 0.1 + 0.01 * id.v);
+        c.timed_modifiers.push_back(timed);
+    });
+    w.script_vars["war_effort"] = 3.5;
+    w.script_vars["preparedness"] = 0.25;
+    DelayedEvent delayed;
+    delayed.country = CountryId(0);
+    delayed.event = 0;
+    delayed.due = w.tick + 10;
+    w.delayed_events.push_back(delayed);
+
     for (int i = 0; i < static_cast<int>(AiLayer::Count); ++i) {
         AiLayerState& layer = g.ai.layers[i];
         layer.last_run_tick = 10 + static_cast<uint32_t>(i);
@@ -809,6 +909,16 @@ Fixture build_fixture() {
     CHECK_GT(f.source.world.fleets.size(), 0u);
     CHECK(!f.source.world.invasions.empty());
     CHECK(!f.source.world.regions[RegionId(2)].naval_control.empty());
+    // The political slice must be exercised too: empty focus/event/decision tables or
+    // an empty script-variable map would serialise nothing and prove nothing.
+    CHECK_GT(f.source.content.focuses.size(), 0u);
+    CHECK_GT(f.source.content.events.size(), 0u);
+    CHECK_GT(f.source.content.decisions.size(), 0u);
+    CHECK(!f.source.world.script_vars.empty());
+    CHECK(!f.source.world.delayed_events.empty());
+    CHECK(!f.source.world.countries[CountryId(0)].completed_focuses.empty());
+    CHECK(!f.source.world.countries[CountryId(0)].timed_modifiers.empty());
+    CHECK(!f.source.world.countries[CountryId(0)].country_flags.empty());
     return f;
 }
 
@@ -952,7 +1062,7 @@ HOI_TEST(save_rejects_unknown_versions_and_garbage_files) {
     std::string err;
     CHECK(!load_game(loaded, newer_path, &err));
     CHECK(err.find("99") != std::string::npos);
-    CHECK(err.find("3") != std::string::npos);
+    CHECK(err.find(std::to_string(SAVE_VERSION)) != std::string::npos);
 
     err.clear();
     CHECK(!load_game(loaded, older_path, &err));
@@ -1073,6 +1183,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"state.building_slots", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.building_slots += 1; }); }},
         {"state.manpower_pool", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.manpower_pool += 1.0; }); }},
         {"state.impassable", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.impassable = !s.impassable; }); }},
+        {"state.flags", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.flags.push_back("x"); }); }},
         {"state.resistance", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.resistance += 1.0; }); }},
         {"state.compliance", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.compliance += 1.0; }); }},
         {"state.garrison_required", +[](Game& g) { g.world.states.for_each([](StateId, State& s) { s.garrison_required += 1.0; }); }},
@@ -1389,6 +1500,64 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"rng.master_seed", +[](Game& g) { g.rng.seed(g.rng.master_seed() + 1); }},
         {"rng.stream_state", +[](Game& g) { g.rng.get(RngStream::Events).next_u64(); }},
         {"queue.pending", +[](Game& g) { g.queue.push(Command{}); }},
+        {"focus.index", +[](Game& g) { for (auto& t : g.content.focuses) t.index += 1; }},
+        {"focus.key", +[](Game& g) { for (auto& t : g.content.focuses) t.key += "x"; }},
+        {"focus.name", +[](Game& g) { for (auto& t : g.content.focuses) t.name += "x"; }},
+        {"focus.tree", +[](Game& g) { for (auto& t : g.content.focuses) t.tree += "x"; }},
+        {"focus.x", +[](Game& g) { for (auto& t : g.content.focuses) t.x += 1; }},
+        {"focus.y", +[](Game& g) { for (auto& t : g.content.focuses) t.y += 1; }},
+        {"focus.days", +[](Game& g) { for (auto& t : g.content.focuses) t.days += 1.0; }},
+        {"focus.prerequisites", +[](Game& g) { for (auto& t : g.content.focuses) t.prerequisites.push_back("x"); }},
+        {"focus.mutually_exclusive", +[](Game& g) { for (auto& t : g.content.focuses) t.mutually_exclusive.push_back("x"); }},
+        {"focus.available", +[](Game& g) { for (auto& t : g.content.focuses) t.available = Json(true); }},
+        {"focus.bypass", +[](Game& g) { for (auto& t : g.content.focuses) t.bypass = Json(true); }},
+        {"focus.effects", +[](Game& g) { for (auto& t : g.content.focuses) t.effects = Json(true); }},
+        {"focus.ai_weight", +[](Game& g) { for (auto& t : g.content.focuses) t.ai_weight += 0.1; }},
+        {"event.index", +[](Game& g) { for (auto& e : g.content.events) e.index += 1; }},
+        {"event.key", +[](Game& g) { for (auto& e : g.content.events) e.key += "x"; }},
+        {"event.title", +[](Game& g) { for (auto& e : g.content.events) e.title += "x"; }},
+        {"event.description", +[](Game& g) { for (auto& e : g.content.events) e.description += "x"; }},
+        {"event.fire_only_once", +[](Game& g) { for (auto& e : g.content.events) e.fire_only_once = !e.fire_only_once; }},
+        {"event.major", +[](Game& g) { for (auto& e : g.content.events) e.major = !e.major; }},
+        {"event.trigger", +[](Game& g) { for (auto& e : g.content.events) e.trigger = Json(true); }},
+        {"event.immediate", +[](Game& g) { for (auto& e : g.content.events) e.immediate = Json(true); }},
+        {"event.options", +[](Game& g) { for (auto& e : g.content.events) e.options.push_back(EventOptionDef{}); }},
+        {"event.option.name", +[](Game& g) { for (auto& e : g.content.events) { for (auto& o : e.options) o.name += "x"; } }},
+        {"event.option.effects", +[](Game& g) { for (auto& e : g.content.events) { for (auto& o : e.options) o.effects = Json(true); } }},
+        {"event.option.ai_weight", +[](Game& g) { for (auto& e : g.content.events) { for (auto& o : e.options) o.ai_weight += 1.0; } }},
+        {"decision.index", +[](Game& g) { for (auto& d : g.content.decisions) d.index += 1; }},
+        {"decision.key", +[](Game& g) { for (auto& d : g.content.decisions) d.key += "x"; }},
+        {"decision.name", +[](Game& g) { for (auto& d : g.content.decisions) d.name += "x"; }},
+        {"decision.description", +[](Game& g) { for (auto& d : g.content.decisions) d.description += "x"; }},
+        {"decision.category", +[](Game& g) { for (auto& d : g.content.decisions) d.category += 1; }},
+        {"decision.targets_state", +[](Game& g) { for (auto& d : g.content.decisions) d.targets_state = !d.targets_state; }},
+        {"decision.cost_pp", +[](Game& g) { for (auto& d : g.content.decisions) d.cost_pp += 1.0; }},
+        {"decision.days_remove", +[](Game& g) { for (auto& d : g.content.decisions) d.days_remove += 1; }},
+        {"decision.days_cooldown", +[](Game& g) { for (auto& d : g.content.decisions) d.days_cooldown += 1; }},
+        {"decision.visible", +[](Game& g) { for (auto& d : g.content.decisions) d.visible = Json(true); }},
+        {"decision.available", +[](Game& g) { for (auto& d : g.content.decisions) d.available = Json(true); }},
+        {"decision.effects", +[](Game& g) { for (auto& d : g.content.decisions) d.effects = Json(true); }},
+        {"decision.remove_effect", +[](Game& g) { for (auto& d : g.content.decisions) d.remove_effect = Json(true); }},
+        {"decision.ai_weight", +[](Game& g) { for (auto& d : g.content.decisions) d.ai_weight += 0.1; }},
+        {"country.completed_focuses", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.completed_focuses.push_back(1); }); }},
+        {"country.selected_focus", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.selected_focus += 1; }); }},
+        {"country.focus_progress", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.focus_progress += 1.0; }); }},
+        {"country.pending_events", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.pending_events.push_back(0); }); }},
+        {"country.fired_events", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.fired_events.push_back(0); }); }},
+        {"country.active_decisions", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.active_decisions.push_back(0); }); }},
+        {"country.decision_days_left", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.decision_days_left.push_back(1.0); }); }},
+        {"country.decision_cooldown", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { if (!c.decision_cooldown.empty()) c.decision_cooldown[0] += 1.0; }); }},
+        {"country.country_flags", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.country_flags.push_back("x"); }); }},
+        {"country.timed_modifiers", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.timed_modifiers.push_back(TimedModifier{}); }); }},
+        {"country.timed_modifier.source", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.timed_modifiers) m.source += "x"; }); }},
+        {"country.timed_modifier.mods", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.timed_modifiers) m.mods.v[0] += 0.01; }); }},
+        {"country.timed_modifier.days_left", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& m : c.timed_modifiers) m.days_left += 1; }); }},
+        {"world.script_vars.value", +[](Game& g) { for (auto& e : g.world.script_vars) e.second += 1.0; }},
+        {"world.script_vars.key", +[](Game& g) { g.world.script_vars["added"] = 1.0; }},
+        {"world.delayed_events", +[](Game& g) { g.world.delayed_events.push_back(DelayedEvent{}); }},
+        {"delayed_event.country", +[](Game& g) { for (auto& d : g.world.delayed_events) d.country = CountryId(1); }},
+        {"delayed_event.event", +[](Game& g) { for (auto& d : g.world.delayed_events) d.event += 1; }},
+        {"delayed_event.due", +[](Game& g) { for (auto& d : g.world.delayed_events) d.due += 1; }},
     };
 
     for (const Flip& flip : flips) {
@@ -1511,6 +1680,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         &SimConstants::naval_invasion_interception_threat_scale,
         &SimConstants::naval_invasion_escort_mitigation,
         &SimConstants::political_power_per_day,
+        &SimConstants::focus_progress_speed,
         &SimConstants::stability_drift,
         &SimConstants::war_support_drift,
         &SimConstants::weather_change_chance,
@@ -1520,7 +1690,7 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
     // constants record (a count followed by one double per member), so the count the
     // serializer actually wrote is compared with this table.
     constexpr size_t constant_count = sizeof(constant_members) / sizeof(constant_members[0]);
-    static_assert(constant_count == 111,
+    static_assert(constant_count == 112,
                   "SimConstants changed: update constant_members and save.cpp write/read_constants");
     ByteWriter economy;
     serialize_subsystem(f.source, Subsystem::Economy, &economy);
@@ -1555,6 +1725,9 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
     CHECK_EQ(empty.content.laws.size(), f.source.content.laws.size());
     CHECK_EQ(empty.content.buildings.size(), f.source.content.buildings.size());
     CHECK_EQ(empty.content.templates.size(), f.source.content.templates.size());
+    CHECK_EQ(empty.content.focuses.size(), f.source.content.focuses.size());
+    CHECK_EQ(empty.content.events.size(), f.source.content.events.size());
+    CHECK_EQ(empty.content.decisions.size(), f.source.content.decisions.size());
     CHECK(empty.content.constants.ic_per_military_factory ==
           f.source.content.constants.ic_per_military_factory);
     // Derived key -> id maps are rebuilt, not stored: lookups must work after a load.
@@ -1567,6 +1740,19 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
     CHECK(empty.content.laws.size() == f.source.content.laws.size());
     if (!f.source.content.laws.empty()) {
         CHECK(empty.content.law(f.source.content.laws.front().key) != nullptr);
+    }
+    // Focuses, events and decisions are addressed by key through the rebuilt indexes.
+    for (const FocusDef& focus : f.source.content.focuses) {
+        CHECK(empty.content.focus_id(focus.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.focus(empty.content.focus_id(focus.key)) != nullptr);
+    }
+    for (const EventDef& event : f.source.content.events) {
+        CHECK(empty.content.event_id(event.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.event(empty.content.event_id(event.key)) != nullptr);
+    }
+    for (const DecisionDef& decision : f.source.content.decisions) {
+        CHECK(empty.content.decision_id(decision.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.decision(empty.content.decision_id(decision.key)) != nullptr);
     }
 
     // Continuing both runs must stay identical: this is what a lost field would break.

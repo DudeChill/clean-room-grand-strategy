@@ -1,0 +1,109 @@
+{
+  "tree": "shared",
+  "focuses": [
+    {
+      "key": "ind_foundations",
+      "name": "Foundational Industry",
+      "x": 0,
+      "y": 0,
+      "days": 35,
+      "available": {},
+      "effects": {
+        "add_modifier": { "kind": "ConstructionSpeed", "value": 0.10 },
+        "add_political_power": 15
+      },
+      "ai_weight": 1.3
+    },
+    {
+      "key": "ind_steel",
+      "name": "Steel Mills",
+      "x": 1,
+      "y": 1,
+      "days": 50,
+      "prerequisites": ["ind_foundations"],
+      "effects": {
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.08 }
+      },
+      "ai_weight": 1.2
+    },
+    {
+      "key": "ind_machine_tools",
+      "name": "Machine Tools Programme",
+      "x": 2,
+      "y": 0,
+      "days": 70,
+      "prerequisites": ["ind_foundations"],
+      "mutually_exclusive": ["ind_autarky"],
+      "effects": {
+        "add_tech": "machine_tools",
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.10 }
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "ind_autarky",
+      "name": "Autarkic Economy",
+      "x": 2,
+      "y": 2,
+      "days": 70,
+      "prerequisites": ["ind_foundations"],
+      "mutually_exclusive": ["ind_machine_tools"],
+      "effects": {
+        "add_modifier": { "kind": "ResearchSpeed", "value": 0.10 }
+      },
+      "ai_weight": 0.9
+    },
+    {
+      "key": "ind_rails",
+      "name": "Rail Expansion",
+      "x": 3,
+      "y": 1,
+      "days": 90,
+      "prerequisites": ["ind_steel"],
+      "effects": {
+        "add_modifier": { "kind": "ConstructionSpeed", "value": 0.08 }
+      },
+      "ai_weight": 1.0
+    },
+    {
+      "key": "ind_synthetic",
+      "name": "Synthetic Oil Programme",
+      "x": 4,
+      "y": 3,
+      "days": 120,
+      "prerequisites": ["ind_steel"],
+      "effects": {
+        "add_tech": "synthetic_oil",
+        "add_modifier": { "kind": "FuelGain", "value": 0.10 },
+        "trigger_event": { "key": "ev_synthetic_breakthrough", "days": 30 }
+      },
+      "ai_weight": 1.1
+    },
+    {
+      "key": "ind_heavy_industry",
+      "name": "Heavy Industry",
+      "x": 4,
+      "y": 0,
+      "days": 140,
+      "prerequisites": ["ind_machine_tools"],
+      "effects": {
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.12 }
+      },
+      "ai_weight": 1.2
+    },
+    {
+      "key": "ind_war_industry_board",
+      "name": "War Industry Board",
+      "x": 5,
+      "y": 2,
+      "days": 100,
+      "prerequisites": ["ind_rails"],
+      "effects": {
+        "add_modifier": { "kind": "FactoryOutput", "value": 0.06 },
+        "add_war_support": 0.03,
+        "set_flag": "ind_war_industry_board"
+      },
+      "ai_weight": 1.0
+    }
+  ]
+}

@@ -11,7 +11,8 @@
 //
 //   Map        geography: province store (adjacency, sea_adj, resources, grid
 //              coordinates, the supply cache fields supply_level/supply_source/
-//              supply_bottleneck), state store (factories, occupation counters),
+//              supply_bottleneck), state store (factories, script flags, occupation
+//              counters),
 //              region store (weather, per-country air and naval control)
 //   Countries  country identity and ownership bookkeeping (id, tag, name, alive,
 //              ideology, overlord, puppets, capital), equipment_stockpile,
@@ -21,13 +22,15 @@
 //              (Country::wings), the fleet roster (Country::fleets) and the
 //              character store
 //   Economy    the content snapshot - equipment, division templates, technologies,
-//              laws, buildings and SimConstants, i.e. every table the simulation
-//              reads - plus per country: production lines, construction queue,
-//              research state and the template roster (Country::templates). Content
-//              lives here because it is what industry and research consume, and it
-//              travels with the save so a default-constructed Game can continue from
-//              a file without help from data/; the derived key -> id maps are rebuilt
-//              on load instead of being stored twice
+//              laws, buildings, focuses, events, decisions and SimConstants, i.e.
+//              every table the simulation reads - plus per country: production
+//              lines, construction queue, research state and the template roster
+//              (Country::templates). Content lives here because it is what industry
+//              and research consume, and it travels with the save so a
+//              default-constructed Game can continue from a file without help from
+//              data/; each script block (FocusDef/EventDef/DecisionDef Json fields)
+//              travels structurally and the derived key -> id maps are rebuilt on
+//              load instead of being stored twice
 //   Military   per country: division/army rosters and the training list; then the
 //              army store, the division store, the air wing store, and the naval
 //              area: the ship store, the task force store, the fleet store and the
@@ -40,7 +43,15 @@
 //   Politics   per-country scalars and flags not carried by another section:
 //              political_power, stability, war_support, manpower, fuel,
 //              fuel_capacity, consumer_goods_ratio, army_experience, at_war,
-//              fuel_priority, last_capitulation_check
+//              fuel_priority, last_capitulation_check, and the whole national
+//              focus / event / decision state (completed_focuses, selected_focus,
+//              focus_progress, pending_events, fired_events, active_decisions,
+//              decision_days_left, decision_cooldown, country_flags,
+//              timed_modifiers); then the world-level script variables
+//              (World::script_vars, an ordered map) and the scheduled events
+//              (World::delayed_events). Politics owns them because focuses, events
+//              and decisions are the political layer and these are the fields they
+//              mutate
 //   Ai         the six AI layer states (last run tick, interval, reasons), the
 //              strategic posture vector, the decision/command counters, the
 //              per-country AI control bitmap and the player country
@@ -346,6 +357,10 @@ bool read_province(ByteReader& r, Province* p) {
     return true;
 }
 
+// Defined below with the other content helpers; State::flags uses them here.
+void write_strs(ByteWriter& w, const std::vector<std::string>& v);
+bool read_strs(ByteReader& r, std::vector<std::string>* out);
+
 void write_state(ByteWriter& w, const State& s) {
     write_id(w, s.id);
     w.str(s.name);
@@ -361,6 +376,7 @@ void write_state(ByteWriter& w, const State& s) {
     w.i32(s.building_slots);
     w.f64(s.manpower_pool);
     w.boolean(s.impassable);
+    write_strs(w, s.flags);
     w.f64(s.resistance);
     w.f64(s.compliance);
     w.f64(s.garrison_required);
@@ -385,6 +401,7 @@ bool read_state(ByteReader& r, State* s) {
     if (!r.i32(&s->building_slots)) return false;
     if (!r.f64(&s->manpower_pool)) return false;
     if (!r.boolean(&s->impassable)) return false;
+    if (!read_strs(r, &s->flags)) return false;
     if (!r.f64(&s->resistance) || !r.f64(&s->compliance) || !r.f64(&s->garrison_required)) return false;
     return true;
 }
@@ -475,6 +492,117 @@ bool read_strs(ByteReader& r, std::vector<std::string>* out) {
     }
     return true;
 }
+
+// uint32 vectors are the shared shape of the focus/event/decision id lists, the
+// per-country politics indexes and the content key indexes.
+void write_u32s(ByteWriter& w, const std::vector<uint32_t>& v) {
+    w.u32(static_cast<uint32_t>(v.size()));
+    for (uint32_t e : v) w.u32(e);
+}
+
+bool read_u32s(ByteReader& r, std::vector<uint32_t>* out) {
+    uint32_t n = 0;
+    if (!read_count(r, 4, &n)) return false;
+    out->clear();
+    out->resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!r.u32(&(*out)[i])) return false;
+    }
+    return true;
+}
+
+// Script blocks (triggers and effects) travel structurally, not as text: numbers keep
+// their exact IEEE bits (so a negative zero or a value whose text form is not
+// reversible cannot slip a hash comparison) and object key order is preserved.
+constexpr int MAX_JSON_DEPTH = 64;
+
+void write_json_value(ByteWriter& w, const Json& j) {
+    write_enum(w, j.type());
+    switch (j.type()) {
+        case Json::Type::Null:
+            return;
+        case Json::Type::Bool:
+            w.boolean(j.as_bool());
+            return;
+        case Json::Type::Number:
+            w.f64(j.as_double());
+            return;
+        case Json::Type::String:
+            w.str(j.as_string());
+            return;
+        case Json::Type::Array:
+            w.u32(static_cast<uint32_t>(j.size()));
+            for (const Json& e : j.array_items()) write_json_value(w, e);
+            return;
+        case Json::Type::Object:
+            w.u32(static_cast<uint32_t>(j.size()));
+            for (const std::pair<std::string, Json>& kv : j.object_items()) {
+                w.str(kv.first);
+                write_json_value(w, kv.second);
+            }
+            return;
+    }
+}
+
+bool read_json_value(ByteReader& r, Json* out, int depth) {
+    if (depth > MAX_JSON_DEPTH) return false;
+    Json::Type type;
+    if (!read_enum(r, &type, static_cast<int>(Json::Type::Object) + 1)) return false;
+    switch (type) {
+        case Json::Type::Null:
+            *out = Json();
+            return true;
+        case Json::Type::Bool: {
+            bool b = false;
+            if (!r.boolean(&b)) return false;
+            *out = Json(b);
+            return true;
+        }
+        case Json::Type::Number: {
+            double d = 0.0;
+            if (!r.f64(&d)) return false;
+            *out = Json(d);
+            return true;
+        }
+        case Json::Type::String: {
+            std::string s;
+            if (!r.str(&s)) return false;
+            *out = Json(std::move(s));
+            return true;
+        }
+        case Json::Type::Array: {
+            uint32_t n = 0;
+            if (!read_count(r, 1, &n)) return false;
+            Json arr = Json::array();
+            for (uint32_t i = 0; i < n; ++i) {
+                Json e;
+                if (!read_json_value(r, &e, depth + 1)) return false;
+                arr.push_back(std::move(e));
+            }
+            *out = std::move(arr);
+            return true;
+        }
+        case Json::Type::Object: {
+            uint32_t n = 0;
+            if (!read_count(r, 5, &n)) return false;  // key length + value type
+            Json obj = Json::object();
+            for (uint32_t i = 0; i < n; ++i) {
+                std::string key;
+                Json value;
+                if (!r.str(&key)) return false;
+                if (!read_json_value(r, &value, depth + 1)) return false;
+                obj.set(key, std::move(value));
+            }
+            *out = std::move(obj);
+            return true;
+        }
+    }
+    return false;
+}
+
+void write_json(ByteWriter& w, const Json& j) { write_json_value(w, j); }
+
+bool read_json(ByteReader& r, Json* out) { return read_json_value(r, out, 0); }
 
 void write_equipment(ByteWriter& w, const EquipmentDef& e) {
     write_id(w, e.id);
@@ -595,6 +723,107 @@ bool read_building(ByteReader& r, BuildingDef* b) {
     return r.i32(&b->max_level);
 }
 
+// Focuses, events and decisions are content: their triggers and effects are stored
+// structurally, so a save carries the exact script blocks the run used and a loaded
+// Game continues without help from data/.
+void write_focus(ByteWriter& w, const FocusDef& f) {
+    w.u32(f.index);
+    w.str(f.key);
+    w.str(f.name);
+    w.str(f.tree);
+    w.i32(f.x);
+    w.i32(f.y);
+    w.f64(f.days);
+    write_strs(w, f.prerequisites);
+    write_strs(w, f.mutually_exclusive);
+    write_json(w, f.available);
+    write_json(w, f.bypass);
+    write_json(w, f.effects);
+    w.f64(f.ai_weight);
+}
+
+bool read_focus(ByteReader& r, FocusDef* f) {
+    if (!r.u32(&f->index)) return false;
+    if (!r.str(&f->key) || !r.str(&f->name) || !r.str(&f->tree)) return false;
+    if (!r.i32(&f->x) || !r.i32(&f->y) || !r.f64(&f->days)) return false;
+    if (!read_strs(r, &f->prerequisites)) return false;
+    if (!read_strs(r, &f->mutually_exclusive)) return false;
+    if (!read_json(r, &f->available)) return false;
+    if (!read_json(r, &f->bypass)) return false;
+    if (!read_json(r, &f->effects)) return false;
+    return r.f64(&f->ai_weight);
+}
+
+void write_event_option(ByteWriter& w, const EventOptionDef& o) {
+    w.str(o.name);
+    write_json(w, o.effects);
+    w.f64(o.ai_weight);
+}
+
+bool read_event_option(ByteReader& r, EventOptionDef* o) {
+    if (!r.str(&o->name)) return false;
+    if (!read_json(r, &o->effects)) return false;
+    return r.f64(&o->ai_weight);
+}
+
+void write_event(ByteWriter& w, const EventDef& e) {
+    w.u32(e.index);
+    w.str(e.key);
+    w.str(e.title);
+    w.str(e.description);
+    w.boolean(e.fire_only_once);
+    w.boolean(e.major);
+    write_json(w, e.trigger);
+    w.u32(static_cast<uint32_t>(e.options.size()));
+    for (const EventOptionDef& o : e.options) write_event_option(w, o);
+    write_json(w, e.immediate);
+}
+
+bool read_event(ByteReader& r, EventDef* e) {
+    if (!r.u32(&e->index)) return false;
+    if (!r.str(&e->key) || !r.str(&e->title) || !r.str(&e->description)) return false;
+    if (!r.boolean(&e->fire_only_once) || !r.boolean(&e->major)) return false;
+    if (!read_json(r, &e->trigger)) return false;
+    uint32_t n = 0;
+    if (!read_count(r, 12, &n)) return false;  // empty option is >= 12 bytes
+    e->options.clear();
+    e->options.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_event_option(r, &e->options[i])) return false;
+    }
+    return read_json(r, &e->immediate);
+}
+
+void write_decision(ByteWriter& w, const DecisionDef& d) {
+    w.u32(d.index);
+    w.str(d.key);
+    w.str(d.name);
+    w.str(d.description);
+    w.i32(d.category);
+    w.boolean(d.targets_state);
+    w.f64(d.cost_pp);
+    w.i32(d.days_remove);
+    w.i32(d.days_cooldown);
+    write_json(w, d.visible);
+    write_json(w, d.available);
+    write_json(w, d.effects);
+    write_json(w, d.remove_effect);
+    w.f64(d.ai_weight);
+}
+
+bool read_decision(ByteReader& r, DecisionDef* d) {
+    if (!r.u32(&d->index)) return false;
+    if (!r.str(&d->key) || !r.str(&d->name) || !r.str(&d->description)) return false;
+    if (!r.i32(&d->category) || !r.boolean(&d->targets_state)) return false;
+    if (!r.f64(&d->cost_pp)) return false;
+    if (!r.i32(&d->days_remove) || !r.i32(&d->days_cooldown)) return false;
+    if (!read_json(r, &d->visible)) return false;
+    if (!read_json(r, &d->available)) return false;
+    if (!read_json(r, &d->effects)) return false;
+    if (!read_json(r, &d->remove_effect)) return false;
+    return r.f64(&d->ai_weight);
+}
+
 // SimConstants in declaration order; every balance number the simulation reads is
 // part of the state, so a data change cannot slip past a hash comparison.
 void write_constants(ByteWriter& w, const SimConstants& k) {
@@ -638,8 +867,9 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
         k.naval_invasion_convoys_per_division, k.naval_invasion_hours_per_sea_hop,
         k.naval_invasion_interception_base, k.naval_invasion_interception_threat_scale,
         k.naval_invasion_escort_mitigation,
-        k.political_power_per_day, k.stability_drift, k.war_support_drift, k.weather_change_chance};
-    static_assert(sizeof(values) / sizeof(values[0]) == 111,
+        k.political_power_per_day, k.focus_progress_speed, k.stability_drift, k.war_support_drift,
+        k.weather_change_chance};
+    static_assert(sizeof(values) / sizeof(values[0]) == 112,
                   "SimConstants changed: update write_constants/read_constants and the test drift guard");
     w.u32(static_cast<uint32_t>(sizeof(values) / sizeof(values[0])));
     for (double v : values) w.f64(v);
@@ -648,8 +878,8 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
 bool read_constants(ByteReader& r, SimConstants* k) {
     uint32_t n = 0;
     if (!read_count(r, 8, &n)) return false;
-    if (n != 111) return false;  // a different count means a different SimConstants layout
-    double v[111] = {0.0};
+    if (n != 112) return false;  // a different count means a different SimConstants layout
+    double v[112] = {0.0};
     for (uint32_t i = 0; i < n; ++i) {
         if (!r.f64(&v[i])) return false;
     }
@@ -761,9 +991,10 @@ bool read_constants(ByteReader& r, SimConstants* k) {
     k->naval_invasion_interception_threat_scale = v[105];
     k->naval_invasion_escort_mitigation = v[106];
     k->political_power_per_day = v[107];
-    k->stability_drift = v[108];
-    k->war_support_drift = v[109];
-    k->weather_change_chance = v[110];
+    k->focus_progress_speed = v[108];
+    k->stability_drift = v[109];
+    k->war_support_drift = v[110];
+    k->weather_change_chance = v[111];
     return true;
 }
 
@@ -778,6 +1009,12 @@ void write_content(ByteWriter& w, const Content& c) {
     for (const LawDef& l : c.laws) write_law(w, l);
     w.u32(static_cast<uint32_t>(c.buildings.size()));
     for (const BuildingDef& b : c.buildings) write_building(w, b);
+    w.u32(static_cast<uint32_t>(c.focuses.size()));
+    for (const FocusDef& f : c.focuses) write_focus(w, f);
+    w.u32(static_cast<uint32_t>(c.events.size()));
+    for (const EventDef& e : c.events) write_event(w, e);
+    w.u32(static_cast<uint32_t>(c.decisions.size()));
+    for (const DecisionDef& d : c.decisions) write_decision(w, d);
     write_constants(w, c.constants);
 }
 
@@ -792,6 +1029,14 @@ void rebuild_content_index(Content& c) {
     for (const TechDef& t : c.techs) c.tech_by_key[t.key] = t.id;
     c.law_index.clear();
     for (size_t i = 0; i < c.laws.size(); ++i) c.law_index[c.laws[i].key] = static_cast<int>(i);
+    c.focus_index.clear();
+    for (size_t i = 0; i < c.focuses.size(); ++i) c.focus_index[c.focuses[i].key] = static_cast<uint32_t>(i);
+    c.event_index.clear();
+    for (size_t i = 0; i < c.events.size(); ++i) c.event_index[c.events[i].key] = static_cast<uint32_t>(i);
+    c.decision_index.clear();
+    for (size_t i = 0; i < c.decisions.size(); ++i) {
+        c.decision_index[c.decisions[i].key] = static_cast<uint32_t>(i);
+    }
     c.load_errors.clear();
 }
 
@@ -826,6 +1071,24 @@ bool read_content(ByteReader& r, Content* c) {
     c->buildings.resize(n);
     for (uint32_t i = 0; i < n; ++i) {
         if (!read_building(r, &c->buildings[i])) return false;
+    }
+    if (!read_count(r, 32, &n)) return false;
+    c->focuses.clear();
+    c->focuses.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_focus(r, &c->focuses[i])) return false;
+    }
+    if (!read_count(r, 24, &n)) return false;
+    c->events.clear();
+    c->events.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_event(r, &c->events[i])) return false;
+    }
+    if (!read_count(r, 32, &n)) return false;
+    c->decisions.clear();
+    c->decisions.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_decision(r, &c->decisions[i])) return false;
     }
     if (!read_constants(r, &c->constants)) return false;
     rebuild_content_index(*c);
@@ -1595,6 +1858,18 @@ bool read_country_diplomacy(ByteReader& r, Country* c) {
     return r.u32(&c->faction);
 }
 
+void write_timed_modifier(ByteWriter& w, const TimedModifier& m) {
+    w.str(m.source);
+    write_modifiers(w, m.mods);
+    w.i32(m.days_left);
+}
+
+bool read_timed_modifier(ByteReader& r, TimedModifier* m) {
+    if (!r.str(&m->source)) return false;
+    if (!read_modifiers(r, &m->mods)) return false;
+    return r.i32(&m->days_left);
+}
+
 void write_country_politics(ByteWriter& w, const Country& c) {
     w.f64(c.political_power);
     w.f64(c.stability);
@@ -1607,6 +1882,19 @@ void write_country_politics(ByteWriter& w, const Country& c) {
     w.boolean(c.at_war);
     w.boolean(c.fuel_priority);
     w.u64(c.last_capitulation_check);
+    // National focus, pending events and decisions, script flags and the modifiers
+    // they grant. This is the country's political state exactly once.
+    write_u32s(w, c.completed_focuses);
+    w.u32(c.selected_focus);
+    w.f64(c.focus_progress);
+    write_u32s(w, c.pending_events);
+    write_u32s(w, c.fired_events);
+    write_u32s(w, c.active_decisions);
+    write_f64s(w, c.decision_days_left);
+    write_f64s(w, c.decision_cooldown);
+    write_strs(w, c.country_flags);
+    w.u32(static_cast<uint32_t>(c.timed_modifiers.size()));
+    for (const TimedModifier& m : c.timed_modifiers) write_timed_modifier(w, m);
 }
 
 bool read_country_politics(ByteReader& r, Country* c) {
@@ -1614,7 +1902,24 @@ bool read_country_politics(ByteReader& r, Country* c) {
     if (!r.f64(&c->manpower) || !r.f64(&c->fuel) || !r.f64(&c->fuel_capacity)) return false;
     if (!r.f64(&c->consumer_goods_ratio) || !r.f64(&c->army_experience)) return false;
     if (!r.boolean(&c->at_war) || !r.boolean(&c->fuel_priority)) return false;
-    return r.u64(&c->last_capitulation_check);
+    if (!r.u64(&c->last_capitulation_check)) return false;
+    if (!read_u32s(r, &c->completed_focuses)) return false;
+    if (!r.u32(&c->selected_focus)) return false;
+    if (!r.f64(&c->focus_progress)) return false;
+    if (!read_u32s(r, &c->pending_events)) return false;
+    if (!read_u32s(r, &c->fired_events)) return false;
+    if (!read_u32s(r, &c->active_decisions)) return false;
+    if (!read_f64s(r, &c->decision_days_left)) return false;
+    if (!read_f64s(r, &c->decision_cooldown)) return false;
+    if (!read_strs(r, &c->country_flags)) return false;
+    uint32_t n = 0;
+    if (!read_count(r, 16, &n)) return false;  // empty source + modifiers + days_left
+    c->timed_modifiers.clear();
+    c->timed_modifiers.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_timed_modifier(r, &c->timed_modifiers[i])) return false;
+    }
+    return true;
 }
 
 // Per-country blocks are keyed by country id so that a section can be read back
@@ -1983,6 +2288,18 @@ void serialize_subsystem(const Game& g, Subsystem s, ByteWriter* out) {
             g.world.countries.for_each([&](CountryId id, const Country& c) {
                 write_country_block(w, id, c, write_country_politics);
             });
+            // std::map iteration is ordered: script variables round-trip byte-identically.
+            w.u32(static_cast<uint32_t>(g.world.script_vars.size()));
+            for (const auto& entry : g.world.script_vars) {
+                w.str(entry.first);
+                w.f64(entry.second);
+            }
+            w.u32(static_cast<uint32_t>(g.world.delayed_events.size()));
+            for (const DelayedEvent& d : g.world.delayed_events) {
+                w.u32(d.country.v);
+                w.u32(d.event);
+                w.u64(d.due);
+            }
             break;
         }
 
@@ -2097,6 +2414,24 @@ bool deserialize_subsystem(Game& g, Subsystem s, ByteReader* in) {
                 Country* c = country_block_target(r, g, &ok);
                 if (c == nullptr || !ok) return false;
                 if (!read_country_politics(r, c)) return false;
+            }
+            if (!read_count(r, 8, &n)) return false;  // name length + value
+            g.world.script_vars.clear();
+            for (uint32_t i = 0; i < n; ++i) {
+                std::string name;
+                double value = 0.0;
+                if (!r.str(&name) || !r.f64(&value)) return false;
+                g.world.script_vars[name] = value;
+            }
+            if (!read_count(r, 16, &n)) return false;  // country + event + due
+            g.world.delayed_events.clear();
+            g.world.delayed_events.resize(n);
+            for (uint32_t i = 0; i < n; ++i) {
+                DelayedEvent& d = g.world.delayed_events[i];
+                uint32_t country = INVALID_ID;
+                if (!r.u32(&country)) return false;
+                d.country = CountryId(country);
+                if (!r.u32(&d.event) || !r.u64(&d.due)) return false;
             }
             return true;
         }

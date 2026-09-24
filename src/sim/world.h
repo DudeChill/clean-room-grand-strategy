@@ -68,6 +68,9 @@ struct State {
     double manpower_pool = 0.0;  // recruitable manpower residing in this state
     bool impassable = false;
 
+    // Script flags attached to this state (set_state_flag / state_has_flag).
+    std::vector<std::string> flags;
+
     // Occupation model.
     double resistance = 0.0;
     double compliance = 0.0;
@@ -427,6 +430,14 @@ struct Faction {
 
 // -------------------------------------------------------------- country ------
 
+// A modifier granted by content (focus, event, decision) that expires after a time.
+// days_left < 0 means permanent.
+struct TimedModifier {
+    std::string source;  // focus/event/decision key, for tooltips and removal
+    Modifiers mods;
+    int days_left = -1;
+};
+
 struct TrainingDivision {
     DivisionId division;  // created immediately, location INVALID until deployed
     TemplateId template_id;
@@ -478,6 +489,18 @@ struct Country {
     std::vector<FleetId> fleets;                     // naval fleets this country fields
     std::vector<TrainingDivision> training;  // divisions being trained (off-map)
     std::vector<WarId> wars;
+
+    // Politics: national focus, pending events and taken decisions.
+    std::vector<uint32_t> completed_focuses;  // indices into Content::focuses
+    uint32_t selected_focus = 0xFFFFFFFFu;    // focus in progress
+    double focus_progress = 0.0;              // days accumulated on the selected focus
+    std::vector<uint32_t> pending_events;     // event indices awaiting a choice
+    std::vector<uint32_t> fired_events;       // fire_only_once bookkeeping
+    std::vector<uint32_t> active_decisions;   // decision indices currently taken
+    std::vector<double> decision_days_left;   // parallel to active_decisions
+    std::vector<double> decision_cooldown;    // per decision index, days until re-takeable
+    std::vector<std::string> country_flags;   // script flags (add_country_flag)
+    std::vector<TimedModifier> timed_modifiers;  // focus/event/decision modifiers
     uint32_t faction = 0;  // 0 = none
 
     double consumer_goods_ratio = 0.35;
@@ -498,6 +521,7 @@ struct Country {
         m.add(tech_modifiers);
         m.add(law_modifiers);
         m.add(national_modifiers);
+        for (const TimedModifier& tm : timed_modifiers) m.add(tm.mods);
         return m;
     }
 };
@@ -513,6 +537,13 @@ struct Character {
     int planning = 1;
     int logistics = 1;
     ArmyId army;
+};
+
+// An event scheduled to fire after a delay (effect {"trigger_event": {...}}).
+struct DelayedEvent {
+    CountryId country;
+    uint32_t event = 0xFFFFFFFFu;
+    Tick due = 0;
 };
 
 // ---------------------------------------------------------------- world ------
@@ -534,6 +565,9 @@ struct World {
     std::vector<NavalInvasion> invasions;
 
     std::vector<Faction> factions;
+    // Script variables (set_variable / add_to_variable) and scheduled events.
+    std::map<std::string, double> script_vars;
+    std::vector<DelayedEvent> delayed_events;
     // Relations keyed by ordered pair (low id first) for deterministic iteration.
     std::map<std::pair<uint32_t, uint32_t>, Relation> relations;
 

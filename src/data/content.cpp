@@ -8,7 +8,11 @@
 
 #include "data/content.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <filesystem>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -96,6 +100,400 @@ bool load_json_file(const std::string& path, Json* out, std::string* err) {
     if (Json::parse_file(path, out, &parse_err)) return true;
     if (err) *err = path + ": " + (parse_err.empty() ? std::string("cannot read file") : parse_err);
     return false;
+}
+
+// ------------------------------------------------ script block validation ----
+//
+// Focuses, events and decisions carry trigger/effect blocks in the vocabulary of
+// src/sim/script.h. The loader resolves every reference they make (focus, event,
+// decision, technology, law, state keys) so a modder gets
+// "<file>:<key>: <reason>" in Content::load_errors instead of silently dead
+// content. Evaluation itself stays in the script engine.
+
+bool is_comparator(const std::string& key) {
+    return key == "gte" || key == "gt" || key == "lte" || key == "lt" || key == "eq";
+}
+
+int comparator_count(const Json& j) {
+    int n = 0;
+    for (const auto& item : j.object_items()) {
+        if (is_comparator(item.first)) ++n;
+    }
+    return n;
+}
+
+std::string where(const std::string& path) {
+    return path.empty() ? std::string() : path + ": ";
+}
+
+// `value` is either a bare number (implicit equality) or an object with exactly one
+// of gte/gt/lte/lt/eq.
+void validate_comparator(const Json& value, std::vector<std::string>* errors,
+                         const std::string& file, const std::string& key,
+                         const std::string& path) {
+    if (value.is_number()) return;
+    if (!value.is_object()) {
+        errors->push_back(file + ":" + key + ": " + where(path) +
+                          "expects a number or a {gte|gt|lte|lt|eq: number} object");
+        return;
+    }
+    if (comparator_count(value) != 1) {
+        errors->push_back(file + ":" + key + ": " + where(path) +
+                          "needs exactly one of gte/gt/lte/lt/eq");
+    }
+    for (const auto& item : value.object_items()) {
+        if (is_comparator(item.first)) {
+            if (!item.second.is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(path) + item.first +
+                                  " expects a number");
+            }
+        } else {
+            errors->push_back(file + ":" + key + ": " + where(path) + "unexpected key '" +
+                              item.first + "'");
+        }
+    }
+}
+
+void validate_trigger(const Json& t, const Content& c,
+                      const std::set<std::string>& states,
+                      std::vector<std::string>* errors, const std::string& file,
+                      const std::string& key, const std::string& path);
+
+void validate_effects(const Json& e, const Content& c,
+                      const std::set<std::string>& states,
+                      std::vector<std::string>* errors, const std::string& file,
+                      const std::string& key, const std::string& path);
+
+void validate_trigger(const Json& t, const Content& c,
+                      const std::set<std::string>& states,
+                      std::vector<std::string>* errors, const std::string& file,
+                      const std::string& key, const std::string& path) {
+    if (t.is_null()) return;
+    if (!t.is_object()) {
+        errors->push_back(file + ":" + key + ": " + where(path) + "trigger must be an object");
+        return;
+    }
+    for (const auto& item : t.object_items()) {
+        const std::string& k = item.first;
+        const Json& v = item.second;
+        const std::string p = path.empty() ? k : path + "." + k;
+        if (k == "all" || k == "any") {
+            if (!v.is_array()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k + " expects an array");
+                continue;
+            }
+            for (size_t i = 0; i < v.size(); ++i) {
+                validate_trigger(v[i], c, states, errors, file, key,
+                                 k + "[" + std::to_string(i) + "]");
+            }
+        } else if (k == "not") {
+            if (v.is_array()) {
+                for (size_t i = 0; i < v.size(); ++i) {
+                    validate_trigger(v[i], c, states, errors, file, key,
+                                     "not[" + std::to_string(i) + "]");
+                }
+            } else {
+                validate_trigger(v, c, states, errors, file, key, p);
+            }
+        } else if (k == "chance") {
+            if (!v.is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + "chance expects a number");
+            }
+        } else if (k == "is_ai" || k == "at_war" || k == "state_controller_is_owner") {
+            if (!v.is_bool()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k +
+                                  " expects true or false");
+            }
+        } else if (k == "political_power" || k == "stability" || k == "war_support" ||
+                   k == "manpower" || k == "fuel" || k == "factories" ||
+                   k == "num_divisions" || k == "year" || k == "state_factories") {
+            validate_comparator(v, errors, file, key, p);
+        } else if (k == "opinion") {
+            if (!v.is_object()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "opinion expects an object");
+                continue;
+            }
+            if (comparator_count(v) != 1) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "opinion needs exactly one comparator");
+            }
+            for (const auto& f : v.object_items()) {
+                if (f.first == "target") {
+                    if (!f.second.is_string() || f.second.as_string().empty()) {
+                        errors->push_back(file + ":" + key + ": " + where(p) +
+                                          "opinion.target expects a country tag");
+                    }
+                } else if (is_comparator(f.first)) {
+                    if (!f.second.is_number()) {
+                        errors->push_back(file + ":" + key + ": " + where(p) + "opinion." +
+                                          f.first + " expects a number");
+                    }
+                } else {
+                    errors->push_back(file + ":" + key + ": " + where(p) +
+                                      "opinion has unexpected key '" + f.first + "'");
+                }
+            }
+        } else if (k == "var") {
+            if (!v.is_object()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + "var expects an object");
+                continue;
+            }
+            const std::string name = v["name"].as_string();
+            if (name.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + "var needs a name");
+            }
+            if (comparator_count(v) != 1) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "var needs exactly one comparator");
+            }
+            for (const auto& f : v.object_items()) {
+                if (f.first == "name") {
+                    if (!f.second.is_string()) {
+                        errors->push_back(file + ":" + key + ": " + where(p) +
+                                          "var.name expects a string");
+                    }
+                } else if (is_comparator(f.first)) {
+                    if (!f.second.is_number()) {
+                        errors->push_back(file + ":" + key + ": " + where(p) + "var." + f.first +
+                                          " expects a number");
+                    }
+                } else {
+                    errors->push_back(file + ":" + key + ": " + where(p) +
+                                      "var has unexpected key '" + f.first + "'");
+                }
+            }
+        } else if (k == "ideology" || k == "at_war_with" || k == "has_flag" ||
+                   k == "has_country_flag" || k == "state_has_flag" ||
+                   k == "date_after" || k == "date_before") {
+            if (!v.is_string() || v.as_string().empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k +
+                                  " expects a non-empty string");
+            }
+        } else if (k == "has_tech") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "has_tech expects a technology key");
+            } else if (c.tech_by_key.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "has_tech references unknown technology " + ref);
+            }
+        } else if (k == "completed_focus") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "completed_focus expects a focus key");
+            } else if (c.focus_index.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "completed_focus references unknown focus " + ref);
+            }
+        } else if (k == "has_decision") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "has_decision expects a decision key");
+            } else if (c.decision_index.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "has_decision references unknown decision " + ref);
+            }
+        } else if (k == "owns_state" || k == "controls_state") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k +
+                                  " expects a state key");
+            } else if (!states.empty() && states.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k +
+                                  " references unknown state " + ref);
+            }
+        } else {
+            errors->push_back(file + ":" + key + ": " + where(p) + "unknown trigger key '" + k +
+                              "'");
+        }
+    }
+}
+
+void validate_effects(const Json& e, const Content& c,
+                      const std::set<std::string>& states,
+                      std::vector<std::string>* errors, const std::string& file,
+                      const std::string& key, const std::string& path) {
+    if (e.is_null()) return;
+    if (!e.is_object()) {
+        errors->push_back(file + ":" + key + ": " + where(path) + "effect block must be an object");
+        return;
+    }
+    for (const auto& item : e.object_items()) {
+        const std::string& k = item.first;
+        const Json& v = item.second;
+        const std::string p = path.empty() ? k : path + "." + k;
+        if (k == "add_political_power" || k == "add_stability" || k == "add_war_support" ||
+            k == "add_manpower" || k == "add_fuel") {
+            if (!v.is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k + " expects a number");
+            }
+        } else if (k == "add_opinion") {
+            if (!v.is_object()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_opinion expects an object");
+                continue;
+            }
+            const std::string target = v["target"].as_string();
+            if (target.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_opinion.target expects a country tag");
+            }
+            if (!v["value"].is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_opinion.value expects a number");
+            }
+        } else if (k == "declare_war") {
+            if (!v.is_object()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "declare_war expects an object");
+                continue;
+            }
+            if (v["target"].as_string().empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "declare_war.target expects a country tag");
+            }
+            for (const char* flag : {"annex", "puppet"}) {
+                if (v.has(flag) && !v[flag].is_bool()) {
+                    errors->push_back(file + ":" + key + ": " + where(p) + "declare_war." + flag +
+                                      " expects true or false");
+                }
+            }
+        } else if (k == "add_tech") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_tech expects a technology key");
+            } else if (c.tech_by_key.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_tech references unknown technology " + ref);
+            }
+        } else if (k == "set_law") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "set_law expects a law key");
+            } else if (c.law_index.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "set_law references unknown law " + ref);
+            }
+        } else if (k == "add_modifier") {
+            if (!v.is_object()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_modifier expects an object");
+                continue;
+            }
+            const std::string kind = v["kind"].as_string();
+            if (kind.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_modifier.kind expects a modifier name");
+            } else if (match_modifier(kind) < 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_modifier references unknown modifier " + kind);
+            }
+            if (!v["value"].is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_modifier.value expects a number");
+            }
+            if (v.has("days") && !v["days"].is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_modifier.days expects a number");
+            }
+            if (v.has("source") && !v["source"].is_string()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_modifier.source expects a string");
+            }
+        } else if (k == "complete_focus") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "complete_focus expects a focus key");
+            } else if (c.focus_index.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "complete_focus references unknown focus " + ref);
+            }
+        } else if (k == "trigger_event") {
+            if (!v.is_object()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "trigger_event expects an object");
+                continue;
+            }
+            const std::string ref = v["key"].as_string();
+            if (ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "trigger_event.key expects an event key");
+            } else if (c.event_index.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "trigger_event references unknown event " + ref);
+            }
+            if (v.has("days") && !v["days"].is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "trigger_event.days expects a number");
+            }
+        } else if (k == "set_flag" || k == "clear_flag") {
+            if (!v.is_string() || v.as_string().empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k +
+                                  " expects a non-empty string");
+            }
+        } else if (k == "set_variable" || k == "add_to_variable") {
+            if (!v.is_object()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k + " expects an object");
+                continue;
+            }
+            if (v["name"].as_string().empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k +
+                                  ".name expects a variable name");
+            }
+            if (!v["value"].is_number()) {
+                errors->push_back(file + ":" + key + ": " + where(p) + k +
+                                  ".value expects a number");
+            }
+        } else if (k == "add_claim") {
+            const std::string ref = v.as_string();
+            if (!v.is_string() || ref.empty()) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_claim expects a state key");
+            } else if (!states.empty() && states.count(ref) == 0) {
+                errors->push_back(file + ":" + key + ": " + where(p) +
+                                  "add_claim references unknown state " + ref);
+            }
+        } else {
+            errors->push_back(file + ":" + key + ": " + where(p) + "unknown effect key '" + k +
+                              "'");
+        }
+    }
+}
+
+// State keys ("s12") are declared by the map files, which the loader reads only to
+// build the valid-key set; the scenario assigns ids in file order.
+std::set<std::string> collect_state_keys(const std::string& root) {
+    namespace fs = std::filesystem;
+    std::set<std::string> keys;
+    const std::string dir = root + "/maps";
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return keys;
+    std::vector<std::string> files;
+    for (const fs::directory_entry& entry : fs::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file(ec)) continue;
+        const std::string p = entry.path().string();
+        if (p.size() > 5 && p.compare(p.size() - 5, 5, ".json") == 0) files.push_back(p);
+    }
+    std::sort(files.begin(), files.end());
+    for (const std::string& f : files) {
+        Json map;
+        std::string parse_err;
+        if (!Json::parse_file(f, &map, &parse_err)) continue;  // map errors are scenario's job
+        const Json& arr = map["states"];
+        if (!arr.is_array()) continue;
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const std::string k = arr[i]["key"].as_string();
+            if (!k.empty()) keys.insert(k);
+        }
+    }
+    return keys;
 }
 
 }  // namespace
@@ -248,6 +646,7 @@ SimConstants SimConstants::from_json(const Json& j) {
     c.fuel_demand_per_day = num("fuel_demand_per_day", c.fuel_demand_per_day);
 
     c.political_power_per_day = num("political_power_per_day", c.political_power_per_day);
+    c.focus_progress_speed = num("focus_progress_speed", c.focus_progress_speed);
     c.stability_drift = num("stability_drift", c.stability_drift);
     c.war_support_drift = num("war_support_drift", c.war_support_drift);
 
@@ -637,6 +1036,242 @@ bool load_content(const std::string& data_root, Content* out, std::string* err) 
             out->template_by_key[key] = def.id;
             out->templates.push_back(std::move(def));
         }
+    }
+
+    // ---- national focuses ------------------------------------------------
+    // Every data/common/focuses/*.json in sorted file order, so focus indices (and
+    // therefore save files) are stable. Each file is {"tree": "...", "focuses": []}.
+    std::vector<std::string> focus_src;
+    {
+        namespace fs = std::filesystem;
+        const std::string dir = root + "/common/focuses";
+        std::error_code ec;
+        // Optional content: a minimal data set may ship no focus trees at all.
+        // Only a file that exists and does not parse is a hard error.
+        std::vector<std::string> files;
+        if (fs::is_directory(dir, ec)) {
+            for (const fs::directory_entry& entry : fs::directory_iterator(dir, ec)) {
+                if (!entry.is_regular_file(ec)) continue;
+                const std::string p = entry.path().string();
+                if (p.size() > 5 && p.compare(p.size() - 5, 5, ".json") == 0) files.push_back(p);
+            }
+        }
+        std::sort(files.begin(), files.end());
+        for (const std::string& f : files) {
+            Json fd;
+            if (!load_json_file(f, &fd, &file_err)) {
+                errors.push_back(file_err);
+                if (err) *err = file_err;
+                return false;
+            }
+            const std::string default_tree = fd["tree"].as_string("shared");
+            const Json& arr = fd["focuses"];
+            if (!arr.is_array()) {
+                errors.push_back(f + ":focuses: expected an array");
+                continue;
+            }
+            for (size_t i = 0; i < arr.size(); ++i) {
+                const Json& fj = arr[i];
+                const std::string key = fj["key"].as_string();
+                if (key.empty()) {
+                    errors.push_back(f + ":<entry " + std::to_string(i) + ">: missing key");
+                    continue;
+                }
+                if (out->focus_index.count(key) != 0) {
+                    errors.push_back(f + ":" + key + ": duplicate focus key");
+                    continue;
+                }
+                FocusDef def;
+                def.index = static_cast<uint32_t>(out->focuses.size());
+                def.key = key;
+                def.name = fj["name"].as_string(key);
+                def.tree = fj["tree"].as_string(default_tree);
+                def.x = static_cast<int>(fj["x"].as_int(def.x));
+                def.y = static_cast<int>(fj["y"].as_int(def.y));
+                def.days = fj["days"].as_double(def.days);
+                if (!std::isfinite(def.days) || def.days <= 0.0) {
+                    errors.push_back(f + ":" + key + ": days must be a positive number");
+                    def.days = 70.0;
+                }
+                const Json& prereq = fj["prerequisites"];
+                if (prereq.is_array()) {
+                    for (size_t k = 0; k < prereq.size(); ++k) {
+                        const std::string pk = prereq[k].as_string();
+                        if (!pk.empty()) def.prerequisites.push_back(pk);
+                    }
+                }
+                const Json& excl = fj["mutually_exclusive"];
+                if (excl.is_array()) {
+                    for (size_t k = 0; k < excl.size(); ++k) {
+                        const std::string ek = excl[k].as_string();
+                        if (!ek.empty()) def.mutually_exclusive.push_back(ek);
+                    }
+                }
+                def.available = fj["available"];
+                def.bypass = fj["bypass"];
+                def.effects = fj["effects"];
+                def.ai_weight = fj["ai_weight"].as_double(def.ai_weight);
+                out->focus_index[key] = def.index;
+                out->focuses.push_back(std::move(def));
+                focus_src.push_back(f);
+            }
+        }
+    }
+
+    // ---- events ----------------------------------------------------------
+    const std::string f_events = root + "/common/events.json";
+    std::vector<std::string> event_src;
+    if (std::filesystem::exists(f_events)) {
+        Json fd;
+        if (!load_json_file(f_events, &fd, &file_err)) {
+            errors.push_back(file_err);
+            if (err) *err = file_err;
+            return false;
+        }
+        const Json& arr = fd["events"];
+        if (!arr.is_array()) {
+            const std::string msg = f_events + ":events: expected an array";
+            errors.push_back(msg);
+            if (err) *err = msg;
+            return false;
+        }
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const Json& ej = arr[i];
+            const std::string key = ej["key"].as_string();
+            if (key.empty()) {
+                errors.push_back(f_events + ":<entry " + std::to_string(i) + ">: missing key");
+                continue;
+            }
+            if (out->event_index.count(key) != 0) {
+                errors.push_back(f_events + ":" + key + ": duplicate event key");
+                continue;
+            }
+            EventDef def;
+            def.index = static_cast<uint32_t>(out->events.size());
+            def.key = key;
+            def.title = ej["title"].as_string(key);
+            def.description = ej["description"].as_string();
+            def.fire_only_once = ej["fire_only_once"].as_bool(def.fire_only_once);
+            def.major = ej["major"].as_bool(def.major);
+            def.trigger = ej["trigger"];
+            def.immediate = ej["immediate"];
+            const Json& options = ej["options"];
+            if (options.is_array()) {
+                for (size_t k = 0; k < options.size(); ++k) {
+                    const Json& oj = options[k];
+                    EventOptionDef opt;
+                    opt.name = oj["name"].as_string("Option " + std::to_string(k + 1));
+                    opt.effects = oj["effects"];
+                    opt.ai_weight = oj["ai_weight"].as_double(opt.ai_weight);
+                    def.options.push_back(std::move(opt));
+                }
+            }
+            if (def.options.empty()) {
+                errors.push_back(f_events + ":" + key + ": event has no options");
+            }
+            out->event_index[key] = def.index;
+            out->events.push_back(std::move(def));
+            event_src.push_back(f_events);
+        }
+    }
+
+    // ---- decisions -------------------------------------------------------
+    const std::string f_decisions = root + "/common/decisions.json";
+    std::vector<std::string> decision_src;
+    if (std::filesystem::exists(f_decisions)) {
+        Json fd;
+        if (!load_json_file(f_decisions, &fd, &file_err)) {
+            errors.push_back(file_err);
+            if (err) *err = file_err;
+            return false;
+        }
+        const Json& arr = fd["decisions"];
+        if (!arr.is_array()) {
+            const std::string msg = f_decisions + ":decisions: expected an array";
+            errors.push_back(msg);
+            if (err) *err = msg;
+            return false;
+        }
+        for (size_t i = 0; i < arr.size(); ++i) {
+            const Json& dj = arr[i];
+            const std::string key = dj["key"].as_string();
+            if (key.empty()) {
+                errors.push_back(f_decisions + ":<entry " + std::to_string(i) + ">: missing key");
+                continue;
+            }
+            if (out->decision_index.count(key) != 0) {
+                errors.push_back(f_decisions + ":" + key + ": duplicate decision key");
+                continue;
+            }
+            DecisionDef def;
+            def.index = static_cast<uint32_t>(out->decisions.size());
+            def.key = key;
+            def.name = dj["name"].as_string(key);
+            def.description = dj["description"].as_string();
+            def.category = static_cast<int>(dj["category"].as_int(def.category));
+            def.targets_state = dj["targets_state"].as_bool(def.targets_state);
+            def.cost_pp = dj["cost_pp"].as_double(def.cost_pp);
+            def.days_remove = static_cast<int>(dj["days_remove"].as_int(def.days_remove));
+            def.days_cooldown = static_cast<int>(dj["days_cooldown"].as_int(def.days_cooldown));
+            def.visible = dj["visible"];
+            def.available = dj["available"];
+            def.effects = dj["effects"];
+            def.remove_effect = dj["remove_effect"];
+            def.ai_weight = dj["ai_weight"].as_double(def.ai_weight);
+            if (def.cost_pp < 0.0) {
+                errors.push_back(f_decisions + ":" + key + ": cost_pp must not be negative");
+                def.cost_pp = 0.0;
+            }
+            if (def.days_remove < 0 || def.days_cooldown < 0) {
+                errors.push_back(f_decisions + ":" + key + ": negative days_remove/days_cooldown");
+                def.days_remove = def.days_remove < 0 ? 0 : def.days_remove;
+                def.days_cooldown = def.days_cooldown < 0 ? 0 : def.days_cooldown;
+            }
+            out->decision_index[key] = def.index;
+            out->decisions.push_back(std::move(def));
+            decision_src.push_back(f_decisions);
+        }
+    }
+
+    // ---- cross-reference validation --------------------------------------
+    // Runs after every file is registered so a focus may reference an event or a
+    // decision declared later, and vice versa.
+    const std::set<std::string> state_keys = collect_state_keys(root);
+    for (size_t i = 0; i < out->focuses.size(); ++i) {
+        const FocusDef& d = out->focuses[i];
+        const std::string file = i < focus_src.size() ? focus_src[i] : std::string();
+        for (const std::string& p : d.prerequisites) {
+            if (out->focus_index.count(p) == 0) {
+                errors.push_back(file + ":" + d.key + ": unknown prerequisite " + p);
+            }
+        }
+        for (const std::string& p : d.mutually_exclusive) {
+            if (out->focus_index.count(p) == 0) {
+                errors.push_back(file + ":" + d.key +
+                                 ": mutually_exclusive references unknown focus " + p);
+            }
+        }
+        validate_trigger(d.available, *out, state_keys, &errors, file, d.key, "available");
+        validate_trigger(d.bypass, *out, state_keys, &errors, file, d.key, "bypass");
+        validate_effects(d.effects, *out, state_keys, &errors, file, d.key, "effects");
+    }
+    for (size_t i = 0; i < out->events.size(); ++i) {
+        const EventDef& d = out->events[i];
+        const std::string file = i < event_src.size() ? event_src[i] : std::string();
+        validate_trigger(d.trigger, *out, state_keys, &errors, file, d.key, "trigger");
+        validate_effects(d.immediate, *out, state_keys, &errors, file, d.key, "immediate");
+        for (size_t k = 0; k < d.options.size(); ++k) {
+            validate_effects(d.options[k].effects, *out, state_keys, &errors, file, d.key,
+                             "options[" + std::to_string(k) + "].effects");
+        }
+    }
+    for (size_t i = 0; i < out->decisions.size(); ++i) {
+        const DecisionDef& d = out->decisions[i];
+        const std::string file = i < decision_src.size() ? decision_src[i] : std::string();
+        validate_trigger(d.visible, *out, state_keys, &errors, file, d.key, "visible");
+        validate_trigger(d.available, *out, state_keys, &errors, file, d.key, "available");
+        validate_effects(d.effects, *out, state_keys, &errors, file, d.key, "effects");
+        validate_effects(d.remove_effect, *out, state_keys, &errors, file, d.key, "remove_effect");
     }
 
     if (err) *err = errors.empty() ? std::string() : errors.front();

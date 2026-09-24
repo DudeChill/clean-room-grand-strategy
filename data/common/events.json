@@ -1,0 +1,250 @@
+{
+  "events": [
+    {
+      "key": "ev_industrial_survey",
+      "title": "Industrial Survey",
+      "description": "The planning office asks for funds to survey the country's industrial capacity.",
+      "trigger": { "date_after": "1936-03-01" },
+      "options": [
+        {
+          "name": "Commission the survey",
+          "effects": {
+            "add_political_power": 25,
+            "add_modifier": { "kind": "ConstructionSpeed", "value": 0.05, "days": 180, "source": "ev_industrial_survey" }
+          }
+        },
+        {
+          "name": "Defer to the treasury",
+          "effects": { "add_stability": 0.01 }
+        }
+      ]
+    },
+    {
+      "key": "ev_labour_unrest",
+      "title": "Labour Unrest",
+      "description": "Strikes spread through the industrial belt as wages lag behind prices.",
+      "trigger": { "all": [ { "date_after": "1936-05-01" }, { "stability": { "lt": 0.55 } } ] },
+      "options": [
+        {
+          "name": "Negotiate with the unions",
+          "effects": { "add_stability": 0.04 }
+        },
+        {
+          "name": "Break the strike",
+          "effects": { "add_stability": -0.02, "add_war_support": 0.03 }
+        },
+        {
+          "name": "Ignore the reports",
+          "effects": { "add_political_power": 10 }
+        }
+      ]
+    },
+    {
+      "key": "ev_harvest_crisis",
+      "title": "Harvest Crisis",
+      "description": "A poor harvest threatens food prices in the cities.",
+      "trigger": { "date_after": "1936-07-01" },
+      "options": [
+        {
+          "name": "Emergency imports",
+          "effects": {
+            "add_political_power": -5,
+            "add_stability": 0.02
+          }
+        },
+        {
+          "name": "Introduce rationing",
+          "effects": {
+            "add_stability": -0.01,
+            "add_modifier": { "kind": "SupplyConsumption", "value": -0.05, "days": 120, "source": "ev_harvest_crisis" }
+          }
+        }
+      ]
+    },
+    {
+      "key": "ev_border_incident",
+      "title": "Border Incident",
+      "description": "Shots are exchanged with a neighbouring patrol along the frontier.",
+      "trigger": { "all": [ { "date_after": "1936-08-01" }, { "not": { "at_war_with": "MER" } } ] },
+      "options": [
+        {
+          "name": "Demand an apology",
+          "effects": {
+            "add_war_support": 0.02,
+            "set_flag": "ev_border_tense"
+          }
+        },
+        {
+          "name": "Play the incident down",
+          "effects": {
+            "add_stability": 0.01,
+            "add_political_power": 5
+          }
+        }
+      ]
+    },
+    {
+      "key": "ev_foreign_investment",
+      "title": "Foreign Investment Offer",
+      "description": "A foreign consortium offers capital for new plants, with strings attached.",
+      "trigger": { "all": [ { "date_after": "1936-10-01" }, { "political_power": { "gte": 20 } } ] },
+      "options": [
+        {
+          "name": "Accept the offer",
+          "effects": {
+            "add_political_power": -10,
+            "add_modifier": { "kind": "FactoryOutput", "value": 0.05, "days": 240, "source": "ev_foreign_investment" }
+          }
+        },
+        {
+          "name": "Nationalise the works",
+          "effects": {
+            "add_political_power": 5,
+            "add_modifier": { "kind": "ConstructionSpeed", "value": 0.05, "days": 240, "source": "ev_foreign_investment" }
+          }
+        }
+      ]
+    },
+    {
+      "key": "ev_naval_review",
+      "title": "Naval Review",
+      "description": "The admiralty presents its plan for the coming decade at sea.",
+      "trigger": { "date_after": "1936-11-01" },
+      "options": [
+        {
+          "name": "Order new hulls",
+          "effects": {
+            "add_modifier": { "kind": "DockyardOutput", "value": 0.06, "days": 240, "source": "ev_naval_review" }
+          }
+        },
+        {
+          "name": "Refit the reserve fleet",
+          "effects": {
+            "add_tech": "improved_destroyer_hull",
+            "add_modifier": { "kind": "ResearchSpeed", "value": 0.03, "days": 180, "source": "ev_naval_review" }
+          }
+        }
+      ]
+    },
+    {
+      "key": "ev_synthetic_breakthrough",
+      "title": "Synthetic Fuel Breakthrough",
+      "description": "Chemists report a workable process for synthetic fuel at industrial scale.",
+      "trigger": null,
+      "options": [
+        {
+          "name": "Fund the expansion",
+          "effects": {
+            "add_political_power": -15,
+            "add_modifier": { "kind": "FactoryOutput", "value": 0.05, "days": 180, "source": "ev_synthetic_breakthrough" }
+          }
+        },
+        {
+          "name": "Keep the process secret",
+          "effects": { "set_flag": "ev_synthetic_secret" }
+        },
+        {
+          "name": "Sell licences abroad",
+          "effects": {
+            "add_political_power": 30,
+            "set_flag": "ev_synthetic_licences"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ev_army_parade",
+      "title": "Army Parade",
+      "description": "The reorganized general staff parades its formations before the capital.",
+      "trigger": null,
+      "options": [
+        {
+          "name": "Hold a grand parade",
+          "effects": {
+            "add_war_support": 0.04,
+            "add_modifier": { "kind": "WarSupport", "value": 0.02, "days": 120, "source": "ev_army_parade" }
+          }
+        },
+        {
+          "name": "Hold a modest review",
+          "effects": { "add_stability": 0.02 }
+        }
+      ]
+    },
+    {
+      "key": "ev_political_scandal",
+      "title": "Political Scandal",
+      "description": "The security service uncovers corruption reaching into the cabinet.",
+      "trigger": null,
+      "options": [
+        {
+          "name": "Open a public inquiry",
+          "effects": { "add_stability": 0.02, "add_political_power": -20 }
+        },
+        {
+          "name": "Arrange a quiet dismissal",
+          "effects": { "add_political_power": 10, "add_stability": -0.02 }
+        }
+      ]
+    },
+    {
+      "key": "ev_colonial_grant",
+      "title": "Colonial Charter",
+      "description": "The colonial office proposes a wider charter for the overseas territories.",
+      "trigger": null,
+      "options": [
+        {
+          "name": "Expand the charter",
+          "effects": {
+            "add_claim": "s10",
+            "add_modifier": { "kind": "FactoryOutput", "value": 0.05, "days": 240, "source": "ev_colonial_grant" }
+          }
+        },
+        {
+          "name": "Restrict the charter",
+          "effects": { "add_stability": 0.02 }
+        }
+      ]
+    },
+    {
+      "key": "ev_alliance_offer",
+      "title": "Alliance Offer",
+      "description": "A neighbouring government proposes a formal pact of mutual support.",
+      "trigger": null,
+      "options": [
+        {
+          "name": "Sign the pact",
+          "effects": {
+            "add_opinion": { "target": "THA", "value": 25 },
+            "set_flag": "ev_alliance_signed"
+          }
+        },
+        {
+          "name": "Decline politely",
+          "effects": {
+            "add_opinion": { "target": "THA", "value": -5 },
+            "add_political_power": 5
+          }
+        }
+      ]
+    },
+    {
+      "key": "ev_kor_fortification",
+      "title": "Fortification Works Completed",
+      "description": "Engineers report the border works are ready for inspection.",
+      "trigger": null,
+      "options": [
+        {
+          "name": "Reinforce the line",
+          "effects": {
+            "add_modifier": { "kind": "DivisionDefense", "value": 0.04, "days": 180, "source": "ev_kor_fortification" }
+          }
+        },
+        {
+          "name": "Reduce the works",
+          "effects": { "add_political_power": 15 }
+        }
+      ]
+    }
+  ]
+}
