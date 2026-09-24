@@ -7,12 +7,14 @@ when resuming; then read `DEVLOG.md` (top entry) and `docs/PARITY_MATRIX.md`.
 
 * Branch `master`, clean tree, pushed to `origin`
   (`https://github.com/DudeChill/clean-room-grand-strategy`).
-* Releases published: **v0.1.0** (foundation), **v0.2.0** (air), **v0.3.0** (naval).
+* Releases published: **v0.1.0** (foundation), **v0.2.0** (air), **v0.3.0** (naval),
+  **v0.3.1** (verified AI invasion staging; also the corrected naval artifact — use this
+  for the naval milestone, v0.3.0's tarball was packaged after an in-flight edit).
 * Last verified commands (all green on a clean Release build):
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-build/hoi_tests                 # 169 passed, 0 failed
+build/hoi_tests                 # 170 passed, 0 failed
 scripts/verify.sh               # 8 checks passed, 0 failed
 build/game --days 365 --audit --summary    # world audit: OK, 29 wars, 336 divisions
 ```
@@ -81,6 +83,11 @@ tree is clean and every milestone is published, so this starts from a green base
   invented statuses, no percentages.
 * **Anticipate mid-edit trees**: when a peer's file does not compile, check
   `g++ -std=c++20 -Isrc -fsyntax-only <file>` and wait rather than assuming UB.
+* **Never package a release while an agent is mid-edit.** v0.3.0's tarball was cut
+  after an edit landed and before it was tested, which produced an artifact that did not
+  match its tag and shipped untested code. Release steps now: stop all agents, freeze the
+  tree, run `scripts/verify.sh`, then package, and verify the artifact against the tag
+  (`git show <tag>:<file> | sha256sum` versus the file inside the tarball).
 
 ## Known gaps (all tracked in docs/DISCREPANCIES.md)
 
