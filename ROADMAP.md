@@ -19,7 +19,7 @@ time has passed.
 * scenario loading: countries, ownership, industry, armies, factions
 * world auditor and invariant checks
 
-## 0.3 Economy & Industry (in progress)
+## 0.3 Economy & Industry (in progress; trade reached in v0.6.0)
 
 * resource yields and consumption feeding production lines
 * production lines with efficiency, efficiency cap and equipment switching

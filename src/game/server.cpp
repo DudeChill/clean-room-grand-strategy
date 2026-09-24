@@ -32,6 +32,7 @@
 #include "sim/politics.h"
 #include "sim/research.h"
 #include "sim/spirits.h"
+#include "sim/trade.h"
 #include "sim/supply.h"
 #include "sim/units.h"
 #include "sim/world.h"
@@ -883,6 +884,38 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         }
         player.set("decisions", decisions);
 
+        Json balances = Json::array();
+        for (int r = 0; r < RESOURCE_COUNT; ++r) {
+            Json j = Json::object();
+            j.set("resource", Json(std::string(resource_name(static_cast<Resource>(r)))));
+            j.set("balance", Json(resource_balance(g, viewer, static_cast<Resource>(r))));
+            j.set("produced", Json(c->resources_produced[r]));
+            j.set("imported", Json(c->resources_imported[r]));
+            j.set("consumed", Json(c->resources_consumed[r]));
+            balances.push_back(j);
+        }
+        player.set("resource_balances", balances);
+
+        Json routes = Json::array();
+        for (const TradeRoute& r : w.trade_routes) {
+            if (r.importer != viewer && r.exporter != viewer) continue;
+            const Country* other = w.country(r.importer == viewer ? r.exporter : r.importer);
+            Json j = Json::object();
+            j.set("partner", Json(other ? other->tag : std::string("?")));
+            j.set("partner_id", Json(static_cast<uint32_t>(other ? other->id.v : 0)));
+            j.set("resource", Json(std::string(resource_name(r.resource))));
+            j.set("resource_id", Json(static_cast<int>(r.resource)));
+            j.set("importer", Json(r.importer == viewer));
+            j.set("amount", Json(r.amount));
+            j.set("delivered", Json(r.delivered));
+            j.set("sea", Json(r.sea_route));
+            j.set("convoys", Json(r.convoy_use));
+            j.set("factories", Json(r.factory_cost));
+            j.set("active", Json(r.active));
+            routes.push_back(j);
+        }
+        player.set("trade_routes", routes);
+
         Json spirits = Json::array();
         for (const TimedModifier& tm : c->national_spirits) {
             Json j = Json::object();
@@ -998,6 +1031,15 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         for (const auto& line : c->lines) {
             if (line.resource_shortage > 0.01 && line.factories > 0) {
                 add_alert("production line short of resources", "production");
+                break;
+            }
+        }
+        for (int r = 0; r < RESOURCE_COUNT; ++r) {
+            const double balance = resource_balance(g, viewer, static_cast<Resource>(r));
+            if (balance < -0.01) {
+                add_alert(std::string("resource deficit: ") +
+                              resource_name(static_cast<Resource>(r)),
+                          "diplomacy");
                 break;
             }
         }

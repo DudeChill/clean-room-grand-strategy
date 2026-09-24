@@ -25,6 +25,8 @@ void phase_supply(Game& g);
 void phase_air(Game& g);
 // 6c. Naval operations: detection, engagements, missions, invasions, control.
 void phase_naval(Game& g);
+// 6d. Trade: balances, route feasibility, blockade and convoys.
+void phase_trade(Game& g);
 // 7. Resources, production lines, construction, consumer goods, stockpiles.
 void phase_industry(Game& g);
 // 8. Research progress and technology effect propagation.

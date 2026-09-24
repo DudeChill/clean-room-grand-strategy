@@ -22,6 +22,7 @@
 #include "sim/industry.h"
 #include "sim/research.h"
 #include "sim/spirits.h"
+#include "sim/trade.h"
 #include "sim/supply.h"
 #include "sim/units.h"
 
@@ -57,6 +58,7 @@ struct Options {
     bool quiet = false;
     bool verbose = false;
     bool serve = false;
+    bool inspect_trade = false;
 };
 
 void usage() {
@@ -82,6 +84,7 @@ void usage() {
         "  --inspect-province ID print province state and supply\n"
         "  --inspect-supply ID   print the supply route of a province\n"
         "  --inspect-battle ID   print a battle breakdown (attacker/defender/debug)\n"
+        "  --inspect-trade       print every country's resource balance and all trade routes\n"
         "  --verbose             debug logging\n"
         "  --quiet               errors only\n");
 }
@@ -143,6 +146,8 @@ bool parse_args(int argc, char** argv, Options* o) {
             std::string v;
             if (!next(&v)) return false;
             o->inspect_supply = std::strtoull(v.c_str(), nullptr, 10);
+        } else if (a == "--inspect-trade") {
+            o->inspect_trade = true;
         } else if (a == "--inspect-battle") {
             if (!next(&o->inspect_battle)) return false;
         } else if (a == "--hashes") {
@@ -320,6 +325,25 @@ void inspect_country(const Game& g, const std::string& tag) {
         }
         std::printf("\n");
     }
+    std::printf("  resource balance (per day):");
+    for (int r = 0; r < RESOURCE_COUNT; ++r) {
+        const double bal = resource_balance(g, cid, static_cast<Resource>(r));
+        if (bal > 0.01 || bal < -0.01) {
+            std::printf(" %s %+.2f", resource_name(static_cast<Resource>(r)), bal);
+        }
+    }
+    std::printf("\n");
+    if (!w.trade_routes.empty()) {
+        std::printf("  trade routes:\n");
+        for (const TradeRoute& r : w.trade_routes) {
+            if (r.importer != cid && r.exporter != cid) continue;
+            const Country* other = w.country(r.importer == cid ? r.exporter : r.importer);
+            std::printf("    %s %s %-9s %.1f/day (delivered %.1f)%s%s\n",
+                        r.importer == cid ? "import" : "export", other ? other->tag.c_str() : "?",
+                        resource_name(r.resource), r.amount, r.delivered,
+                        r.sea_route ? " sea" : " land", r.active ? "" : " INACTIVE");
+        }
+    }
     std::printf("  stockpile:\n");
     for (size_t i = 0; i < c.equipment_stockpile.size(); ++i) {
         if (c.equipment_stockpile[i] <= 0.0) continue;
@@ -384,6 +408,32 @@ void inspect_supply(const Game& g, ProvinceId pid) {
     }
     const Province* bp = g.world.province(bottleneck);
     std::printf("  bottleneck: %s\n", bp ? bp->name.c_str() : "none");
+}
+
+void inspect_trade(const Game& g) {
+    const World& w = g.world;
+    std::printf("TRADE\n");
+    w.countries.for_each([&](CountryId cid, const Country& c) {
+        if (!c.alive) return;
+        std::printf("  %-4s", c.tag.c_str());
+        for (int r = 0; r < RESOURCE_COUNT; ++r) {
+            const Resource res = static_cast<Resource>(r);
+            const double balance = resource_balance(g, cid, res);
+            if (balance > 0.01 || balance < -0.01) {
+                std::printf("  %s %+.2f", resource_name(res), balance);
+            }
+        }
+        std::printf("\n");
+    });
+    std::printf("  routes: %zu\n", w.trade_routes.size());
+    for (const TradeRoute& r : w.trade_routes) {
+        const Country* i = w.country(r.importer);
+        const Country* e = w.country(r.exporter);
+        std::printf("    %s -> %s %-9s amount %.2f delivered %.2f %s %s\n",
+                    e ? e->tag.c_str() : "?", i ? i->tag.c_str() : "?", resource_name(r.resource),
+                    r.amount, r.delivered, r.sea_route ? "sea" : "land",
+                    r.active ? "" : "INACTIVE");
+    }
 }
 
 void inspect_battle(const Game& g, BattleId bid) {
@@ -539,6 +589,7 @@ int main(int argc, char** argv) {
     if (!opt.inspect_country.empty()) inspect_country(game, opt.inspect_country);
     if (opt.inspect_province != 0) inspect_province(game, ProvinceId(static_cast<uint32_t>(opt.inspect_province)));
     if (opt.inspect_supply != 0) inspect_supply(game, ProvinceId(static_cast<uint32_t>(opt.inspect_supply)));
+    if (opt.inspect_trade) inspect_trade(game);
     if (!opt.inspect_battle.empty()) {
         inspect_battle(game, BattleId(static_cast<uint32_t>(std::strtoul(opt.inspect_battle.c_str(), nullptr, 10))));
     }

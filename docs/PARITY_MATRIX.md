@@ -38,7 +38,7 @@ PARTIAL, FUNCTIONAL, PARITY_TESTING, VALIDATED.
 | IND-005 | Resource production and consumption | FUNCTIONAL | MODERATE | yes | yes | yes | unit |
 | IND-006 | Consumer goods | FUNCTIONAL | LOW | yes | yes | yes | unit |
 | IND-007 | Equipment stockpile and reinforcement | PARITY_TESTING | HIGH | yes | yes | yes | unit + golden |
-| IND-008 | Trade and convoys | NOT_IMPLEMENTED | LOW | - | - | - | - |
+| IND-008 | Trade and convoys (land and sea routes, blockade, factory cost) | SPECIFIED | MODERATE | yes | yes | yes | unit + golden |
 | IND-009 | Equipment designers | NOT_IMPLEMENTED | LOW | - | - | - | - |
 | RES-001 | Technology graph and prerequisites | FUNCTIONAL | HIGH | yes | yes | yes | unit + golden |
 | RES-002 | Research slots and progress | PARITY_TESTING | HIGH | yes | yes | yes | unit + golden |

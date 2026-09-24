@@ -23,7 +23,9 @@ inline constexpr uint32_t SAVE_MAGIC = 0x34494F48;  // "HOI4" little-endian
 // 5: Politics gained the per-country national spirits, spirit/advisor rosters and
 //    slot capacities; Economy gained the national spirit and political advisor
 //    content tables. Layout changed, so version 4 files are rejected.
-inline constexpr uint32_t SAVE_VERSION = 5;
+// 6: Economy gained the world-level trade routes (World::trade_routes) after the
+//    per-country economy blocks; layout changed, so version 5 files are rejected.
+inline constexpr uint32_t SAVE_VERSION = 6;
 
 enum class Subsystem : uint8_t {
     Map = 0,

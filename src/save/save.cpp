@@ -26,7 +26,11 @@
 //              political advisors and SimConstants, i.e. every table the simulation
 //              reads - plus per country: production
 //              lines, construction queue, research state and the template roster
-//              (Country::templates). Content lives here because it is what industry
+//              (Country::templates), and the world-level World::trade_routes
+//              (resources move, industry consumes them, and the routes tie up
+//              civilian factories and convoys - all economic state; they live here
+//              rather than in Diplomacy because they are flows, not relations).
+//              Content lives here because it is what industry
 //              and research consume, and it travels with the save so a
 //              default-constructed Game can continue from a file without help from
 //              data/; each script block (FocusDef/EventDef/DecisionDef/SpiritDef/
@@ -912,8 +916,9 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
         k.naval_invasion_interception_base, k.naval_invasion_interception_threat_scale,
         k.naval_invasion_escort_mitigation,
         k.political_power_per_day, k.focus_progress_speed, k.stability_drift, k.war_support_drift,
-        k.weather_change_chance};
-    static_assert(sizeof(values) / sizeof(values[0]) == 112,
+        k.weather_change_chance,
+        k.trade_convoy_use_per_unit, k.trade_factory_cost_per_unit, k.trade_factory_cost_law_scale};
+    static_assert(sizeof(values) / sizeof(values[0]) == 115,
                   "SimConstants changed: update write_constants/read_constants and the test drift guard");
     w.u32(static_cast<uint32_t>(sizeof(values) / sizeof(values[0])));
     for (double v : values) w.f64(v);
@@ -922,8 +927,8 @@ void write_constants(ByteWriter& w, const SimConstants& k) {
 bool read_constants(ByteReader& r, SimConstants* k) {
     uint32_t n = 0;
     if (!read_count(r, 8, &n)) return false;
-    if (n != 112) return false;  // a different count means a different SimConstants layout
-    double v[112] = {0.0};
+    if (n != 115) return false;  // a different count means a different SimConstants layout
+    double v[115] = {0.0};
     for (uint32_t i = 0; i < n; ++i) {
         if (!r.f64(&v[i])) return false;
     }
@@ -1039,6 +1044,9 @@ bool read_constants(ByteReader& r, SimConstants* k) {
     k->stability_drift = v[109];
     k->war_support_drift = v[110];
     k->weather_change_chance = v[111];
+    k->trade_convoy_use_per_unit = v[112];
+    k->trade_factory_cost_per_unit = v[113];
+    k->trade_factory_cost_law_scale = v[114];
     return true;
 }
 
@@ -1892,6 +1900,43 @@ bool read_country_economy(ByteReader& r, Country* c) {
     return read_ids(r, &c->templates);
 }
 
+// Trade routes are world-level economic state: they move resources into the
+// importer's pool, cost civilian factories and consume convoys, and industry consumes
+// what they deliver, so they live in the Economy section next to the per-country
+// economy blocks (not Diplomacy: a route is a flow, not a relation). They are written
+// in the vector's own (importer, exporter, resource) sorted order, so the payload is
+// deterministic. Written before the content snapshot, which stays the last record in
+// the section so the drift guard can measure the constants record from the section
+// end.
+void write_trade_route(ByteWriter& w, const TradeRoute& t) {
+    write_id(w, t.importer);
+    write_id(w, t.exporter);
+    write_enum(w, t.resource);
+    w.f64(t.amount);
+    w.f64(t.delivered);
+    w.boolean(t.sea_route);
+    write_id(w, t.sea_region);
+    w.f64(t.convoy_use);
+    w.f64(t.factory_cost);
+    w.boolean(t.active);
+}
+
+bool read_trade_route(ByteReader& r, TradeRoute* t) {
+    uint32_t importer = INVALID_ID;
+    uint32_t exporter = INVALID_ID;
+    if (!r.u32(&importer) || !r.u32(&exporter)) return false;
+    t->importer = CountryId(importer);
+    t->exporter = CountryId(exporter);
+    if (!read_enum(r, &t->resource, RESOURCE_COUNT)) return false;
+    if (!r.f64(&t->amount) || !r.f64(&t->delivered)) return false;
+    if (!r.boolean(&t->sea_route)) return false;
+    uint32_t region = INVALID_ID;
+    if (!r.u32(&region)) return false;
+    t->sea_region = RegionId(region);
+    if (!r.f64(&t->convoy_use) || !r.f64(&t->factory_cost)) return false;
+    return r.boolean(&t->active);
+}
+
 void write_country_military(ByteWriter& w, const Country& c) {
     write_ids(w, c.divisions);
     write_ids(w, c.armies);
@@ -2312,6 +2357,10 @@ void serialize_subsystem(const Game& g, Subsystem s, ByteWriter* out) {
             g.world.countries.for_each([&](CountryId id, const Country& c) {
                 write_country_block(w, id, c, write_country_economy);
             });
+            // World-level trade routes, written in their stored sorted order; the
+            // content snapshot below must stay the last record in this section.
+            w.u32(static_cast<uint32_t>(g.world.trade_routes.size()));
+            for (const TradeRoute& t : g.world.trade_routes) write_trade_route(w, t);
             write_content(w, g.content);
             break;
         }
@@ -2419,6 +2468,12 @@ bool deserialize_subsystem(Game& g, Subsystem s, ByteReader* in) {
                 Country* c = country_block_target(r, g, &ok);
                 if (c == nullptr || !ok) return false;
                 if (!read_country_economy(r, c)) return false;
+            }
+            if (!read_count(r, 47, &n)) return false;  // trade route: 2 ids + resource
+            g.world.trade_routes.clear();
+            g.world.trade_routes.resize(n);
+            for (uint32_t i = 0; i < n; ++i) {
+                if (!read_trade_route(r, &g.world.trade_routes[i])) return false;
             }
             return read_content(r, &g.content);
         }

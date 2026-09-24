@@ -45,6 +45,7 @@
 #include "sim/events.h"
 #include "sim/focus.h"
 #include "sim/spirits.h"
+#include "sim/trade.h"
 #include "sim/industry.h"
 #include "sim/map.h"
 #include "sim/navy.h"
@@ -2955,7 +2956,10 @@ bool layer_due(AiLayerState& st, int layer, Tick now) {
 
 void run_layer(Game& g, AiLayer l, Country& c) {
     switch (l) {
-        case AiLayer::Industry: ai_industry_layer(g, c); break;
+        case AiLayer::Industry:
+            ai_industry_layer(g, c);
+            ai_trade_layer(g, c);
+            break;
         case AiLayer::Research: ai_research_layer(g, c); break;
         case AiLayer::Production: ai_production_layer(g, c); break;
         case AiLayer::Military: ai_military_layer(g, c); break;

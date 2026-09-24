@@ -893,6 +893,45 @@ void enrich(Game& g) {
     w.regions[RegionId(2)].naval_control = {{CountryId(0), 0.55}, {CountryId(2), 0.45}};
     w.regions[RegionId(0)].naval_control = {{CountryId(1), 0.30}};
 
+    // Trade routes: world-level economic state (Economy section), built after the
+    // tick loop so no trade phase acts on them. Two sea routes and one overland route
+    // with varied fields exercise every serialized field, kept in the stored sorted
+    // order by (importer, exporter, resource).
+    {
+        TradeRoute sea_import;
+        sea_import.importer = CountryId(0);
+        sea_import.exporter = CountryId(2);
+        sea_import.resource = Resource::Oil;
+        sea_import.amount = 12.0;
+        sea_import.delivered = 9.5;
+        sea_import.sea_route = true;
+        sea_import.sea_region = RegionId(2);
+        sea_import.convoy_use = 4.0;
+        sea_import.factory_cost = 2.5;
+        sea_import.active = true;
+        w.trade_routes.push_back(sea_import);
+
+        TradeRoute overland = sea_import;
+        overland.resource = Resource::Steel;  // sorts after Oil for the same pair
+        overland.amount = 20.0;
+        overland.delivered = 20.0;
+        overland.sea_route = false;
+        overland.sea_region = RegionId{};
+        overland.convoy_use = 0.0;
+        overland.factory_cost = 3.0;
+        overland.active = false;
+        w.trade_routes.push_back(overland);
+
+        TradeRoute second_importer = sea_import;
+        second_importer.importer = CountryId(1);
+        second_importer.resource = Resource::Aluminium;
+        second_importer.amount = 6.0;
+        second_importer.delivered = 6.0;
+        second_importer.convoy_use = 1.5;
+        second_importer.factory_cost = 1.25;
+        w.trade_routes.push_back(second_importer);
+    }
+
     // A battle per country pair is too much: keep exactly one, with debug lines so
     // the Battles section is never empty even if the simulation ended every battle.
     if (w.battles.size() == 0) {
@@ -994,6 +1033,9 @@ Fixture build_fixture() {
     CHECK(!f.source.world.countries[CountryId(0)].completed_focuses.empty());
     CHECK(!f.source.world.countries[CountryId(0)].timed_modifiers.empty());
     CHECK(!f.source.world.countries[CountryId(0)].country_flags.empty());
+    // The trade slice must be exercised too: an empty route list would serialise
+    // nothing and prove nothing.
+    CHECK_GT(f.source.world.trade_routes.size(), 1u);
     return f;
 }
 
@@ -1656,6 +1698,16 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"delayed_event.country", +[](Game& g) { for (auto& d : g.world.delayed_events) d.country = CountryId(1); }},
         {"delayed_event.event", +[](Game& g) { for (auto& d : g.world.delayed_events) d.event += 1; }},
         {"delayed_event.due", +[](Game& g) { for (auto& d : g.world.delayed_events) d.due += 1; }},
+        {"trade_route.importer", +[](Game& g) { for (auto& t : g.world.trade_routes) t.importer = CountryId(2); }},
+        {"trade_route.exporter", +[](Game& g) { for (auto& t : g.world.trade_routes) t.exporter = CountryId(0); }},
+        {"trade_route.resource", +[](Game& g) { for (auto& t : g.world.trade_routes) t.resource = Resource::Rubber; }},
+        {"trade_route.amount", +[](Game& g) { for (auto& t : g.world.trade_routes) t.amount += 1.0; }},
+        {"trade_route.delivered", +[](Game& g) { for (auto& t : g.world.trade_routes) t.delivered += 1.0; }},
+        {"trade_route.sea_route", +[](Game& g) { for (auto& t : g.world.trade_routes) t.sea_route = !t.sea_route; }},
+        {"trade_route.sea_region", +[](Game& g) { for (auto& t : g.world.trade_routes) t.sea_region = RegionId(1); }},
+        {"trade_route.convoy_use", +[](Game& g) { for (auto& t : g.world.trade_routes) t.convoy_use += 1.0; }},
+        {"trade_route.factory_cost", +[](Game& g) { for (auto& t : g.world.trade_routes) t.factory_cost += 1.0; }},
+        {"trade_route.active", +[](Game& g) { for (auto& t : g.world.trade_routes) t.active = !t.active; }},
     };
 
     for (const Flip& flip : flips) {
@@ -1782,13 +1834,16 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         &SimConstants::stability_drift,
         &SimConstants::war_support_drift,
         &SimConstants::weather_change_chance,
+        &SimConstants::trade_convoy_use_per_unit,
+        &SimConstants::trade_factory_cost_per_unit,
+        &SimConstants::trade_factory_cost_law_scale,
     };
     // Drift guard: SimConstants is a plain struct, so nothing forces a new field to be
     // added here and to write_constants. The Economy payload ends with the flat
     // constants record (a count followed by one double per member), so the count the
     // serializer actually wrote is compared with this table.
     constexpr size_t constant_count = sizeof(constant_members) / sizeof(constant_members[0]);
-    static_assert(constant_count == 112,
+    static_assert(constant_count == 115,
                   "SimConstants changed: update constant_members and save.cpp write/read_constants");
     ByteWriter economy;
     serialize_subsystem(f.source, Subsystem::Economy, &economy);

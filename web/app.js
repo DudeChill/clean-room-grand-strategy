@@ -874,6 +874,45 @@ function militaryPanel() {
   }
 }
 
+function tradePanelSection() {
+  const p = App.snap.player;
+  const balances = p.resource_balances || [];
+  const routes = p.trade_routes || [];
+  const countries = (App.snap.countries || []).filter((c) => c.alive && c.id !== p.id);
+
+  let html = '<h3>Resource balance <span class="dim">(per day)</span></h3><table>' +
+    '<tr><th>Resource</th><th class="num">Produced</th><th class="num">Imported</th>' +
+    '<th class="num">Balance</th><th></th></tr>';
+  for (const b of balances) {
+    const cls = b.balance < -0.01 ? 'bad' : (b.balance > 0.01 ? 'good' : 'dim');
+    html += `<tr><td>${b.resource}</td><td class="num">${b.produced.toFixed(1)}</td>` +
+      `<td class="num">${b.imported.toFixed(1)}</td>` +
+      `<td class="num ${cls}">${b.balance >= 0 ? '+' : ''}${b.balance.toFixed(2)}</td>` +
+      `<td><button data-trade-resource="${b.resource}">Trade</button></td></tr>`;
+  }
+  html += '</table>';
+  html += '<div class="section row-actions">' +
+    `<select id="trade-partner">${countries.map((c) => `<option value="${c.id}">${c.tag}</option>`).join('')}</select>` +
+    `<select id="trade-resource">${balances.map((b) => `<option>${b.resource}</option>`).join('')}</select>` +
+    '<input id="trade-amount" type="number" min="1" max="500" value="10" style="width:70px" />' +
+    '<button id="start-trade">Start route</button></div>';
+
+  html += '<h3>Trade routes</h3><table><tr><th>Partner</th><th>Resource</th><th class="num">Amount</th>' +
+    '<th class="num">Delivered</th><th>Route</th><th></th></tr>';
+  if (routes.length === 0) html += '<tr><td colspan="6" class="dim">no routes</td></tr>';
+  for (const r of routes) {
+    html += `<tr><td>${r.partner}${r.importer ? ' <span class="dim">(import)</span>' : ' <span class="dim">(export)</span>'}</td>` +
+      `<td>${r.resource}</td><td class="num">${r.amount.toFixed(1)}</td>` +
+      `<td class="num">${r.delivered.toFixed(1)}</td>` +
+      `<td>${r.sea ? 'sea' : 'land'}${r.convoys > 0 ? ' · ' + r.convoys.toFixed(1) + ' convoys' : ''}` +
+      `${r.factories > 0 ? ' · ' + r.factories.toFixed(1) + ' civ' : ''}` +
+      `${r.active ? '' : ' <span class="bad">inactive</span>'}</td>` +
+      `<td><button data-cancel-trade="${r.partner_id}:${r.resource_id}">×</button></td></tr>`;
+  }
+  html += '</table>';
+  return html;
+}
+
 function diplomacyPanel() {
   const p = App.snap.player;
   const el = document.getElementById('panel-diplomacy');
@@ -899,6 +938,7 @@ function diplomacyPanel() {
          `<button data-war="${c.id}">Declare war</button>`)}</td></tr>`;
   }
   html += '</table>';
+  html += tradePanelSection();
   html += '<h3>Factions</h3><table>';
   const factions = App.snap.factions || [];
   if (factions.length === 0) html += '<tr><td class="dim">none</td></tr>';
@@ -926,6 +966,23 @@ function diplomacyPanel() {
   for (const b of el.querySelectorAll('button[data-law]')) {
     b.addEventListener('click', async () => {
       if (await sendCommand({ type: 'set_law', law: b.dataset.law })) refresh();
+    });
+  }
+  const startTrade = el.querySelector('#start-trade');
+  if (startTrade) {
+    startTrade.addEventListener('click', async () => {
+      const target_country = Number(el.querySelector('#trade-partner').value);
+      const resourceName = el.querySelector('#trade-resource').value;
+      const names = ['oil', 'steel', 'aluminium', 'rubber', 'chromium', 'tungsten'];
+      const value = Math.max(0, names.indexOf(resourceName));
+      const value_f = Number(el.querySelector('#trade-amount').value);
+      if (await sendCommand({ type: 'start_trade', target_country, value, value_f })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-cancel-trade]')) {
+    b.addEventListener('click', async () => {
+      const [target_country, value] = b.dataset.cancelTrade.split(':').map(Number);
+      if (await sendCommand({ type: 'cancel_trade', target_country, value })) refresh();
     });
   }
   for (const b of el.querySelectorAll('button[data-join-faction]')) {

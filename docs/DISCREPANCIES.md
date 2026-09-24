@@ -25,6 +25,7 @@ Severities: BLOCKER, MAJOR, MODERATE, MINOR, COSMETIC (spec section 14).
 | POL-007 | MINOR | Politics | Ideology drift, elections and coups | Not modelled | OPEN |
 | ECON-001 | MAJOR | Economy | Trade, convoys, blockades | Not modelled; resources are domestic only | OPEN |
 | ECON-002 | MAJOR | Economy | Equipment designers with components | Equipment is fixed data; no designer | OPEN |
+| ECON-003 | MODERATE | Economy | Strategic resources are scarce enough that trade is a decision | Trade works end to end, but the generated map yields far more than industry consumes: at day 30 of the shipped scenario all ten countries run surpluses in five of six resources (+10 to +500 per day), so only steel ever trades. The mechanic is correct; the data makes it rarely binding | OPEN (data tuning: raise province demand or cut yields in tools/genmap + data/common/equipment.json) |
 | INT-001 | MAJOR | Intelligence | Agencies, networks, operations | Not modelled | OPEN |
 | MP-001 | MAJOR | Multiplayer | Lockstep with desync tooling | Commands serialize but there is no transport | OPEN |
 | LND-010 | MODERATE | Land | Battle plans execute themselves once prepared | Plans prepare and display; the player moves divisions explicitly | OPEN |

@@ -244,6 +244,12 @@ struct SimConstants {
     // Weather.
     double weather_change_chance = 0.15;
 
+    // Trade (spec section 46). These are appended at the END of the struct because
+    // the save serializer stores SimConstants as a fixed-order value list.
+    double trade_convoy_use_per_unit = 0.05;     // convoy units per resource unit per day (sea)
+    double trade_factory_cost_per_unit = 0.125;  // civilian factories tied up per resource unit/day
+    double trade_factory_cost_law_scale = 0.10;  // factory cost cut per trade-law level
+
     static SimConstants from_json(const Json& j);
 };
 

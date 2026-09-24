@@ -545,6 +545,21 @@ struct Character {
     ArmyId army;
 };
 
+// A standing trade agreement (see sim/trade.h for the operations on it). Declared here
+// because it is part of world state; the engine logic lives in sim/trade.cpp.
+struct TradeRoute {
+    CountryId importer;
+    CountryId exporter;
+    Resource resource = Resource::Steel;
+    double amount = 0.0;     // units per day requested
+    double delivered = 0.0;  // units per day actually delivered last day
+    bool sea_route = false;  // false = overland
+    RegionId sea_region;     // sea zone the convoy crosses (sea routes only)
+    double convoy_use = 0.0; // convoys consumed per day
+    double factory_cost = 0.0;  // civilian factories tied up (importer side)
+    bool active = true;
+};
+
 // An event scheduled to fire after a delay (effect {"trigger_event": {...}}).
 struct DelayedEvent {
     CountryId country;
@@ -574,6 +589,8 @@ struct World {
     // Script variables (set_variable / add_to_variable) and scheduled events.
     std::map<std::string, double> script_vars;
     std::vector<DelayedEvent> delayed_events;
+    // Standing trade agreements, kept sorted by (importer, exporter, resource).
+    std::vector<TradeRoute> trade_routes;
     // Relations keyed by ordered pair (low id first) for deterministic iteration.
     std::map<std::pair<uint32_t, uint32_t>, Relation> relations;
 

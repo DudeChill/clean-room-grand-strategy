@@ -33,6 +33,7 @@ struct SimMetrics {
     double ms_supply = 0.0;
     double ms_air = 0.0;
     double ms_naval = 0.0;
+    double ms_trade = 0.0;
     double ms_industry = 0.0;
     double ms_research = 0.0;
     double ms_training = 0.0;

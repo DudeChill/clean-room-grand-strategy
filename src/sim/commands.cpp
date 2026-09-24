@@ -29,6 +29,7 @@
 #include "sim/politics.h"
 #include "sim/research.h"
 #include "sim/spirits.h"
+#include "sim/trade.h"
 #include "sim/units.h"
 
 namespace hoi {
@@ -589,6 +590,21 @@ CommandResult do_cancel_decision(Game& g, const Command& cmd) {
     return CommandResult::Applied;
 }
 
+CommandResult do_start_trade(Game& g, const Command& cmd) {
+    if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
+    return trade_start(g, cmd.country, cmd.target_country, static_cast<Resource>(cmd.value),
+                       cmd.value_f)
+               ? CommandResult::Applied
+               : CommandResult::PrerequisitesMissing;
+}
+
+CommandResult do_cancel_trade(Game& g, const Command& cmd) {
+    if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
+    return trade_cancel(g, cmd.country, cmd.target_country, static_cast<Resource>(cmd.value))
+               ? CommandResult::Applied
+               : CommandResult::UnknownEntity;
+}
+
 CommandResult do_appoint_advisor(Game& g, const Command& cmd) {
     const uint32_t advisor = g.content.advisor_id(cmd.text);
     if (advisor == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
@@ -708,6 +724,8 @@ const char* command_type_name(CommandType t) {
         case CommandType::CancelFocus: return "cancel_focus";
         case CommandType::ChooseEventOption: return "choose_event_option";
         case CommandType::TakeDecision: return "take_decision";
+        case CommandType::StartTrade: return "start_trade";
+        case CommandType::CancelTrade: return "cancel_trade";
         case CommandType::AppointAdvisor: return "appoint_advisor";
         case CommandType::DismissAdvisor: return "dismiss_advisor";
         case CommandType::AddNationalSpirit: return "add_national_spirit";
@@ -1087,6 +1105,31 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             if (decision == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
             return CommandResult::Applied;
         }
+        case CommandType::StartTrade: {
+            if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
+            if (cmd.value_f <= 0.0) return CommandResult::InvalidValue;
+            const Country* exporter = g.world.country(cmd.target_country);
+            if (!exporter || !exporter->alive || cmd.target_country == cmd.country) {
+                return CommandResult::InvalidTarget;
+            }
+            if (g.world.at_war(cmd.country, cmd.target_country)) return CommandResult::AtWar;
+            bool sea = false;
+            RegionId region;
+            if (!trade_route_possible(g, cmd.country, cmd.target_country, &sea, &region)) {
+                return CommandResult::InvalidTarget;
+            }
+            return CommandResult::Applied;
+        }
+        case CommandType::CancelTrade: {
+            if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
+            for (const TradeRoute& r : g.world.trade_routes) {
+                if (r.importer == cmd.country && r.exporter == cmd.target_country &&
+                    static_cast<int>(r.resource) == cmd.value) {
+                    return CommandResult::Applied;
+                }
+            }
+            return CommandResult::UnknownEntity;
+        }
         case CommandType::AppointAdvisor: {
             const uint32_t advisor = g.content.advisor_id(cmd.text);
             if (advisor == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
@@ -1191,6 +1234,8 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::CancelFocus: return do_cancel_focus(g, cmd);
         case CommandType::ChooseEventOption: return do_choose_event_option(g, cmd);
         case CommandType::TakeDecision: return do_take_decision(g, cmd);
+        case CommandType::StartTrade: return do_start_trade(g, cmd);
+        case CommandType::CancelTrade: return do_cancel_trade(g, cmd);
         case CommandType::AppointAdvisor: return do_appoint_advisor(g, cmd);
         case CommandType::DismissAdvisor: return do_dismiss_advisor(g, cmd);
         case CommandType::AddNationalSpirit: return do_add_spirit(g, cmd);

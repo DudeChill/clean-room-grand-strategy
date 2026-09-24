@@ -3,6 +3,49 @@
 Newest first. Format per spec section 151: IMPLEMENTED / FIXED / VALIDATED /
 NEW DISCREPANCIES / PERFORMANCE / TEST RESULTS / NEXT PRIORITY.
 
+## 2026-09-24 — v0.6.0 trade and convoys (ECON-001 closed)
+
+IMPLEMENTED
+* Trade routes: standing agreements moving a resource per day from an exporter to an
+  importer over a land route (through controlled or allied territory) or a sea route
+  (port to port across a sea zone), kept sorted for determinism.
+* Real flows: imports land in the importer's resource pool and are consumed by its
+  production lines in the ordinary industry step; the importer ties up civilian
+  factories and sea routes consume convoys, so a route that cannot pay or sail shrinks
+  or closes.
+* Blockade: enemy naval control in the route's zone scales delivery down; war,
+  exhausted surplus and an unaffordable factory bill close or shrink routes, each with
+  a logged event rather than a silent guarantee.
+* AI: an economic layer that opens and closes routes to cover deficits, scored by
+  deficit, factory cost, war state and route type, acting only through commands.
+* Client: the Diplomacy panel shows resource balances (produced, imported, net) and
+  every route with partner, amount, delivery, route type, convoys and factory cost,
+  with controls to start and cancel; `--inspect-trade` prints the same for a whole run.
+* Save format version 7 (world-level trade routes in the Economy section).
+* Three trade constants in data (convoy use per unit, factory cost per unit, trade-law
+  scaling).
+
+FIXED
+* `--inspect-trade` (written during this milestone) originally passed a single double
+  where a six-element resource array was expected, overflowing the caller's frame; the
+  crash it produced is what led to the resource-abundance measurement below. Fixed, and
+  the audit's role in catching exactly this class of bug is why the inspector was
+  written in the first place.
+
+NEW DISCREPANCIES
+* ECON-003: trade works end to end, but the generated map yields far more resources than
+  industry consumes (all ten countries run surpluses in five of six resources at day
+  30), so only steel ever trades. Data tuning, measured with `--inspect-trade`.
+
+TEST RESULTS
+* `hoi_tests`: 224 passed, 0 failed (9 new trade tests).
+* `scripts/verify.sh`: 8 checks passed, 0 failed.
+* Client verified live: starting a route from the panel made VEL import 10 oil/day from
+  KOR with a delivered flow of 10.0 and a working cancel control.
+
+NEXT PRIORITY
+* Equipment designers (ECON-002, MAJOR), then intelligence, then multiplayer transport.
+
 ## 2026-09-24 — v0.5.0 national spirits and political advisors (POL-006 closed)
 
 IMPLEMENTED
