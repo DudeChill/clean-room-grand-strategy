@@ -37,6 +37,10 @@ void phase_research(Game& g);
 // is visible to the same tick, and before the AI, which reads division strength.
 void phase_reinforcement(Game& g);
 
+// Intelligence: network growth and decay, operations in flight, decryption. Runs after
+// politics so political power spent this tick is already accounted for.
+void phase_intelligence(Game& g);
+
 void phase_training(Game& g);
 // 9. Political power, laws, stability/war support, manpower growth.
 void phase_politics(Game& g);

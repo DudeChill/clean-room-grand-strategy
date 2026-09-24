@@ -79,17 +79,24 @@ Earlier in this milestone:
 * resistance, compliance, garrison requirements, occupation policies
 * peace conferences operating on real territorial control
 
-## 0.8 AI (in progress)
+## 0.8 AI (shipped)
 
-* layered AI: industry, research, production, military, diplomacy
-* reasons reported per decision, no direct state mutation, no free resources
-* recovery behaviour under encirclement, shortages and two-front wars
+* layered AI: industry, trade, design, research, production, military, politics,
+  diplomacy, intelligence; reasons reported per decision with numeric factors, no
+  direct state mutation, no free resources
+* family-aware equipment decisions: the AI designs, produces and issues its own models
 
-## 0.9 Modding, Multiplayer, Tooling (not started)
+## 0.9 Modding, Multiplayer, Tooling (mod half shipped in v0.9.0)
 
-* mod load order, data validation, mod test pack
-* multiplayer determinism and desync tooling
-* map/data editors
+* [x] mod load order, data validation, mod test pack, validator CLI, docs/MODDING.md
+* [ ] multiplayer determinism and desync tooling (MP-001)
+* [ ] map/data editors
+
+## 0.10 Intelligence (in progress)
+
+* agencies and upgrades, spy networks, operations, decryption
+* effects: knowledge of the enemy, attack bonus, planning denial, sabotage,
+  destabilisation, research theft — all data-driven and measurable in combat
 
 ## 1.0 Feature-Complete Core Release
 

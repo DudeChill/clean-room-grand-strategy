@@ -48,6 +48,7 @@
 #include "sim/spirits.h"
 #include "sim/trade.h"
 #include "sim/industry.h"
+#include "sim/intel.h"
 #include "sim/map.h"
 #include <chrono>
 
@@ -3072,7 +3073,16 @@ void run_layer(Game& g, AiLayer l, Country& c) {
         case AiLayer::Research: timed_call(g, l, c, &ai_research_layer); break;
         case AiLayer::Production: timed_call(g, l, c, &ai_production_layer); break;
         case AiLayer::Military: timed_call(g, l, c, &ai_military_layer); break;
-        case AiLayer::Politics: timed_call(g, l, c, &ai_politics_layer); break;
+        case AiLayer::Politics: {
+            timed_call(g, l, c, &ai_politics_layer);
+            const auto intel_start = std::chrono::steady_clock::now();
+            ai_intelligence_layer(g, c);
+            g.metrics.ms_ai_intelligence +=
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                          intel_start)
+                    .count();
+            break;
+        }
         case AiLayer::Diplomacy: timed_call(g, l, c, &ai_diplomacy_layer); break;
         case AiLayer::Count: break;
     }

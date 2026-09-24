@@ -237,6 +237,45 @@ draws convoys from the owner's stockpile while it operates. Convoy raiding there
 starves an overseas theatre through the ordinary supply graph rather than through a
 special case.
 
+### 5.10b Intelligence
+
+A country owns an agency (upgrades), keeps spy networks in other countries, runs operations
+against them and decrypts their ciphers. Every effect is data (`data/common/intelligence.json`),
+and nothing caches a level - the accessors derive everything from state, so the UI, the AI
+and the combat code can never disagree.
+
+```
+growth          = kIntelBaseNetworkGrowth + Σ upgrades.network_growth) × (at war ? 1 : 0.5)
+                  × (1 - target counter_intel)
+counter_intel   = clamp(Σ upgrades.counter_intel, 0, 0.80)
+crypto          = (kIntelBaseCrypto + Σ upgrades.crypto_speed) × (1 - target counter_intel)
+operation pace  = (1 + Σ upgrades.operation_speed) × clamp01(network_strength / required)
+intel_level     = clamp(0.75 × strength/100 + 0.25 × decryption, 0, 0.85)
+attack bonus    = 0.10 × intel_level(attacker, defender)
+planning denied = 0.50 × decryption_level(defender, attacker)
+```
+
+Constants (named in `src/sim/intel.cpp`): base growth 0.40/day, base decryption 0.15/day,
+peace-time spying halved, knowledge capped at 0.85, counter-intelligence capped at 0.80.
+A fresh network reaches 25 strength in ~63 days, a cipher falls in ~6.7 months.
+
+Rules that keep it honest:
+
+* Operations run through the command queue only (`StartIntelOperation`), so the AI and a
+  player are subject to the same validation: political power is charged when the operation
+  starts, the network requirement is checked, and a duplicate against the same target is
+  refused. A rejected command leaves zero state.
+* Completion applies the data's effects - network gain, research days, a timed modifier on
+  the target (factory output, stability, war support) and any script `effect` - and then
+  rolls the burn chance on `RngStream::Intel`, so a strong network can be lost.
+* Intel changes battles in exactly two places: the attacker's planning bonus is scaled by
+  (1 - planning denied) and attack power by (1 + intel attack bonus). Both are zero when
+  the attacker knows nothing, so a battle between two blind countries is byte-identical to
+  a run without the subsystem.
+* `phase_intelligence` runs after politics, ascending countries, targets and operations; it
+  prunes state whose target is gone, and 3,650-day runs stay bounded (strength 0..100,
+  exposure 0..1, cipher 0..1, no NaN).
+
 ### 5.10a Equipment variants and replacement
 
 A battalion slot names one equipment *family*, not one exact model:

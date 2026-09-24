@@ -1,3 +1,27 @@
+## 2026-09-24 - v0.10.0: intelligence, the last MAJOR subsystem
+
+Agencies, networks, operations and decryption are in, and they change the game in two
+places only - both measurable: an attacker who knows the enemy gets +10% attack at a full
+intel level, and a defender whose ciphers are broken loses up to half of its planning
+bonus. When neither side knows anything, a battle is byte-identical to the engine without
+this subsystem, which is the property that makes the rest trustworthy.
+
+The AI uses it, measured rather than asserted: on the shipped scenario at day 365, 7 of 7
+countries own an agency upgrade, 10 networks average 64.1 strength, and the operations in
+flight are steal_tech and sabotage_industry rather than a pile of cheap build_network runs.
+Getting there took one round of measurement-driven rework: the first policy reserved 100
+political power on top of a 120 pp upgrade (nobody ever bought one) and always picked the
+cheapest operation (so five of six kinds never ran). The fix was a 25 pp reserve with a
+savings floor, a value score that ignores price, and one operation in flight at a time.
+
+Measurement also caught two content sign errors: "Destabilise the Government" was raising
+the target's stability by 0.10, and a counter-intelligence sweep left a stability bonus on
+an arbitrary enemy. Both fixed, with the loader now treating those fields as signed deltas.
+
+Open, with evidence, as known differences rather than hidden approximations: ideology
+operations apply as war support (there is no party-support vector), and counter-intelligence
+reads agency upgrades only. The last MAJOR is multiplayer transport.
+
 ## 2026-09-24 - v0.9.0: a real mod layer, and a validator that already caught a bug
 
 Modding was the last named engine requirement without an implementation. Content mods now

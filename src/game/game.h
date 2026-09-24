@@ -52,6 +52,8 @@ struct SimMetrics {
     double ms_ai_politics = 0.0;
     double ms_ai_research = 0.0;
     double ms_ai_diplomacy = 0.0;
+    double ms_intelligence = 0.0;
+    double ms_ai_intelligence = 0.0;
     double ms_cleanup = 0.0;
     double ms_tick_total = 0.0;
     std::vector<double> tick_history;  // capped ring of recent tick durations

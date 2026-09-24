@@ -226,9 +226,10 @@ void print_metrics(const Game& g) {
                 m.ms_territory, m.ms_supply, m.ms_air, m.ms_naval, m.ms_industry, m.ms_research, m.ms_training,
                 m.ms_politics, m.ms_weather, m.ms_ai, m.ms_cleanup);
     std::printf("   ai detail: industry %.1f trade %.1f design %.1f production %.1f military %.1f "
-                "politics %.1f research %.1f diplomacy %.1f\n",
+                "politics %.1f research %.1f diplomacy %.1f intel %.1f\n",
                 m.ms_ai_industry, m.ms_ai_trade, m.ms_ai_design, m.ms_ai_production,
-                m.ms_ai_military, m.ms_ai_politics, m.ms_ai_research, m.ms_ai_diplomacy);
+                m.ms_ai_military, m.ms_ai_politics, m.ms_ai_research, m.ms_ai_diplomacy,
+                m.ms_ai_intelligence);
     std::printf("tick p50 %.3f ms, p95 %.3f ms, p99 %.3f ms over %zu samples\n",
                 m.percentile_tick_ms(0.50), m.percentile_tick_ms(0.95), m.percentile_tick_ms(0.99),
                 m.tick_history.size());

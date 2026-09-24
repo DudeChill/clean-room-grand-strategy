@@ -27,7 +27,9 @@
 //              (Content::designs, the variants countries have created - a design's
 //              computed statistics live in the EquipmentDef it produced, which sits
 //              in the same equipment table, so `produced` resolves after a load),
-//              national spirits, political advisors and SimConstants, i.e. every table
+//              national spirits, political advisors, the intelligence operations and
+//              agency upgrades (Content::operations, Content::agency_upgrades) and
+//              SimConstants, i.e. every table
 //              the simulation reads - plus per country: production
 //              lines, construction queue, research state and the template roster
 //              (Country::templates), and the world-level World::trade_routes
@@ -63,7 +65,10 @@
 //              decisions, spirits and advisors are the political layer and these
 //              are the fields they mutate; Country::designs sits with spirit_keys
 //              and advisors because it is the same kind of roster - the country's
-//              indices into a content table (Content::designs, in Economy)
+//              indices into a content table (Content::designs, in Economy). The
+//              intelligence agency state (Country::agency_upgrades, networks,
+//              operations, ciphers) lives here too, for the same reason: it belongs
+//              to no other section and is written by the political-layer phase.
 //   Ai         the six AI layer states (last run tick, interval, reasons), the
 //              strategic posture vector, the decision/command counters, the
 //              per-country AI control bitmap and the player country
@@ -878,6 +883,72 @@ bool read_advisor(ByteReader& r, AdvisorDef* a) {
     return read_modifiers(r, &a->modifiers);
 }
 
+// Intelligence content. An operation is one action a country may run against another
+// and an agency upgrade is what its service can do; both are tables the intelligence
+// phase and the AI read every tick, so they travel with the save like every other
+// table. The optional script blocks (OperationDef::available/effect,
+// AgencyUpgradeDef::available) travel structurally like a spirit's, and the derived
+// key -> index maps are rebuilt on load instead of being stored twice.
+void write_operation(ByteWriter& w, const OperationDef& o) {
+    w.u32(o.index);
+    w.str(o.key);
+    w.str(o.name);
+    w.str(o.description);
+    write_enum(w, o.kind);
+    w.i32(o.days);
+    w.f64(o.pp_cost);
+    w.f64(o.civilian_cost);
+    w.f64(o.network_required);
+    w.f64(o.risk);
+    w.f64(o.network_gain);
+    w.f64(o.research_days);
+    w.f64(o.output_penalty);
+    w.f64(o.stability_delta);
+    w.f64(o.ideology_shift);
+    w.i32(o.effect_days);
+    write_json(w, o.available);
+    write_json(w, o.effect);
+}
+
+bool read_operation(ByteReader& r, OperationDef* o) {
+    if (!r.u32(&o->index)) return false;
+    if (!r.str(&o->key) || !r.str(&o->name) || !r.str(&o->description)) return false;
+    if (!read_enum(r, &o->kind, static_cast<int>(OperationKind::Count))) return false;
+    if (!r.i32(&o->days)) return false;
+    if (!r.f64(&o->pp_cost) || !r.f64(&o->civilian_cost)) return false;
+    if (!r.f64(&o->network_required) || !r.f64(&o->risk)) return false;
+    if (!r.f64(&o->network_gain) || !r.f64(&o->research_days)) return false;
+    if (!r.f64(&o->output_penalty) || !r.f64(&o->stability_delta)) return false;
+    if (!r.f64(&o->ideology_shift) || !r.i32(&o->effect_days)) return false;
+    if (!read_json(r, &o->available)) return false;
+    return read_json(r, &o->effect);
+}
+
+void write_agency_upgrade(ByteWriter& w, const AgencyUpgradeDef& u) {
+    w.u32(u.index);
+    w.str(u.key);
+    w.str(u.name);
+    w.str(u.description);
+    w.i32(u.year);
+    w.f64(u.pp_cost);
+    write_strs(w, u.requires_upgrades);
+    w.f64(u.network_growth);
+    w.f64(u.operation_speed);
+    w.f64(u.crypto_speed);
+    w.f64(u.counter_intel);
+    write_json(w, u.available);
+}
+
+bool read_agency_upgrade(ByteReader& r, AgencyUpgradeDef* u) {
+    if (!r.u32(&u->index)) return false;
+    if (!r.str(&u->key) || !r.str(&u->name) || !r.str(&u->description)) return false;
+    if (!r.i32(&u->year) || !r.f64(&u->pp_cost)) return false;
+    if (!read_strs(r, &u->requires_upgrades)) return false;
+    if (!r.f64(&u->network_growth) || !r.f64(&u->operation_speed)) return false;
+    if (!r.f64(&u->crypto_speed) || !r.f64(&u->counter_intel)) return false;
+    return read_json(r, &u->available);
+}
+
 // Equipment designers. The component table is the set of parts a country may fit and
 // the design table is the variants it has created; both are content the simulation
 // reads (availability gates, statistics and production), so they travel with the save
@@ -1187,6 +1258,10 @@ void write_content(ByteWriter& w, const Content& c) {
     for (const SpiritDef& s : c.spirits) write_spirit(w, s);
     w.u32(static_cast<uint32_t>(c.advisors.size()));
     for (const AdvisorDef& a : c.advisors) write_advisor(w, a);
+    w.u32(static_cast<uint32_t>(c.operations.size()));
+    for (const OperationDef& o : c.operations) write_operation(w, o);
+    w.u32(static_cast<uint32_t>(c.agency_upgrades.size()));
+    for (const AgencyUpgradeDef& u : c.agency_upgrades) write_agency_upgrade(w, u);
     write_constants(w, c.constants);
 }
 
@@ -1225,6 +1300,14 @@ void rebuild_content_index(Content& c) {
     for (size_t i = 0; i < c.spirits.size(); ++i) c.spirit_index[c.spirits[i].key] = static_cast<uint32_t>(i);
     c.advisor_index.clear();
     for (size_t i = 0; i < c.advisors.size(); ++i) c.advisor_index[c.advisors[i].key] = static_cast<uint32_t>(i);
+    c.operation_index.clear();
+    for (size_t i = 0; i < c.operations.size(); ++i) {
+        c.operation_index[c.operations[i].key] = static_cast<uint32_t>(i);
+    }
+    c.agency_upgrade_index.clear();
+    for (size_t i = 0; i < c.agency_upgrades.size(); ++i) {
+        c.agency_upgrade_index[c.agency_upgrades[i].key] = static_cast<uint32_t>(i);
+    }
     c.load_errors.clear();
 }
 
@@ -1310,6 +1393,18 @@ bool read_content(ByteReader& r, Content* c) {
     c->advisors.resize(n);
     for (uint32_t i = 0; i < n; ++i) {
         if (!read_advisor(r, &c->advisors[i])) return false;
+    }
+    if (!read_count(r, 32, &n)) return false;  // index + 3 strings + kind + ints + doubles + json
+    c->operations.clear();
+    c->operations.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_operation(r, &c->operations[i])) return false;
+    }
+    if (!read_count(r, 32, &n)) return false;  // index + 3 strings + int + double + keys + doubles + json
+    c->agency_upgrades.clear();
+    c->agency_upgrades.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!read_agency_upgrade(r, &c->agency_upgrades[i])) return false;
     }
     if (!read_constants(r, &c->constants)) return false;
     rebuild_content_index(*c);
@@ -2162,6 +2257,29 @@ void write_country_politics(ByteWriter& w, const Country& c) {
     // The country's equipment designs, indices into Content::designs (Economy); the
     // same kind of roster as spirit_keys and advisors.
     write_u32s(w, c.designs);
+    // The intelligence agency: the upgrades it owns (indices into
+    // Content::agency_upgrades, in Economy) and its networks, operations in flight
+    // and cipher progress. Each list is ordered by target (and then operation), but
+    // the order is stored, not assumed, so a load reproduces it byte for byte.
+    write_u32s(w, c.agency_upgrades);
+    w.u32(static_cast<uint32_t>(c.networks.size()));
+    for (const SpyNetwork& n : c.networks) {
+        write_id(w, n.target);
+        w.f64(n.strength);
+        w.f64(n.exposure);
+    }
+    w.u32(static_cast<uint32_t>(c.operations.size()));
+    for (const IntelOperation& o : c.operations) {
+        write_id(w, o.target);
+        w.u32(o.operation);
+        w.f64(o.days_left);
+        w.f64(o.progress);
+    }
+    w.u32(static_cast<uint32_t>(c.ciphers.size()));
+    for (const CipherProgress& cp : c.ciphers) {
+        write_id(w, cp.target);
+        w.f64(cp.progress);
+    }
     w.i32(c.spirit_slots);
     w.i32(c.advisor_slots);
 }
@@ -2197,6 +2315,36 @@ bool read_country_politics(ByteReader& r, Country* c) {
     if (!read_u32s(r, &c->spirit_keys)) return false;
     if (!read_u32s(r, &c->advisors)) return false;
     if (!read_u32s(r, &c->designs)) return false;
+    if (!read_u32s(r, &c->agency_upgrades)) return false;
+    if (!read_count(r, 20, &n)) return false;  // target id + strength + exposure
+    c->networks.clear();
+    c->networks.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t target = INVALID_ID;
+        if (!r.u32(&target)) return false;
+        c->networks[i].target = CountryId(target);
+        if (!r.f64(&c->networks[i].strength) || !r.f64(&c->networks[i].exposure)) return false;
+    }
+    if (!read_count(r, 24, &n)) return false;  // target id + operation + days_left + progress
+    c->operations.clear();
+    c->operations.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t target = INVALID_ID;
+        if (!r.u32(&target)) return false;
+        c->operations[i].target = CountryId(target);
+        if (!r.u32(&c->operations[i].operation)) return false;
+        if (!r.f64(&c->operations[i].days_left)) return false;
+        if (!r.f64(&c->operations[i].progress)) return false;
+    }
+    if (!read_count(r, 12, &n)) return false;  // target id + progress
+    c->ciphers.clear();
+    c->ciphers.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t target = INVALID_ID;
+        if (!r.u32(&target)) return false;
+        c->ciphers[i].target = CountryId(target);
+        if (!r.f64(&c->ciphers[i].progress)) return false;
+    }
     if (!r.i32(&c->spirit_slots) || !r.i32(&c->advisor_slots)) return false;
     return true;
 }

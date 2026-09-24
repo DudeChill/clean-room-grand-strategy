@@ -1,0 +1,242 @@
+{
+  "operations": [
+    {
+      "key": "build_network",
+      "name": "Establish a Spy Network",
+      "description": "Recruit the first agents in a foreign capital. Cheap and safe, but it only plants the seed: the network must be grown before it can do real work.",
+      "kind": "build_network",
+      "days": 30,
+      "pp_cost": 25,
+      "network_required": 0,
+      "risk": 0.05,
+      "network_gain": 12
+    },
+    {
+      "key": "build_network_deep",
+      "name": "Deep-Cover Expansion",
+      "description": "Push an established network deep into ministries and general staffs. A long, expensive investment that pays off in a far larger and more durable network.",
+      "kind": "build_network",
+      "days": 90,
+      "pp_cost": 90,
+      "network_required": 30,
+      "risk": 0.10,
+      "network_gain": 35,
+      "available": {"year": {"gte": 1938}}
+    },
+    {
+      "key": "steal_tech",
+      "name": "Steal Research",
+      "description": "Have agents lift blueprints and test data from the target's laboratories and pass them to our own scientists.",
+      "kind": "steal_tech",
+      "days": 60,
+      "pp_cost": 70,
+      "network_required": 25,
+      "risk": 0.15,
+      "research_days": 120
+    },
+    {
+      "key": "steal_industry_blueprints",
+      "name": "Industrial Espionage",
+      "description": "A large-scale penetration of the target's design bureaus, trading a long exposure window for a windfall of research progress.",
+      "kind": "steal_tech",
+      "days": 100,
+      "pp_cost": 140,
+      "network_required": 40,
+      "risk": 0.20,
+      "research_days": 240,
+      "available": {"has_tech": "radar_stations"}
+    },
+    {
+      "key": "sabotage_industry",
+      "name": "Sabotage Factories",
+      "description": "Bomb a key plant and corrupt its tooling. Output drops for a season while the damage is repaired.",
+      "kind": "sabotage_industry",
+      "days": 45,
+      "pp_cost": 50,
+      "civilian_cost": 5,
+      "network_required": 20,
+      "risk": 0.15,
+      "output_penalty": 0.15,
+      "effect_days": 90,
+      "available": {"at_war": true}
+    },
+    {
+      "key": "sabotage_railways",
+      "name": "Strike the Rail Network",
+      "description": "Cut marshalling yards and bridges behind the front. A larger operation with a larger and longer industrial toll.",
+      "kind": "sabotage_industry",
+      "days": 75,
+      "pp_cost": 95,
+      "civilian_cost": 5,
+      "network_required": 35,
+      "risk": 0.20,
+      "output_penalty": 0.25,
+      "effect_days": 120,
+      "available": {"at_war": true}
+    },
+    {
+      "key": "support_ideology",
+      "name": "Fund a Political Movement",
+      "description": "Channel money and propaganda to a sympathetic faction so that it grows at the expense of the ruling party.",
+      "kind": "support_ideology",
+      "days": 90,
+      "pp_cost": 60,
+      "network_required": 25,
+      "risk": 0.20,
+      "ideology_shift": -0.10,
+      "effect_days": 180
+    },
+    {
+      "key": "destabilise",
+      "name": "Destabilise the Government",
+      "description": "Strikes, riots and forged scandals strain the target's internal order for months.",
+      "kind": "destabilise",
+      "days": 70,
+      "pp_cost": 65,
+      "network_required": 30,
+      "risk": 0.20,
+      "stability_delta": -0.20,
+      "effect_days": 120
+    },
+    {
+      "key": "counter_intel_sweep",
+      "name": "Counter-Intelligence Sweep",
+      "description": "Turn the service inward: tail suspected enemy agents, roll up their letter drops and burn the networks inside our own borders.",
+      "kind": "counter_intel",
+      "days": 30,
+      "pp_cost": 35,
+      "network_required": 0,
+      "risk": 0.0
+    },
+    {
+      "key": "counter_intel_directorate",
+      "name": "Internal Security Directorate",
+      "description": "A standing organisation to hunt foreign agents at home. It defends the actor: it never touches the target country's stability or output.",
+      "kind": "counter_intel",
+      "days": 75,
+      "pp_cost": 100,
+      "network_required": 15,
+      "risk": 0.05,
+      "available": {"year": {"gte": 1940}}
+    }
+  ],
+
+  "agency_upgrades": [
+    {
+      "key": "intelligence_academy",
+      "name": "Intelligence Academy",
+      "description": "A permanent school for case officers. Doubles the peacetime rate at which a spy network grows.",
+      "year": 1936,
+      "pp_cost": 120,
+      "network_growth": 0.20
+    },
+    {
+      "key": "station_chiefs",
+      "name": "Station Chiefs",
+      "description": "Professional resident chiefs in every capital give counter-intelligence a standing head start against enemy networks at home.",
+      "year": 1937,
+      "pp_cost": 140,
+      "counter_intel": 0.20
+    },
+    {
+      "key": "radio_interception",
+      "name": "Radio Interception Service",
+      "description": "Listening posts and traffic analysis double the pace at which foreign ciphers are broken.",
+      "year": 1937,
+      "pp_cost": 130,
+      "crypto_speed": 0.10,
+      "available": {"has_tech": "radar_stations"}
+    },
+    {
+      "key": "agent_infiltration",
+      "name": "Agent Infiltration",
+      "description": "Better cover identities and cut-outs add another half to the base network growth rate, on top of the academy.",
+      "year": 1938,
+      "pp_cost": 150,
+      "network_growth": 0.20,
+      "requires_upgrades": ["intelligence_academy"]
+    },
+    {
+      "key": "special_operations_executive",
+      "name": "Special Operations Executive",
+      "description": "A body that plans and speeds covert action: operations run at double pace, at a real political-power cost.",
+      "year": 1939,
+      "pp_cost": 170,
+      "operation_speed": 0.50,
+      "requires_upgrades": ["intelligence_academy"]
+    },
+    {
+      "key": "cipher_bureau",
+      "name": "Cipher Bureau",
+      "description": "A dedicated cryptanalysis bureau adds another half to decryption speed; the machine methods only work once the interception service exists.",
+      "year": 1939,
+      "pp_cost": 160,
+      "crypto_speed": 0.10,
+      "requires_upgrades": ["radio_interception"]
+    },
+    {
+      "key": "counter_intel_expansion",
+      "name": "Counter-Intelligence Expansion",
+      "description": "Wartime expansion of the security services; the standing counter-intelligence level grows further.",
+      "year": 1940,
+      "pp_cost": 180,
+      "counter_intel": 0.20,
+      "requires_upgrades": ["station_chiefs"],
+      "available": {"at_war": true}
+    },
+    {
+      "key": "operative_network",
+      "name": "Resident Network",
+      "description": "Long-settled residents rather than travelling agents. A large further increase in network growth, expensive and slow to build.",
+      "year": 1941,
+      "pp_cost": 220,
+      "network_growth": 0.40,
+      "requires_upgrades": ["agent_infiltration"]
+    },
+    {
+      "key": "commando_section",
+      "name": "Commando Section",
+      "description": "Trained field teams to execute the plans the executive draws up: operations run at triple pace once both are owned.",
+      "year": 1941,
+      "pp_cost": 200,
+      "operation_speed": 0.50,
+      "requires_upgrades": ["special_operations_executive"]
+    },
+    {
+      "key": "decryption_department",
+      "name": "Decryption Department",
+      "description": "A late expansion of the cipher bureau, bringing total decryption speed to twice the 1936 base.",
+      "year": 1942,
+      "pp_cost": 210,
+      "crypto_speed": 0.10,
+      "requires_upgrades": ["cipher_bureau"]
+    },
+    {
+      "key": "deep_cover_section",
+      "name": "Deep Cover Section",
+      "description": "The service's final reach: network growth rises to twice the base rate again, gated behind the resident networks.",
+      "year": 1943,
+      "pp_cost": 250,
+      "network_growth": 0.40,
+      "requires_upgrades": ["operative_network"]
+    },
+    {
+      "key": "directorate_of_operations",
+      "name": "Directorate of Operations",
+      "description": "A single command for covert action. Operations run at triple the base pace, at the highest political-power price in the tree.",
+      "year": 1943,
+      "pp_cost": 250,
+      "operation_speed": 1.00,
+      "requires_upgrades": ["commando_section"]
+    },
+    {
+      "key": "national_security_agency",
+      "name": "National Security Agency",
+      "description": "A unified signals and security service. The standing counter-intelligence level reaches its wartime ceiling.",
+      "year": 1943,
+      "pp_cost": 250,
+      "counter_intel": 0.40,
+      "requires_upgrades": ["counter_intel_expansion"]
+    }
+  ]
+}

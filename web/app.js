@@ -453,7 +453,8 @@ document.addEventListener('keydown', (e) => {
     renderLeft();
   }
   const tabKeys = { m: 'military', p: 'production', c: 'construction', r: 'research',
-                    d: 'diplomacy', l: 'log', a: 'air', n: 'navy', t: 'politics' };
+                    d: 'diplomacy', l: 'log', a: 'air', n: 'navy', t: 'politics',
+                    i: 'intel' };
   const tab = tabKeys[e.key.toLowerCase()];
   if (tab && !e.ctrlKey && !e.metaKey) {
     App.tab = tab;
@@ -498,6 +499,9 @@ for (const b of document.querySelectorAll('button.ov')) {
     for (const o of document.querySelectorAll('button.ov')) o.classList.toggle('active', o === b);
   });
 }
+// Create the Intelligence tab before the generic tab handlers bind, so the new
+// button and panel are wired exactly like the built-in ones.
+installIntelTab();
 for (const b of document.querySelectorAll('button.tab')) {
   b.addEventListener('click', () => {
     App.tab = b.dataset.tab;
@@ -1388,6 +1392,120 @@ function politicsPanel() {
   }
 }
 
+// ----------------------------------------------------------------- intel ----
+
+// The Intelligence tab is created at runtime so index.html stays untouched. It is
+// built exactly like the static tabs - a button.tab in the nav and a div.panel beside
+// the others - so the generic tab handlers treat it as a first-class tab.
+function installIntelTab() {
+  const right = document.getElementById('right');
+  const nav = right.querySelector('.tabs');
+  const panel = document.createElement('div');
+  panel.id = 'panel-intel';
+  panel.className = 'panel';
+  right.appendChild(panel);
+  const btn = document.createElement('button');
+  btn.className = 'tab';
+  btn.dataset.tab = 'intel';
+  btn.textContent = 'Intel';
+  const log = nav.querySelector('button[data-tab="log"]');
+  if (log) nav.insertBefore(btn, log); else nav.appendChild(btn);
+}
+
+function intelPanel() {
+  const p = App.snap.player;
+  const intel = p.intel || { agency_upgrades: [], targets: [], pp: p.pp };
+  const el = document.getElementById('panel-intel');
+  if (!el) return;
+  const pp = typeof intel.pp === 'number' ? intel.pp : (p.pp || 0);
+  const pct = (v) => Math.max(0, Math.min(100, (Number(v) || 0) * 100));
+
+  let html = `<h3>Intelligence agency <span class="dim">(${pp.toFixed(0)} pp)</span></h3>`;
+  html += '<table><tr><th>Upgrade</th><th class="num">Cost</th><th></th></tr>';
+  const upgrades = intel.agency_upgrades || [];
+  if (upgrades.length === 0) html += '<tr><td colspan="3" class="dim">no agency upgrades</td></tr>';
+  for (const u of upgrades) {
+    let cell;
+    if (u.owned) {
+      cell = '<span class="good">owned</span>';
+    } else {
+      // Grey out what cannot be bought now and say why in the title, so the player
+      // never has to guess at a rejected command.
+      const reasons = [];
+      if (!u.available) reasons.push('not available yet');
+      if (pp < u.pp_cost) reasons.push('not enough political power');
+      const why = reasons.join('; ');
+      cell = `<button data-buy-upgrade="${u.key}"${why ? ` disabled title="${why}"` : ''}>Buy</button>` +
+        (why ? ` <span class="dim small">${why}</span>` : '');
+    }
+    html += `<tr><td>${u.name}<br><span class="dim small">${u.description || ''}</span></td>` +
+      `<td class="num">${u.pp_cost.toFixed(0)} pp</td><td>${cell}</td></tr>`;
+  }
+  html += '</table>';
+
+  html += '<h3>Targets</h3>';
+  const targets = intel.targets || [];
+  if (targets.length === 0) html += '<div class="dim small">no foreign countries</div>';
+  for (const t of targets) {
+    html += `<div class="section"><b>${t.tag}</b> <span class="dim">${t.name}</span>` +
+      `<div class="small">network <b>${t.network_strength.toFixed(1)}</b>` +
+      ` · exposure ${t.exposure.toFixed(2)}` +
+      ` · decryption ${(t.decryption * 100).toFixed(0)}%` +
+      ` · intel ${(t.intel * 100).toFixed(0)}%</div>`;
+
+    const inFlight = t.operations || [];
+    if (inFlight.length) {
+      html += '<table><tr><th>In progress</th><th class="num">Days left</th><th></th></tr>';
+      for (const o of inFlight) {
+        const done = o.days > 0 ? o.progress / o.days : 0;
+        html += `<tr><td>${o.name}` +
+          `<div class="bar" style="margin-top:3px"><span style="width:${pct(done)}%"></span></div></td>` +
+          `<td class="num">${o.days_left.toFixed(1)}</td>` +
+          `<td><button data-cancel-op="${o.operation}" data-target="${t.id}">Cancel</button></td></tr>`;
+      }
+      html += '</table>';
+    }
+
+    const starts = t.available_operations || [];
+    html += '<table><tr><th>Operation</th><th class="num">Cost</th><th class="num">Network</th><th></th></tr>';
+    if (starts.length === 0) html += '<tr><td colspan="4" class="dim">no operations</td></tr>';
+    for (const o of starts) {
+      const reasons = [];
+      if (!o.available) reasons.push('prerequisites not met');
+      if (t.network_strength < o.network_required) {
+        reasons.push(`network ${t.network_strength.toFixed(1)}/${o.network_required.toFixed(0)}`);
+      }
+      if (pp < o.pp_cost) reasons.push(`cost ${o.pp_cost.toFixed(0)} pp`);
+      const why = reasons.join('; ');
+      const btn = `<button data-start-op="${o.key}" data-target="${t.id}"` +
+        `${why ? ` disabled title="${why}"` : ''}>Start</button>`;
+      html += `<tr><td>${o.name}${why ? `<br><span class="dim small">${why}</span>` : ''}</td>` +
+        `<td class="num">${o.pp_cost.toFixed(0)} pp</td>` +
+        `<td class="num">≥${o.network_required.toFixed(0)}</td><td>${btn}</td></tr>`;
+    }
+    html += '</table></div>';
+  }
+  el.innerHTML = html;
+
+  for (const b of el.querySelectorAll('button[data-buy-upgrade]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'buy_agency_upgrade', text: b.dataset.buyUpgrade })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-start-op]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'start_intel_operation', text: b.dataset.startOp,
+                              target_country: Number(b.dataset.target) })) refresh();
+    });
+  }
+  for (const b of el.querySelectorAll('button[data-cancel-op]')) {
+    b.addEventListener('click', async () => {
+      if (await sendCommand({ type: 'cancel_intel_operation', text: b.dataset.cancelOp,
+                              target_country: Number(b.dataset.target) })) refresh();
+    });
+  }
+}
+
 function renderPanels() {
   if (!App.snap || !App.snap.player) return;
   if (App.tab === 'production') productionPanel();
@@ -1398,6 +1516,7 @@ function renderPanels() {
   if (App.tab === 'air') airPanel();
   if (App.tab === 'navy') navyPanel();
   if (App.tab === 'diplomacy') diplomacyPanel();
+  if (App.tab === 'intel') intelPanel();
   if (App.tab === 'log') logPanel();
 }
 

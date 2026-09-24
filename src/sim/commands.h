@@ -54,7 +54,12 @@ enum class CommandType : uint8_t {
     ChooseEventOption,  // text = event key, value = option index
     TakeDecision,       // text = decision key, state = target state when required
     CreateEquipmentDesign,  // text = design name, equipment = base archetype, components
-    StartTrade,         // target_country + value = resource index, value_f = amount/day
+    StartTrade,
+    // Intelligence: run an operation against another country (text = operation key),
+    // stop one that is in flight, or buy an agency upgrade (text = upgrade key).
+    StartIntelOperation,
+    CancelIntelOperation,
+    BuyAgencyUpgrade,         // target_country + value = resource index, value_f = amount/day
     CancelTrade,        // target_country + value = resource index
     AppointAdvisor,     // text = advisor key
     DismissAdvisor,     // text = advisor key

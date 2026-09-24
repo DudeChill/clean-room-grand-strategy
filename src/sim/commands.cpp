@@ -24,6 +24,7 @@
 #include "sim/events.h"
 #include "sim/focus.h"
 #include "sim/industry.h"
+#include "sim/intel.h"
 #include "sim/map.h"
 #include "sim/navy.h"
 #include "sim/phases.h"
@@ -602,6 +603,23 @@ CommandResult do_create_design(Game& g, const Command& cmd) {
     return design == 0xFFFFFFFFu ? CommandResult::PrerequisitesMissing : CommandResult::Applied;
 }
 
+CommandResult do_start_intel_operation(Game& g, const Command& cmd) {
+    return intel_start_operation(g, cmd.country, cmd.target_country, cmd.text)
+               ? CommandResult::Applied
+               : CommandResult::PrerequisitesMissing;
+}
+
+CommandResult do_cancel_intel_operation(Game& g, const Command& cmd) {
+    return intel_cancel_operation(g, cmd.country, cmd.target_country, cmd.text)
+               ? CommandResult::Applied
+               : CommandResult::UnknownEntity;
+}
+
+CommandResult do_buy_agency_upgrade(Game& g, const Command& cmd) {
+    return intel_buy_upgrade(g, cmd.country, cmd.text) ? CommandResult::Applied
+                                                      : CommandResult::PrerequisitesMissing;
+}
+
 CommandResult do_start_trade(Game& g, const Command& cmd) {
     if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
     return trade_start(g, cmd.country, cmd.target_country, static_cast<Resource>(cmd.value),
@@ -737,6 +755,9 @@ const char* command_type_name(CommandType t) {
         case CommandType::ChooseEventOption: return "choose_event_option";
         case CommandType::TakeDecision: return "take_decision";
         case CommandType::CreateEquipmentDesign: return "create_equipment_design";
+        case CommandType::StartIntelOperation: return "start_intel_operation";
+        case CommandType::CancelIntelOperation: return "cancel_intel_operation";
+        case CommandType::BuyAgencyUpgrade: return "buy_agency_upgrade";
         case CommandType::StartTrade: return "start_trade";
         case CommandType::CancelTrade: return "cancel_trade";
         case CommandType::AppointAdvisor: return "appoint_advisor";
@@ -1136,6 +1157,51 @@ CommandResult validate_command(const Game& g, const Command& cmd) {
             }
             return CommandResult::Applied;
         }
+        case CommandType::StartIntelOperation: {
+            const uint32_t op = g.content.operation_id(cmd.text);
+            if (op == 0xFFFFFFFFu) return CommandResult::UnknownEntity;
+            if (cmd.target_country == cmd.country) return CommandResult::InvalidTarget;
+            if (!g.world.country(cmd.target_country)) return CommandResult::UnknownEntity;
+            const OperationDef* def = g.content.operation(op);
+            if (!def) return CommandResult::UnknownEntity;
+            if (c->political_power < def->pp_cost) return CommandResult::InsufficientResources;
+            if (network_strength(g, cmd.country, cmd.target_country) + 1e-9 <
+                def->network_required) {
+                return CommandResult::PrerequisitesMissing;
+            }
+            for (const IntelOperation& running : c->operations) {
+                if (running.target == cmd.target_country && running.operation == op) {
+                    return CommandResult::InvalidValue;  // already running
+                }
+            }
+            return intel_operation_available(g, cmd.country, cmd.target_country, op)
+                       ? CommandResult::Applied
+                       : CommandResult::PrerequisitesMissing;
+        }
+        case CommandType::CancelIntelOperation: {
+            if (g.content.operation_id(cmd.text) == 0xFFFFFFFFu) {
+                return CommandResult::UnknownEntity;
+            }
+            for (const IntelOperation& running : c->operations) {
+                if (running.target == cmd.target_country &&
+                    running.operation == g.content.operation_id(cmd.text)) {
+                    return CommandResult::Applied;
+                }
+            }
+            return CommandResult::UnknownEntity;
+        }
+        case CommandType::BuyAgencyUpgrade: {
+            const AgencyUpgradeDef* def = nullptr;
+            const uint32_t idx = g.content.agency_upgrade_id(cmd.text);
+            if (idx != 0xFFFFFFFFu) def = g.content.agency_upgrade(idx);
+            if (!def) return CommandResult::UnknownEntity;
+            for (uint32_t owned : c->agency_upgrades) {
+                if (owned == idx) return CommandResult::InvalidValue;
+            }
+            if (c->political_power < def->pp_cost) return CommandResult::InsufficientResources;
+            return intel_upgrade_available(g, cmd.country, idx) ? CommandResult::Applied
+                                                               : CommandResult::PrerequisitesMissing;
+        }
         case CommandType::StartTrade: {
             if (cmd.value < 0 || cmd.value >= RESOURCE_COUNT) return CommandResult::InvalidValue;
             if (cmd.value_f <= 0.0) return CommandResult::InvalidValue;
@@ -1266,6 +1332,9 @@ CommandResult apply_command(Game& g, const Command& cmd) {
         case CommandType::ChooseEventOption: return do_choose_event_option(g, cmd);
         case CommandType::TakeDecision: return do_take_decision(g, cmd);
         case CommandType::CreateEquipmentDesign: return do_create_design(g, cmd);
+        case CommandType::StartIntelOperation: return do_start_intel_operation(g, cmd);
+        case CommandType::CancelIntelOperation: return do_cancel_intel_operation(g, cmd);
+        case CommandType::BuyAgencyUpgrade: return do_buy_agency_upgrade(g, cmd);
         case CommandType::StartTrade: return do_start_trade(g, cmd);
         case CommandType::CancelTrade: return do_cancel_trade(g, cmd);
         case CommandType::AppointAdvisor: return do_appoint_advisor(g, cmd);

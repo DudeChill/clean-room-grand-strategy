@@ -454,6 +454,31 @@ enum class FactoryPool : uint8_t { Military = 0, Dockyard };
 FactoryPool line_factory_pool(const Content& content, const ProductionLine& line);
 FactoryPool equipment_factory_pool(const Content& content, EquipmentId equipment);
 
+// ------------------------------------------------- intelligence --------
+// A spy network inside another country. Strength 0..100 grows while an agency works on
+// it and is cut back when the target's counter-intelligence catches it; exposure is the
+// pressure that decides whether the next operation burns the network.
+struct SpyNetwork {
+    CountryId target;
+    double strength = 0.0;   // 0..100
+    double exposure = 0.0;   // 0..1, reset by a successful clean-up
+};
+
+// An operation in flight. `progress` counts days of work done, `days_left` what remains
+// at the current pace; both are public so the UI and the AI can read them.
+struct IntelOperation {
+    CountryId target;
+    uint32_t operation = 0;  // Content::operations index
+    double days_left = 0.0;
+    double progress = 0.0;
+};
+
+// Decryption progress against one country's ciphers, 0..1.
+struct CipherProgress {
+    CountryId target;
+    double progress = 0.0;
+};
+
 struct Country {
     CountryId id;
     std::string tag;
@@ -505,6 +530,13 @@ struct Country {
     std::vector<uint32_t> spirit_keys;            // Content::spirits indices held
     std::vector<uint32_t> advisors;               // Content::advisors indices appointed
     std::vector<uint32_t> designs;                // Content::designs indices this country owns
+    // Intelligence: agency upgrades bought, spy networks (ascending target), operations
+    // in flight (ascending target then operation) and decryption progress (ascending
+    // target).
+    std::vector<uint32_t> agency_upgrades;  // Content::agency_upgrades indices owned
+    std::vector<SpyNetwork> networks;
+    std::vector<IntelOperation> operations;
+    std::vector<CipherProgress> ciphers;
     int spirit_slots = 6;                         // national spirit capacity
     int advisor_slots = 3;                        // political advisor capacity
     uint32_t faction = 0;  // 0 = none

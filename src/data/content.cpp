@@ -531,12 +531,23 @@ const char* kind_name(VKind k) {
 
 // One keyed content table: `path` is relative to the data root, `array` the member
 // holding its entries (`focuses` is a directory of files with the same shape).
+// `array2` is a second entry list in the same file, used by the intelligence table
+// whose one document holds both `operations` and `agency_upgrades`.
 struct ContentTable {
     const char* name;
     const char* path;
     const char* array;
     bool directory;
+    const char* array2 = "";
 };
+
+// Every entry-list member a table accepts, in file order.
+std::vector<std::string> table_arrays(const ContentTable& t) {
+    std::vector<std::string> out;
+    if (t.array[0] != '\0') out.push_back(t.array);
+    if (t.array2[0] != '\0') out.push_back(t.array2);
+    return out;
+}
 
 const std::vector<ContentTable>& content_tables() {
     static const std::vector<ContentTable> kTables = {
@@ -552,6 +563,9 @@ const std::vector<ContentTable>& content_tables() {
         {"spirits", "common/spirits.json", "spirits", false},
         {"advisors", "common/advisors.json", "advisors", false},
         {"components", "common/components.json", "components", false},
+        // One document, two entry lists: operations run against another country and
+        // the agency upgrades that improve a country's service.
+        {"intelligence", "common/intelligence.json", "operations", false, "agency_upgrades"},
     };
     return kTables;
 }
@@ -597,8 +611,29 @@ bool required_table(const std::string& name) {
 
 // The fields a definition may carry, derived from what the parser below reads.
 // A field that is absent is fine; a field that is present with the wrong type, or a
-// field the parser would ignore, is an error in a mod.
-const std::vector<VField>& table_fields(const std::string& table) {
+// field the parser would ignore, is an error in a mod. The intelligence table hosts
+// two different entry shapes in one file, so its `member` array selects the schema.
+const std::vector<VField>& table_fields(const std::string& table, const std::string& member = "") {
+    if (table == "intelligence") {
+        static const std::vector<VField> kOperations = {
+            {"key", VKind::Str},           {"name", VKind::Str},
+            {"description", VKind::Str},   {"kind", VKind::Str},
+            {"days", VKind::Num},          {"pp_cost", VKind::Num},
+            {"civilian_cost", VKind::Num}, {"network_required", VKind::Num},
+            {"risk", VKind::Num},          {"network_gain", VKind::Num},
+            {"research_days", VKind::Num}, {"output_penalty", VKind::Num},
+            {"stability_delta", VKind::Num}, {"ideology_shift", VKind::Num},
+            {"effect_days", VKind::Num},   {"available", VKind::Obj},
+            {"effect", VKind::Obj}};
+        static const std::vector<VField> kAgencyUpgrades = {
+            {"key", VKind::Str},           {"name", VKind::Str},
+            {"description", VKind::Str},   {"year", VKind::Num},
+            {"pp_cost", VKind::Num},       {"requires_upgrades", VKind::Arr},
+            {"network_growth", VKind::Num}, {"operation_speed", VKind::Num},
+            {"crypto_speed", VKind::Num},  {"counter_intel", VKind::Num},
+            {"available", VKind::Obj}};
+        return member == "agency_upgrades" ? kAgencyUpgrades : kOperations;
+    }
     static const std::map<std::string, std::vector<VField>> kFields = {
         {"constants", {}},  // validated against the engine's known constant set
         {"equipment",
@@ -746,9 +781,11 @@ void check_entry_array(const Json& arr, const char* what, const std::vector<VFie
 }
 
 // Validates one entry of a mod against the fields the parser reads. `reasons` gets
-// one message per problem; an empty list means the entry is safe to merge.
-void validate_mod_entry(const std::string& table, const Json& e, std::vector<std::string>* reasons) {
-    const std::vector<VField>& fields = table_fields(table);
+// one message per problem; an empty list means the entry is safe to merge. `member`
+// names the entry list inside a multi-array table (the intelligence file).
+void validate_mod_entry(const std::string& table, const std::string& member, const Json& e,
+                        std::vector<std::string>* reasons) {
+    const std::vector<VField>& fields = table_fields(table, member);
     for (const auto& item : e.object_items()) {
         if (item.first == "add") {
             if (!item.second.is_bool()) reasons->push_back("add must be true or false");
@@ -793,6 +830,9 @@ void validate_mod_entry(const std::string& table, const Json& e, std::vector<std
             {"name", VKind::Str}, {"effects", VKind::Obj}, {"ai_weight", VKind::Num}};
         check_entry_array(e["options"], "options", kOption, reasons);
     }
+    if (table == "intelligence" && member == "agency_upgrades") {
+        check_string_array(e["requires_upgrades"], "requires_upgrades", reasons);
+    }
 }
 
 // One content file merged from the base data root and its mods.
@@ -801,7 +841,8 @@ struct SourceFile {
     std::string full;  // path used in diagnostics
     std::string table;
     Json doc;
-    std::vector<std::string> origin;  // per entry: which file defined it
+    std::vector<std::string> origin;   // per entry of `array`: which file defined it
+    std::vector<std::string> origin2;  // per entry of `array2`, when the table has one
 };
 
 SourceFile* find_source(std::vector<SourceFile>* files, const std::string& rel) {
@@ -856,6 +897,12 @@ bool load_base_source(const std::string& root, std::vector<SourceFile>* files, s
                 sf.origin.push_back(full);
             }
         }
+        if (t.array2[0] != '\0') {
+            const Json& arr = sf.doc[t.array2];
+            for (size_t i = 0; i < (arr.is_array() ? arr.size() : 0); ++i) {
+                sf.origin2.push_back(full);
+            }
+        }
         files->push_back(std::move(sf));
     }
     return true;
@@ -865,6 +912,7 @@ bool load_base_source(const std::string& root, std::vector<SourceFile>* files, s
 
 struct MergeEntry {
     const ContentTable* table;
+    std::string array;  // which entry list of the table the entry belongs to
     std::string rel;   // destination when the entry appends
     std::string full;
     std::string key;   // effective key (a leading `add_` is stripped)
@@ -987,14 +1035,22 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
             continue;
         }
 
-        // An array table accepts `<array>`, `add_<array>` and (focuses) `tree`.
-        const std::string add_member = std::string("add_") + table->array;
+        // An array table accepts `<array>`, `add_<array>` and (focuses) `tree`. A table
+        // with a second entry list (intelligence) accepts both lists and their `add_`
+        // forms; `member` records which list the current key feeds.
+        std::string member;
         for (const auto& item : doc.object_items()) {
             const std::string& k = item.first;
-            const bool is_entries = k == table->array;
-            const bool is_add = k == add_member;
+            member.clear();
+            for (const std::string& a : table_arrays(*table)) {
+                if (k == a || k == "add_" + a) {
+                    member = a;
+                    break;
+                }
+            }
+            const bool is_add = !member.empty() && k == "add_" + member;
             const bool is_tree = std::string(table->name) == "focuses" && k == "tree";
-            if (!is_entries && !is_add && !is_tree) {
+            if (member.empty() && !is_tree) {
                 event(table->name, k, "error", "unknown table member '" + k + "'");
                 skip = true;
                 continue;
@@ -1029,6 +1085,7 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
                 }
                 MergeEntry me;
                 me.table = table;
+                me.array = member;
                 me.rel = rel;
                 me.full = full;
                 me.tree = doc["tree"].as_string();
@@ -1036,7 +1093,7 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
                 if (is_add_key(key)) key = key.substr(4);
                 me.key = key;
                 std::vector<std::string> reasons;
-                validate_mod_entry(table->name, e, &reasons);
+                validate_mod_entry(table->name, member, e, &reasons);
                 for (const std::string& r : reasons) {
                     event(table->name, key, "error", r);
                     skip = true;
@@ -1048,8 +1105,8 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
                 }
                 if (me.append) {
                     for (const SourceFile& sf : *files) {
-                        if (sf.table != table->name || table->array[0] == '\0') continue;
-                        const Json& arr2 = sf.doc[table->array];
+                        if (sf.table != table->name) continue;
+                        const Json& arr2 = sf.doc[member];
                         for (size_t j = 0; j < (arr2.is_array() ? arr2.size() : 0); ++j) {
                             if (arr2[j]["key"].as_string() == key) {
                                 event(table->name, key, "error",
@@ -1081,13 +1138,19 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
             if (t->array[0] == '\0') {
                 sf.doc = Json::object();
             } else {
-                sf.doc.set(t->array, Json::array());
+                for (const std::string& a : table_arrays(*t)) sf.doc.set(a, Json::array());
             }
             sf.origin.clear();
+            sf.origin2.clear();
         }
     }
 
     // ---- phase 3: merge ----
+    // The origin list an entry belongs to follows the entry list it feeds.
+    auto origin_of = [](SourceFile* sf, const ContentTable& t,
+                        const std::string& arr) -> std::vector<std::string>& {
+        return arr == t.array ? sf->origin : sf->origin2;
+    };
     for (const MergeEntry& me : plan) {
         const ContentTable& t = *me.table;
         std::string owner;
@@ -1096,7 +1159,7 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
         if (t.array[0] != '\0') {
             for (const SourceFile& sf : *files) {
                 if (sf.table != t.name) continue;
-                const Json& arr = sf.doc[t.array];
+                const Json& arr = sf.doc[me.array];
                 for (size_t j = 0; j < (arr.is_array() ? arr.size() : 0); ++j) {
                     if (arr[j]["key"].as_string() == me.key) {
                         owner = sf.rel;
@@ -1126,13 +1189,13 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
         }
         if (found) {
             SourceFile* dst = find_source(files, owner);
-            Json arr = dst->doc[t.array];
+            Json arr = dst->doc[me.array];
             Json rebuilt = Json::array();
             for (size_t j = 0; j < arr.size(); ++j) {
                 rebuilt.push_back(j == owner_index ? me.entry : arr[j]);
             }
-            dst->doc.set(t.array, std::move(rebuilt));
-            dst->origin[owner_index] = me.full;
+            dst->doc.set(me.array, std::move(rebuilt));
+            origin_of(dst, t, me.array)[owner_index] = me.full;
             event(t.name, me.key, "replaced", "");
         } else {
             SourceFile* dst = find_source(files, me.rel);
@@ -1149,11 +1212,11 @@ bool apply_one_mod(const ModManifest& mod, std::vector<SourceFile>* files,
                 files->push_back(std::move(sf));
                 dst = &files->back();
             }
-            Json arr = dst->doc[t.array];
+            Json arr = dst->doc[me.array];
             if (!arr.is_array()) arr = Json::array();
             arr.push_back(me.entry);
-            dst->doc.set(t.array, std::move(arr));
-            dst->origin.push_back(me.full);
+            dst->doc.set(me.array, std::move(arr));
+            origin_of(dst, t, me.array).push_back(me.full);
             event(t.name, me.key, "added", "");
         }
     }
@@ -1217,6 +1280,35 @@ void apply_mods(const std::vector<std::string>& mod_roots, std::vector<SourceFil
 }
 
 }  // namespace
+
+// Canonical engine spellings for the operation kinds. `match_operation_kind`
+// accepts them case- and separator-insensitively, like every other data name in
+// the loader, so "Build Network", "build_network" and "buildnetwork" all resolve.
+const char* operation_kind_name(OperationKind kind) {
+    switch (kind) {
+        case OperationKind::BuildNetwork: return "build_network";
+        case OperationKind::StealTech: return "steal_tech";
+        case OperationKind::SabotageIndustry: return "sabotage_industry";
+        case OperationKind::SupportIdeology: return "support_ideology";
+        case OperationKind::Destabilise: return "destabilise";
+        case OperationKind::CounterIntel: return "counter_intel";
+        case OperationKind::Count: break;
+    }
+    return "unknown";
+}
+
+bool match_operation_kind(const std::string& name, OperationKind* out) {
+    const std::string want = normalize_name(name);
+    if (want.empty()) return false;
+    for (int i = 0; i < static_cast<int>(OperationKind::Count); ++i) {
+        const OperationKind kind = static_cast<OperationKind>(i);
+        if (normalize_name(operation_kind_name(kind)) == want) {
+            if (out != nullptr) *out = kind;
+            return true;
+        }
+    }
+    return false;
+}
 
 SimConstants SimConstants::from_json(const Json& j) {
     SimConstants c;
@@ -2169,6 +2261,311 @@ bool load_content(const std::string& data_root, Content* out, std::string* err,
 
             out->component_index[key] = def.index;
             out->components.push_back(std::move(def));
+        }
+    }
+
+    // ---- intelligence ----------------------------------------------------
+    // Optional file: operations a country may run against another, and the agency
+    // upgrades its service can buy. An absent file ships empty tables; a file that
+    // does not parse is already a hard error in load_base_source, and a present file
+    // whose two entry lists are not arrays is a hard error too. An entry with a
+    // structural error is reported and skipped, so no invalid definition reaches the
+    // simulation. Triggers and effects go through the same country-scope script pass
+    // as spirits and advisors.
+    {
+        const SourceFile* sf = find_source(&files, "common/intelligence.json");
+        if (sf != nullptr) {
+            const std::string f_intel = sf->full;
+            const Json& doc = sf->doc;
+            if (!doc.is_object()) {
+                const std::string msg =
+                    f_intel + ":intelligence: content file must be an object";
+                errors.push_back(msg);
+                if (err) *err = msg;
+                return false;
+            }
+            const Json& jops = doc["operations"];
+            const Json& jupgrades = doc["agency_upgrades"];
+            const std::pair<const char*, const Json*> members[] = {
+                {"operations", &jops}, {"agency_upgrades", &jupgrades}};
+            for (const auto& member : members) {
+                if (!member.second->is_null() && !member.second->is_array()) {
+                    const std::string msg =
+                        f_intel + ":" + member.first + ": expected an array";
+                    errors.push_back(msg);
+                    if (err) *err = msg;
+                    return false;
+                }
+            }
+            const std::set<std::string> no_states;  // intelligence is country-scoped
+
+            // -- operations -----
+            if (jops.is_array()) {
+                for (size_t i = 0; i < jops.size(); ++i) {
+                    const Json& o = jops[i];
+                    const std::string& f_entry =
+                        i < sf->origin.size() ? sf->origin[i] : f_intel;
+                    if (!o.is_object()) {
+                        errors.push_back(f_entry + ":<entry " + std::to_string(i) +
+                                         ">: entry must be an object");
+                        continue;
+                    }
+                    const std::string key = o["key"].as_string();
+                    if (key.empty()) {
+                        errors.push_back(f_entry + ":<entry " + std::to_string(i) +
+                                         ">: missing key");
+                        continue;
+                    }
+                    if (out->operation_index.count(key) != 0) {
+                        errors.push_back(f_entry + ":" + key + ": duplicate operation key");
+                        continue;
+                    }
+                    const std::string kind_name = o["kind"].as_string();
+                    OperationKind kind = OperationKind::BuildNetwork;
+                    if (kind_name.empty()) {
+                        errors.push_back(f_entry + ":" + key + ": missing kind");
+                        continue;
+                    }
+                    if (!match_operation_kind(kind_name, &kind)) {
+                        errors.push_back(f_entry + ":" + key + ": unknown operation kind " +
+                                         kind_name);
+                        continue;
+                    }
+                    OperationDef def;
+                    def.key = key;
+                    def.name = o["name"].as_string(key);
+                    def.description = o["description"].as_string();
+                    def.kind = kind;
+                    def.days = static_cast<int>(o["days"].as_int(def.days));
+                    def.pp_cost = o["pp_cost"].as_double(def.pp_cost);
+                    def.civilian_cost = o["civilian_cost"].as_double(def.civilian_cost);
+                    def.network_required =
+                        o["network_required"].as_double(def.network_required);
+                    def.risk = o["risk"].as_double(def.risk);
+                    def.network_gain = o["network_gain"].as_double(def.network_gain);
+                    def.research_days = o["research_days"].as_double(def.research_days);
+                    def.output_penalty = o["output_penalty"].as_double(def.output_penalty);
+                    def.stability_delta = o["stability_delta"].as_double(def.stability_delta);
+                    def.ideology_shift = o["ideology_shift"].as_double(def.ideology_shift);
+                    def.effect_days = static_cast<int>(o["effect_days"].as_int(def.effect_days));
+                    def.available = o["available"];
+                    def.effect = o["effect"];
+
+                    bool invalid = false;
+                    auto bad = [&](const std::string& reason) {
+                        errors.push_back(f_entry + ":" + key + ": " + reason);
+                        invalid = true;
+                    };
+                    // Effect fields fall into two kinds. Magnitudes (network_gain,
+                    // research_days, output_penalty, effect_days) must not be negative:
+                    // output_penalty is a *penalty* the engine applies as -penalty to
+                    // the target's output. Signed deltas (stability_delta,
+                    // ideology_shift) carry their meaning in the sign: a positive
+                    // stability_delta helps the target, a negative one destabilises it.
+                    if (def.days <= 0) bad("days must be a positive number");
+                    if (def.pp_cost < 0.0) bad("negative pp_cost");
+                    if (def.civilian_cost < 0.0) bad("negative civilian_cost");
+                    if (def.network_required < 0.0 || def.network_required > 100.0) {
+                        bad("network_required must be between 0 and 100");
+                    }
+                    if (def.risk < 0.0 || def.risk > 1.0) bad("risk must be between 0 and 1");
+                    if (def.network_gain < 0.0) bad("negative network_gain");
+                    if (def.research_days < 0.0) bad("negative research_days");
+                    if (def.output_penalty < 0.0) bad("negative output_penalty");
+                    if (def.effect_days <= 0) bad("effect_days must be a positive number");
+                    std::vector<std::string> script_errors;
+                    validate_trigger(def.available, *out, no_states, &script_errors, f_entry,
+                                     key, "available");
+                    validate_effects(def.effect, *out, no_states, &script_errors, f_entry, key,
+                                     "effect");
+                    if (!script_errors.empty()) {
+                        errors.insert(errors.end(), script_errors.begin(), script_errors.end());
+                        invalid = true;
+                    }
+                    if (invalid) continue;
+                    def.index = static_cast<uint32_t>(out->operations.size());
+                    out->operation_index[key] = def.index;
+                    out->operations.push_back(std::move(def));
+                }
+            }
+
+            // -- agency upgrades -----
+            // Two passes: every upgrade's key must exist before requires_upgrades can
+            // resolve, and the requires graph must be an acyclic forest within the
+            // file. A rejected entry is dropped whole, so no partial state remains.
+            if (jupgrades.is_array()) {
+                std::vector<AgencyUpgradeDef> cand(jupgrades.size());
+                std::vector<std::string> cand_src(jupgrades.size(), f_intel);
+                std::vector<bool> ok(jupgrades.size(), true);
+                std::set<std::string> keys_seen;
+                for (size_t i = 0; i < jupgrades.size(); ++i) {
+                    const Json& u = jupgrades[i];
+                    if (i < sf->origin2.size()) cand_src[i] = sf->origin2[i];
+                    const std::string& src = cand_src[i];
+                    AgencyUpgradeDef& def = cand[i];
+                    if (!u.is_object()) {
+                        errors.push_back(src + ":<entry " + std::to_string(i) +
+                                         ">: entry must be an object");
+                        ok[i] = false;
+                        continue;
+                    }
+                    const std::string key = u["key"].as_string();
+                    if (key.empty()) {
+                        errors.push_back(src + ":<entry " + std::to_string(i) +
+                                         ">: missing key");
+                        ok[i] = false;
+                        continue;
+                    }
+                    if (!keys_seen.insert(key).second) {
+                        errors.push_back(src + ":" + key + ": duplicate agency upgrade key");
+                        ok[i] = false;
+                        continue;
+                    }
+                    def.key = key;
+                    def.name = u["name"].as_string(key);
+                    def.description = u["description"].as_string();
+                    def.year = static_cast<int>(u["year"].as_int(def.year));
+                    def.pp_cost = u["pp_cost"].as_double(def.pp_cost);
+                    def.network_growth = u["network_growth"].as_double(def.network_growth);
+                    def.operation_speed = u["operation_speed"].as_double(def.operation_speed);
+                    def.crypto_speed = u["crypto_speed"].as_double(def.crypto_speed);
+                    def.counter_intel = u["counter_intel"].as_double(def.counter_intel);
+                    def.available = u["available"];
+                    auto bad = [&](const std::string& reason) {
+                        errors.push_back(src + ":" + key + ": " + reason);
+                        ok[i] = false;
+                    };
+                    if (def.year < 1936) bad("year must be 1936 or later");
+                    if (def.pp_cost < 0.0) bad("negative pp_cost");
+                    if (def.network_growth < 0.0) bad("negative network_growth");
+                    if (def.operation_speed < 0.0) bad("negative operation_speed");
+                    if (def.crypto_speed < 0.0) bad("negative crypto_speed");
+                    if (def.counter_intel < 0.0 || def.counter_intel > 1.0) {
+                        bad("counter_intel must be between 0 and 1");
+                    }
+                    const Json& req = u["requires_upgrades"];
+                    if (!req.is_null()) {
+                        if (!req.is_array()) {
+                            bad("requires_upgrades must be an array of upgrade keys");
+                        } else {
+                            for (size_t k = 0; k < req.size(); ++k) {
+                                if (!req[k].is_string() || req[k].as_string().empty()) {
+                                    bad("requires_upgrades[" + std::to_string(k) +
+                                        "] must be a non-empty upgrade key");
+                                } else {
+                                    def.requires_upgrades.push_back(req[k].as_string());
+                                }
+                            }
+                        }
+                    }
+                    std::vector<std::string> script_errors;
+                    validate_trigger(def.available, *out, no_states, &script_errors, src, key,
+                                     "available");
+                    if (!script_errors.empty()) {
+                        errors.insert(errors.end(), script_errors.begin(), script_errors.end());
+                        ok[i] = false;
+                    }
+                }
+
+                // Keys that parsed, so requires_upgrades can resolve in this file.
+                std::map<std::string, size_t> by_key;
+                for (size_t i = 0; i < cand.size(); ++i) {
+                    if (ok[i] && !cand[i].key.empty()) by_key[cand[i].key] = i;
+                }
+                for (size_t i = 0; i < cand.size(); ++i) {
+                    if (!ok[i]) continue;
+                    for (const std::string& r : cand[i].requires_upgrades) {
+                        if (by_key.count(r) == 0) {
+                            errors.push_back(cand_src[i] + ":" + cand[i].key +
+                                             ": unknown requires_upgrades " + r);
+                            ok[i] = false;
+                            break;
+                        }
+                    }
+                }
+                // Resolved prerequisite indices, ascending for determinism.
+                std::vector<std::vector<size_t>> prereq_idx(cand.size());
+                for (size_t i = 0; i < cand.size(); ++i) {
+                    if (!ok[i]) continue;
+                    for (const std::string& r : cand[i].requires_upgrades) {
+                        prereq_idx[i].push_back(by_key.at(r));
+                    }
+                    std::sort(prereq_idx[i].begin(), prereq_idx[i].end());
+                    prereq_idx[i].erase(
+                        std::unique(prereq_idx[i].begin(), prereq_idx[i].end()),
+                        prereq_idx[i].end());
+                }
+                // Cycle detection: a grey node reached again closes a cycle. Every
+                // member of the cycle is named and dropped.
+                std::vector<int> color(cand.size(), 0);  // 0 unvisited, 1 on stack, 2 done
+                std::vector<size_t> parent(cand.size(), static_cast<size_t>(-1));
+                for (size_t s = 0; s < cand.size(); ++s) {
+                    if (!ok[s] || color[s] != 0) continue;
+                    std::vector<size_t> stack{s};
+                    color[s] = 1;
+                    while (!stack.empty()) {
+                        const size_t u = stack.back();
+                        bool advanced = false;
+                        for (size_t p : prereq_idx[u]) {
+                            if (!ok[p]) continue;
+                            if (color[p] == 0) {
+                                color[p] = 1;
+                                parent[p] = u;
+                                stack.push_back(p);
+                                advanced = true;
+                                break;
+                            }
+                            if (color[p] == 1) {
+                                std::vector<std::string> names;
+                                size_t x = u;
+                                while (true) {
+                                    ok[x] = false;
+                                    names.push_back(cand[x].key);
+                                    if (x == p || parent[x] == static_cast<size_t>(-1)) break;
+                                    x = parent[x];
+                                }
+                                std::sort(names.begin(), names.end());
+                                std::string list;
+                                for (size_t n = 0; n < names.size(); ++n) {
+                                    if (n != 0) list += ", ";
+                                    list += names[n];
+                                }
+                                errors.push_back(cand_src[u] + ":" + cand[u].key +
+                                                 ": requires_upgrades cycle among " + list);
+                                advanced = true;
+                                break;
+                            }
+                        }
+                        if (!advanced) {
+                            color[u] = 2;
+                            stack.pop_back();
+                        }
+                    }
+                }
+                // Anything that required a dropped upgrade can never be bought.
+                bool changed = true;
+                while (changed) {
+                    changed = false;
+                    for (size_t i = 0; i < cand.size(); ++i) {
+                        if (!ok[i]) continue;
+                        for (size_t p : prereq_idx[i]) {
+                            if (ok[p]) continue;
+                            errors.push_back(cand_src[i] + ":" + cand[i].key +
+                                             ": requires_upgrades " + cand[p].key +
+                                             " is unavailable");
+                            ok[i] = false;
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+                for (size_t i = 0; i < cand.size(); ++i) {
+                    if (!ok[i]) continue;
+                    cand[i].index = static_cast<uint32_t>(out->agency_upgrades.size());
+                    out->agency_upgrade_index[cand[i].key] = cand[i].index;
+                    out->agency_upgrades.push_back(std::move(cand[i]));
+                }
+            }
         }
     }
 

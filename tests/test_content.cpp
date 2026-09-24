@@ -322,3 +322,170 @@ HOI_TEST(content_json_parse_and_parse_file) {
              std::string("infantry_equipment_1"));
     CHECK_EQ(equipment["missing"].as_string("fallback"), std::string("fallback"));
 }
+
+namespace {
+
+// The first diagnostic containing `needle`, or "" when none does.
+std::string find_error(const Content& content, const std::string& needle) {
+    for (const std::string& e : content.load_errors) {
+        if (e.find(needle) != std::string::npos) return e;
+    }
+    return std::string();
+}
+
+}  // namespace
+
+HOI_TEST(content_intelligence_is_optional) {
+    TempData tmp;
+    write_standard(tmp);  // no intelligence.json at all
+
+    Content content;
+    std::string err;
+    CHECK(load_content(tmp.root, &content, &err));
+    CHECK(content.load_errors.empty());
+    CHECK(content.operations.empty());
+    CHECK(content.agency_upgrades.empty());
+}
+
+HOI_TEST(content_loads_intelligence_tables) {
+    TempData tmp;
+    write_standard(tmp);
+    tmp.write("intelligence.json", R"({
+      "operations": [
+        {"key": "build_network", "name": "Build Network", "kind": "build_network",
+         "days": 30, "pp_cost": 25, "risk": 0.05, "network_gain": 12},
+        {"key": "steal_tech", "name": "Steal Tech", "kind": "Steal Tech",
+         "days": 60, "pp_cost": 70, "network_required": 25, "risk": 0.15,
+         "research_days": 120, "available": {"at_war": true}},
+        {"key": "destabilise", "name": "Destabilise", "kind": "destabilise",
+         "days": 70, "pp_cost": 65, "network_required": 30, "risk": 0.20,
+         "stability_delta": -0.20, "ideology_shift": -0.10, "effect_days": 120}
+      ],
+      "agency_upgrades": [
+        {"key": "academy", "name": "Academy", "year": 1936, "pp_cost": 120,
+         "network_growth": 0.20},
+        {"key": "residents", "name": "Residents", "year": 1941, "pp_cost": 220,
+         "network_growth": 0.40, "requires_upgrades": ["academy"]}
+      ]
+    })");
+
+    Content content;
+    std::string err;
+    CHECK(load_content(tmp.root, &content, &err));
+    CHECK(content.load_errors.empty());
+
+    CHECK_EQ(content.operations.size(), static_cast<size_t>(3));
+    CHECK_EQ(content.agency_upgrades.size(), static_cast<size_t>(2));
+
+    const uint32_t op = content.operation_id("build_network");
+    CHECK(op != 0xFFFFFFFFu);
+    const OperationDef* o = content.operation(op);
+    CHECK(o != nullptr);
+    CHECK_EQ(o->index, 0u);
+    CHECK(o->kind == OperationKind::BuildNetwork);
+    CHECK_EQ(o->days, 30);
+    CHECK_NEAR(o->pp_cost, 25.0, 1e-12);
+    CHECK_NEAR(o->risk, 0.05, 1e-12);
+    CHECK_NEAR(o->network_gain, 12.0, 1e-12);
+
+    // Kind matching ignores case and separators, like every other data name.
+    const OperationDef* s = content.operation(content.operation_id("steal_tech"));
+    CHECK(s != nullptr);
+    CHECK(s->kind == OperationKind::StealTech);
+    CHECK_NEAR(s->network_required, 25.0, 1e-12);
+    CHECK_NEAR(s->research_days, 120.0, 1e-12);
+    CHECK(s->available.is_object());
+
+    // Signed deltas keep their sign: negative means the operation hurts the target.
+    const OperationDef* d = content.operation(content.operation_id("destabilise"));
+    CHECK(d != nullptr);
+    CHECK(d->kind == OperationKind::Destabilise);
+    CHECK_NEAR(d->stability_delta, -0.20, 1e-12);
+    CHECK_NEAR(d->ideology_shift, -0.10, 1e-12);
+
+    const uint32_t up = content.agency_upgrade_id("residents");
+    CHECK(up != 0xFFFFFFFFu);
+    const AgencyUpgradeDef* u = content.agency_upgrade(up);
+    CHECK(u != nullptr);
+    CHECK_EQ(u->index, 1u);
+    CHECK_EQ(u->requires_upgrades.size(), static_cast<size_t>(1));
+    CHECK_EQ(u->requires_upgrades[0], std::string("academy"));
+    CHECK_NEAR(u->network_growth, 0.40, 1e-12);
+    CHECK_EQ(content.agency_upgrade(content.agency_upgrade_id("academy"))->year, 1936);
+}
+
+HOI_TEST(content_intelligence_reports_and_skips_bad_entries) {
+    TempData tmp;
+    write_standard(tmp);
+    tmp.write("intelligence.json", R"({
+      "operations": [
+        {"key": "dup", "kind": "build_network", "days": 30},
+        {"key": "dup", "kind": "build_network", "days": 30},
+        {"key": "bad_kind", "kind": "mind_control", "days": 30},
+        {"key": "no_kind", "days": 30},
+        {"key": "bad_days", "kind": "steal_tech", "days": 0},
+        {"key": "bad_network", "kind": "steal_tech", "days": 30, "network_required": 150},
+        {"key": "bad_risk", "kind": "destabilise", "days": 30, "risk": 1.5},
+        {"key": "bad_cost", "kind": "sabotage_industry", "days": 30, "pp_cost": -5},
+        {"key": "bad_effect", "kind": "steal_tech", "days": 30, "research_days": -1},
+        {"key": "bad_trigger", "kind": "build_network", "days": 30,
+         "available": {"not_a_trigger": true}}
+      ],
+      "agency_upgrades": [
+        {"key": "orphan", "year": 1936, "pp_cost": 10, "requires_upgrades": ["missing"]},
+        {"key": "cycle_b", "year": 1936, "pp_cost": 10, "requires_upgrades": ["cycle_c"]},
+        {"key": "cycle_c", "year": 1936, "pp_cost": 10, "requires_upgrades": ["cycle_b"]},
+        {"key": "dup_up", "year": 1936, "pp_cost": 10},
+        {"key": "dup_up", "year": 1936, "pp_cost": 10},
+        {"key": "bad_year", "year": 1900, "pp_cost": 10},
+        {"key": "bad_counter", "year": 1936, "pp_cost": 10, "counter_intel": 1.5}
+      ]
+    })");
+
+    Content content;
+    std::string err;
+    CHECK(load_content(tmp.root, &content, &err));  // bad entries are warnings, not fatal
+
+    // Every bad operation is skipped; only the first "dup" survives.
+    CHECK_EQ(content.operations.size(), static_cast<size_t>(1));
+    CHECK_EQ(content.operations[0].key, std::string("dup"));
+    CHECK(content.operation_id("bad_kind") == 0xFFFFFFFFu);
+    CHECK(content.operation_id("bad_trigger") == 0xFFFFFFFFu);
+
+    // The unknown-reference upgrade and both cycle members are dropped; the first
+    // duplicate survives and the malformed entries never enter the table.
+    CHECK_EQ(content.agency_upgrades.size(), static_cast<size_t>(1));
+    CHECK_EQ(content.agency_upgrades[0].key, std::string("dup_up"));
+    CHECK(content.agency_upgrade_id("orphan") == 0xFFFFFFFFu);
+    CHECK(content.agency_upgrade_id("cycle_b") == 0xFFFFFFFFu);
+    CHECK(content.agency_upgrade_id("bad_year") == 0xFFFFFFFFu);
+
+    // One diagnostic per error class, addressed file:key: reason.
+    CHECK(!find_error(content, "duplicate operation key").empty());
+    CHECK(!find_error(content, "bad_kind: unknown operation kind mind_control").empty());
+    CHECK(!find_error(content, "no_kind: missing kind").empty());
+    CHECK(!find_error(content, "bad_days: days must be a positive number").empty());
+    CHECK(!find_error(content, "bad_network: network_required must be between 0 and 100")
+               .empty());
+    CHECK(!find_error(content, "bad_risk: risk must be between 0 and 1").empty());
+    CHECK(!find_error(content, "bad_cost: negative pp_cost").empty());
+    CHECK(!find_error(content, "bad_effect: negative research_days").empty());
+    CHECK(!find_error(content, "bad_trigger: available.not_a_trigger: unknown trigger key")
+               .empty());
+    CHECK(!find_error(content, "orphan: unknown requires_upgrades missing").empty());
+    CHECK(!find_error(content, "requires_upgrades cycle among cycle_b, cycle_c").empty());
+    CHECK(!find_error(content, "duplicate agency upgrade key").empty());
+    CHECK(!find_error(content, "bad_year: year must be 1936 or later").empty());
+    CHECK(!find_error(content, "bad_counter: counter_intel must be between 0 and 1").empty());
+}
+
+HOI_TEST(content_intelligence_malformed_file_is_fatal) {
+    TempData tmp;
+    write_standard(tmp);
+    tmp.write("intelligence.json", R"({"operations": {"key": "not_an_array"}})");
+
+    Content content;
+    std::string err;
+    CHECK(!load_content(tmp.root, &content, &err));
+    CHECK(err.find("operations: expected an array") != std::string::npos);
+}

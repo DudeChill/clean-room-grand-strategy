@@ -19,6 +19,7 @@
 #include "core/rng.h"
 #include "game/game.h"
 #include "sim/air.h"
+#include "sim/intel.h"
 #include "sim/politics.h"
 #include "sim/units.h"
 #include "sim/world.h"
@@ -536,13 +537,20 @@ SideCombatValues compute_side_values(const Game& g, const Battle& b,
 
         const double planning_mod =
             attacker ? clamp01(dp->planning) * g.content.constants.planning_max_attack_bonus : 0.0;
+        // Broken ciphers deny part of the attacker's surprise (src/sim/intel.h:
+        // decryption_planning_penalty). The defender reads the attacker's traffic; with
+        // nothing decrypted the factor is 1 and the bonus is untouched.
+        const double planning_kept =
+            attacker ? 1.0 - clamp01(decryption_planning_penalty(g, dp->country, b.defender_lead))
+                     : 1.0;
+        const double effective_planning = planning_mod * planning_kept;
         const double supply_mod = clamp01(dp->supply);
         const double experience_mod = clamp01(dp->experience);
         const double commander = commander_bonus(g, *dp, attacker);
         const double attack_mod = mods.get(ModifierKind::DivisionAttack);
         const double org_factor =
             clamp01(safe_div(dp->organization, std::max(1e-9, s.max_organization)));
-        const double mult = (1.0 + attack_mod + planning_mod + experience_mod + commander +
+        const double mult = (1.0 + attack_mod + effective_planning + experience_mod + commander +
                              air_mod - weather_penalty) *
                             terrain_mod * supply_mod * org_factor;
 
@@ -571,14 +579,15 @@ SideCombatValues compute_side_values(const Game& g, const Battle& b,
             BattleDebugLine line;
             line.division = did;
             line.base_attack = base_attack;
-            line.planning_mod = planning_mod;
+            line.planning_mod = effective_planning;
             line.terrain_mod = terrain_mod;
             line.supply_mod = supply_mod;
             line.commander_mod = commander;
             line.experience_mod = experience_mod;
             line.air_mod = air_mod;
-            line.final_attack = base_attack * (1.0 + attack_mod + planning_mod + experience_mod +
-                                               commander + air_mod - weather_penalty) *
+            line.final_attack = base_attack * (1.0 + attack_mod + effective_planning +
+                                               experience_mod + commander + air_mod -
+                                               weather_penalty) *
                                 terrain_mod * supply_mod * org_factor;
             debug->push_back(line);
         }
@@ -881,10 +890,17 @@ void resolve_battles(Game& g) {
             const SideCombatValues a_vals = compute_side_values(g, b, att.ids, true, &att_lines);
             const SideCombatValues d_vals = compute_side_values(g, b, def.ids, false, &def_lines);
 
-            const double attack_att =
-                a_vals.soft_attack * (1.0 - def_hardness) + a_vals.hard_attack * def_hardness;
-            const double attack_def =
-                d_vals.soft_attack * (1.0 - att_hardness) + d_vals.hard_attack * att_hardness;
+            // Intelligence: a side that knows its enemy attacks better (src/sim/intel.h:
+            // intel_attack_bonus). Symmetric - each side's knowledge of the other scales
+            // its own attack value - and exactly 1.0 when nothing is known.
+            const double intel_att = 1.0 + intel_attack_bonus(g, b.attacker_lead, b.defender_lead);
+            const double intel_def = 1.0 + intel_attack_bonus(g, b.defender_lead, b.attacker_lead);
+            double attack_att =
+                (a_vals.soft_attack * (1.0 - def_hardness) + a_vals.hard_attack * def_hardness) *
+                intel_att;
+            double attack_def =
+                (d_vals.soft_attack * (1.0 - att_hardness) + d_vals.hard_attack * att_hardness) *
+                intel_def;
             const double def_att = a_vals.breakthrough;  // attackers defend with breakthrough
             const double def_def = d_vals.defense;
 

@@ -274,6 +274,61 @@ struct BuildingDef {
     int max_level = 10;
 };
 
+// ----------------------------------------------------------- intelligence ----
+
+enum class OperationKind : uint8_t {
+    BuildNetwork = 0,   // raise a network's strength in the target
+    StealTech,          // grant research progress in a category
+    SabotageIndustry,   // cut the target's factory output for a while
+    SupportIdeology,    // shift the target's ruling-party support
+    Destabilise,        // cut the target's stability
+    CounterIntel,       // hunt enemy networks at home
+    Count
+};
+const char* operation_kind_name(OperationKind kind);
+bool match_operation_kind(const std::string& name, OperationKind* out);
+
+// One intelligence operation a country can run against another. Everything is data:
+// the engine reads these fields and never special-cases a key.
+struct OperationDef {
+    uint32_t index = 0;
+    std::string key;
+    std::string name;
+    std::string description;
+    OperationKind kind = OperationKind::BuildNetwork;
+    int days = 30;                 // work days at full pace
+    double pp_cost = 0.0;          // political power spent when the operation starts
+    double civilian_cost = 0.0;    // civilian factories tied up while it runs
+    double network_required = 0.0; // network strength needed in the target
+    double risk = 0.1;             // 0..1 chance the network is burned on completion
+    // Effects. Exactly which ones a kind uses is data, not code.
+    double network_gain = 0.0;     // strength added to the network in the target
+    double research_days = 0.0;    // research progress granted (StealTech)
+    double output_penalty = 0.0;   // factory output modifier applied to the target
+    double stability_delta = 0.0;  // target stability change
+    double ideology_shift = 0.0;   // target ruling-party support change
+    int effect_days = 90;          // how long the timed effect lasts
+    Json available;                // optional trigger (country scope)
+    Json effect;                   // optional script effects, run against the target
+};
+
+// An agency upgrade: what the country's intelligence service can do. Bought with
+// political power, gated by year, technology or a trigger, and by other upgrades.
+struct AgencyUpgradeDef {
+    uint32_t index = 0;
+    std::string key;
+    std::string name;
+    std::string description;
+    int year = 1936;
+    double pp_cost = 0.0;
+    std::vector<std::string> requires_upgrades;  // keys that must be owned first
+    double network_growth = 0.0;        // network strength per day, added to the base
+    double operation_speed = 0.0;       // fraction faster operations run (0.25 = +25%)
+    double crypto_speed = 0.0;          // decryption progress per day, added to the base
+    double counter_intel = 0.0;         // enemy network growth cut at home (0..1)
+    Json available;                     // optional trigger (country scope)
+};
+
 struct Content {
     std::vector<EquipmentDef> equipment;  // indexed by EquipmentId
     std::map<std::string, EquipmentId> equipment_by_key;
@@ -294,6 +349,12 @@ struct Content {
     std::map<std::string, uint32_t> component_index;
     std::vector<EquipmentDesign> designs;  // created at runtime by countries
     std::map<std::string, uint32_t> design_index;
+    // Intelligence tables. Operations are the actions a country may run against another;
+    // agency upgrades are what its service can do.
+    std::vector<OperationDef> operations;
+    std::map<std::string, uint32_t> operation_index;
+    std::vector<AgencyUpgradeDef> agency_upgrades;
+    std::map<std::string, uint32_t> agency_upgrade_index;
     // Reverse link, derived: the equipment a design produces -> that design's index.
     // Built by rebuild_content_index on load and maintained by design_create, so
     // `equipment_unlocked` can answer "is this another country's design?" without
@@ -358,6 +419,20 @@ struct Content {
     [[nodiscard]] uint32_t design_id(const std::string& key) const {
         auto it = design_index.find(key);
         return it == design_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    const OperationDef* operation(uint32_t index) const {
+        return index < operations.size() ? &operations[index] : nullptr;
+    }
+    uint32_t operation_id(const std::string& key) const {
+        auto it = operation_index.find(key);
+        return it == operation_index.end() ? 0xFFFFFFFFu : it->second;
+    }
+    const AgencyUpgradeDef* agency_upgrade(uint32_t index) const {
+        return index < agency_upgrades.size() ? &agency_upgrades[index] : nullptr;
+    }
+    uint32_t agency_upgrade_id(const std::string& key) const {
+        auto it = agency_upgrade_index.find(key);
+        return it == agency_upgrade_index.end() ? 0xFFFFFFFFu : it->second;
     }
     [[nodiscard]] const SpiritDef* spirit(uint32_t index) const {
         return index < spirits.size() ? &spirits[index] : nullptr;

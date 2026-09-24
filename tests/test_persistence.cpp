@@ -848,6 +848,56 @@ void enrich(Game& g) {
         c.advisors.push_back(second_advisor);
         c.advisor_index[advisor.key] = 0;
         c.advisor_index[second_advisor.key] = 1;
+
+        // Intelligence content: the operations a country may run against another and
+        // the agency upgrades it may buy. Both tables are read every tick by the
+        // intel phase and the AI, and each entry carries non-empty optional script
+        // blocks so the canonical-JSON round trip is exercised.
+        const OperationKind kinds[3] = {OperationKind::BuildNetwork, OperationKind::StealTech,
+                                        OperationKind::SabotageIndustry};
+        const char* op_keys[3] = {"build_network", "steal_tech", "sabotage_industry"};
+        for (int i = 0; i < 3; ++i) {
+            OperationDef operation;
+            operation.index = static_cast<uint32_t>(i);
+            operation.key = op_keys[i];
+            operation.name = std::string("Operation ") + op_keys[i];
+            operation.description = "An intelligence operation.";
+            operation.kind = kinds[i];
+            operation.days = 20 + 5 * i;
+            operation.pp_cost = 25.0 + 10.0 * i;
+            operation.civilian_cost = 1.0 + 0.5 * i;
+            operation.network_required = 10.0 + 5.0 * i;
+            operation.risk = 0.1 + 0.05 * i;
+            operation.network_gain = 4.0 + i;
+            operation.research_days = 15.0 + 5.0 * i;
+            operation.output_penalty = 0.05 * (i + 1);
+            operation.stability_delta = -0.02 * (i + 1);
+            operation.ideology_shift = 0.01 * (i + 1);
+            operation.effect_days = 60 + 15 * i;
+            operation.available = Json::parse(R"({"political_power": {"gte": 25}})");
+            operation.effect = Json::parse(R"({"add_stability": -0.02})");
+            c.operations.push_back(operation);
+            c.operation_index[operation.key] = static_cast<uint32_t>(i);
+        }
+
+        const char* upgrade_keys[3] = {"agency_hq", "crypto_bureau", "counter_intel_school"};
+        for (int i = 0; i < 3; ++i) {
+            AgencyUpgradeDef upgrade;
+            upgrade.index = static_cast<uint32_t>(i);
+            upgrade.key = upgrade_keys[i];
+            upgrade.name = std::string("Upgrade ") + upgrade_keys[i];
+            upgrade.description = "An agency upgrade.";
+            upgrade.year = 1936 + 2 * i;
+            upgrade.pp_cost = 50.0 + 25.0 * i;
+            if (i > 0) upgrade.requires_upgrades.push_back(upgrade_keys[0]);
+            upgrade.network_growth = 0.2 + 0.1 * i;
+            upgrade.operation_speed = 0.1 * i;
+            upgrade.crypto_speed = 0.05 * i;
+            upgrade.counter_intel = 0.05 * (i + 1);
+            upgrade.available = Json::parse(R"({"year": {"gte": 1936}})");
+            c.agency_upgrades.push_back(upgrade);
+            c.agency_upgrade_index[upgrade.key] = static_cast<uint32_t>(i);
+        }
     }
 
     // Political state that only the scripted layer produces: focus progression, an
@@ -898,6 +948,41 @@ void enrich(Game& g) {
         c.spirit_slots = 6 + static_cast<int>(id.v);
         c.advisor_slots = 3 + static_cast<int>(id.v);
     });
+
+    // A fourth country exists only as an intelligence target. It is created here, in
+    // enrich(), so it takes part in no phase: it owns no province, army or wing. With
+    // it, country 0 can hold spy networks in three distinct targets and the round trip
+    // proves the target ids and their stored order survive.
+    Country* spy_target = add(w.countries);
+    spy_target->id = CountryId(3);
+    spy_target->tag = "DVA";
+    spy_target->name = "Dvaria";
+    spy_target->ideology = Ideology::Communist;
+    spy_target->capital = StateId(3);
+    spy_target->equipment_stockpile.assign(g.content.equipment.size(), 50.0);
+    spy_target->law_levels = {0, 0, 0};
+    spy_target->starting_factories = 4;
+
+    // Intelligence state: country 0 runs a real agency - three upgrades, networks in
+    // three targets, two operations in flight and a completed cipher (three ciphers,
+    // in fact, so the per-target order is exercised) - while the other countries carry
+    // partial state so no list is uniformly empty. Built after the tick loop so no
+    // intel phase acts on it before the round trip.
+    {
+        Country& spy = w.countries[CountryId(0)];
+        spy.agency_upgrades = {0, 1, 2};
+        spy.networks = {{CountryId(1), 42.5, 0.15},
+                        {CountryId(2), 18.0, 0.40},
+                        {CountryId(3), 7.25, 0.0}};
+        spy.operations = {{CountryId(1), 0, 12.5, 18.0},
+                          {CountryId(2), 2, 3.25, 27.5}};
+        spy.ciphers = {{CountryId(1), 1.0}, {CountryId(2), 0.5}, {CountryId(3), 0.125}};
+
+        w.countries[CountryId(1)].agency_upgrades = {1};
+        w.countries[CountryId(1)].networks.push_back({CountryId(2), 10.0, 0.05});
+        w.countries[CountryId(1)].operations.push_back({CountryId(3), 1, 5.0, 5.0});
+        w.countries[CountryId(2)].ciphers.push_back({CountryId(0), 0.25});
+    }
     w.script_vars["war_effort"] = 3.5;
     w.script_vars["preparedness"] = 0.25;
     DelayedEvent delayed;
@@ -1142,6 +1227,15 @@ Fixture build_fixture() {
     // The trade slice must be exercised too: an empty route list would serialise
     // nothing and prove nothing.
     CHECK_GT(f.source.world.trade_routes.size(), 1u);
+    // The intelligence slice must be exercised too: empty content tables or an empty
+    // agency state would serialise nothing and prove nothing.
+    CHECK_GT(f.source.content.operations.size(), 0u);
+    CHECK_GT(f.source.content.agency_upgrades.size(), 0u);
+    CHECK_EQ(f.source.world.countries[CountryId(0)].agency_upgrades.size(), 3u);
+    CHECK_EQ(f.source.world.countries[CountryId(0)].networks.size(), 3u);
+    CHECK_EQ(f.source.world.countries[CountryId(0)].operations.size(), 2u);
+    CHECK_EQ(f.source.world.countries[CountryId(0)].ciphers.size(), 3u);
+    CHECK(!f.source.world.countries[CountryId(1)].networks.empty());
     return f;
 }
 
@@ -1224,6 +1318,75 @@ HOI_TEST(save_round_trip_preserves_id_allocation_for_new_entities) {
     CHECK(b != nullptr);
     CHECK_EQ(a->id, b->id);
     CHECK_EQ(world_hash(before), world_hash(loaded));
+}
+
+// The intelligence state is new state: every field of every list must round-trip and
+// every content table must rebuild its key -> index map, exactly like the other
+// per-country rosters. Country 0 exercises the full agency: three upgrades, networks
+// in three distinct targets, two operations in flight and three ciphers.
+HOI_TEST(save_round_trip_preserves_intelligence_state) {
+    const Fixture& f = fixture();
+    Game loaded = load_into_fresh(f);
+
+    const Country& src = f.source.world.countries[CountryId(0)];
+    const Country& dst = loaded.world.countries[CountryId(0)];
+    CHECK_EQ(dst.agency_upgrades, src.agency_upgrades);
+    CHECK_EQ(dst.networks.size(), src.networks.size());
+    for (size_t i = 0; i < src.networks.size(); ++i) {
+        CHECK(dst.networks[i].target == src.networks[i].target);
+        CHECK_EQ(dst.networks[i].strength, src.networks[i].strength);
+        CHECK_EQ(dst.networks[i].exposure, src.networks[i].exposure);
+    }
+    CHECK_EQ(dst.operations.size(), src.operations.size());
+    for (size_t i = 0; i < src.operations.size(); ++i) {
+        CHECK(dst.operations[i].target == src.operations[i].target);
+        CHECK_EQ(dst.operations[i].operation, src.operations[i].operation);
+        CHECK_EQ(dst.operations[i].days_left, src.operations[i].days_left);
+        CHECK_EQ(dst.operations[i].progress, src.operations[i].progress);
+    }
+    CHECK_EQ(dst.ciphers.size(), src.ciphers.size());
+    for (size_t i = 0; i < src.ciphers.size(); ++i) {
+        CHECK(dst.ciphers[i].target == src.ciphers[i].target);
+        CHECK_EQ(dst.ciphers[i].progress, src.ciphers[i].progress);
+    }
+
+    // The other countries' partial intelligence state travels too: an empty list
+    // every time would prove nothing.
+    const Country& src1 = f.source.world.countries[CountryId(1)];
+    const Country& dst1 = loaded.world.countries[CountryId(1)];
+    CHECK_EQ(dst1.agency_upgrades, src1.agency_upgrades);
+    CHECK_EQ(dst1.networks.size(), src1.networks.size());
+    CHECK_EQ(dst1.operations.size(), src1.operations.size());
+    CHECK_EQ(dst1.ciphers.size(), src1.ciphers.size());
+
+    // The content tables and the rebuilt key -> index maps: an operation or upgrade
+    // must resolve by key after the load, the same way `equipment_unlocked` resolves
+    // a design.
+    CHECK_EQ(loaded.content.operations.size(), f.source.content.operations.size());
+    CHECK_EQ(loaded.content.agency_upgrades.size(), f.source.content.agency_upgrades.size());
+    for (const OperationDef& o : f.source.content.operations) {
+        const uint32_t index = loaded.content.operation_id(o.key);
+        CHECK(index != 0xFFFFFFFFu);
+        const OperationDef* after = loaded.content.operation(index);
+        CHECK(after != nullptr);
+        if (after == nullptr) continue;
+        CHECK(after->kind == o.kind);
+        CHECK_EQ(after->days, o.days);
+        CHECK_EQ(after->effect_days, o.effect_days);
+        CHECK_EQ(after->network_gain, o.network_gain);
+        CHECK_EQ(after->pp_cost, o.pp_cost);
+    }
+    for (const AgencyUpgradeDef& u : f.source.content.agency_upgrades) {
+        const uint32_t index = loaded.content.agency_upgrade_id(u.key);
+        CHECK(index != 0xFFFFFFFFu);
+        const AgencyUpgradeDef* after = loaded.content.agency_upgrade(index);
+        CHECK(after != nullptr);
+        if (after == nullptr) continue;
+        CHECK_EQ(after->year, u.year);
+        CHECK_EQ(after->counter_intel, u.counter_intel);
+        CHECK_EQ(after->network_growth, u.network_growth);
+        CHECK(after->requires_upgrades == u.requires_upgrades);
+    }
 }
 
 HOI_TEST(save_detects_corrupted_section_payload_and_names_it) {
@@ -1777,6 +1940,36 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"advisor.cost_pp", +[](Game& g) { for (auto& a : g.content.advisors) a.cost_pp += 1.0; }},
         {"advisor.available", +[](Game& g) { for (auto& a : g.content.advisors) a.available = Json(true); }},
         {"advisor.modifiers", +[](Game& g) { for (auto& a : g.content.advisors) a.modifiers.v[0] += 0.01; }},
+        {"operation.index", +[](Game& g) { for (auto& o : g.content.operations) o.index += 1; }},
+        {"operation.key", +[](Game& g) { for (auto& o : g.content.operations) o.key += "x"; }},
+        {"operation.name", +[](Game& g) { for (auto& o : g.content.operations) o.name += "x"; }},
+        {"operation.description", +[](Game& g) { for (auto& o : g.content.operations) o.description += "x"; }},
+        {"operation.kind", +[](Game& g) { for (auto& o : g.content.operations) o.kind = OperationKind::Destabilise; }},
+        {"operation.days", +[](Game& g) { for (auto& o : g.content.operations) o.days += 1; }},
+        {"operation.pp_cost", +[](Game& g) { for (auto& o : g.content.operations) o.pp_cost += 1.0; }},
+        {"operation.civilian_cost", +[](Game& g) { for (auto& o : g.content.operations) o.civilian_cost += 1.0; }},
+        {"operation.network_required", +[](Game& g) { for (auto& o : g.content.operations) o.network_required += 1.0; }},
+        {"operation.risk", +[](Game& g) { for (auto& o : g.content.operations) o.risk += 0.01; }},
+        {"operation.network_gain", +[](Game& g) { for (auto& o : g.content.operations) o.network_gain += 1.0; }},
+        {"operation.research_days", +[](Game& g) { for (auto& o : g.content.operations) o.research_days += 1.0; }},
+        {"operation.output_penalty", +[](Game& g) { for (auto& o : g.content.operations) o.output_penalty += 0.01; }},
+        {"operation.stability_delta", +[](Game& g) { for (auto& o : g.content.operations) o.stability_delta -= 0.01; }},
+        {"operation.ideology_shift", +[](Game& g) { for (auto& o : g.content.operations) o.ideology_shift += 0.01; }},
+        {"operation.effect_days", +[](Game& g) { for (auto& o : g.content.operations) o.effect_days += 1; }},
+        {"operation.available", +[](Game& g) { for (auto& o : g.content.operations) o.available = Json(true); }},
+        {"operation.effect", +[](Game& g) { for (auto& o : g.content.operations) o.effect = Json(true); }},
+        {"agency_upgrade.index", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.index += 1; }},
+        {"agency_upgrade.key", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.key += "x"; }},
+        {"agency_upgrade.name", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.name += "x"; }},
+        {"agency_upgrade.description", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.description += "x"; }},
+        {"agency_upgrade.year", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.year += 1; }},
+        {"agency_upgrade.pp_cost", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.pp_cost += 1.0; }},
+        {"agency_upgrade.requires_upgrades", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.requires_upgrades.push_back("x"); }},
+        {"agency_upgrade.network_growth", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.network_growth += 0.01; }},
+        {"agency_upgrade.operation_speed", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.operation_speed += 0.01; }},
+        {"agency_upgrade.crypto_speed", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.crypto_speed += 0.01; }},
+        {"agency_upgrade.counter_intel", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.counter_intel += 0.01; }},
+        {"agency_upgrade.available", +[](Game& g) { for (auto& u : g.content.agency_upgrades) u.available = Json(true); }},
         {"component.index", +[](Game& g) { for (auto& comp : g.content.components) comp.index += 1; }},
         {"component.key", +[](Game& g) { for (auto& comp : g.content.components) comp.key += "x"; }},
         {"component.name", +[](Game& g) { for (auto& comp : g.content.components) comp.name += "x"; }},
@@ -1843,6 +2036,19 @@ HOI_TEST(save_hash_covers_every_gameplay_field) {
         {"country.designs", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.designs.push_back(0); }); }},
         {"country.spirit_slots", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.spirit_slots += 1; }); }},
         {"country.advisor_slots", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.advisor_slots += 1; }); }},
+        {"country.agency_upgrades", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.agency_upgrades.push_back(0); }); }},
+        {"country.networks", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.networks.push_back(SpyNetwork{CountryId(1), 5.0, 0.1}); }); }},
+        {"country.network.target", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& n : c.networks) n.target = CountryId(3); }); }},
+        {"country.network.strength", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& n : c.networks) n.strength += 1.0; }); }},
+        {"country.network.exposure", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& n : c.networks) n.exposure += 0.01; }); }},
+        {"country.operations", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.operations.push_back(IntelOperation{CountryId(1), 0, 1.0, 1.0}); }); }},
+        {"country.operation.target", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& o : c.operations) o.target = CountryId(3); }); }},
+        {"country.operation.operation", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& o : c.operations) o.operation += 1; }); }},
+        {"country.operation.days_left", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& o : c.operations) o.days_left += 1.0; }); }},
+        {"country.operation.progress", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& o : c.operations) o.progress += 1.0; }); }},
+        {"country.ciphers", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { c.ciphers.push_back(CipherProgress{CountryId(0), 0.05}); }); }},
+        {"country.cipher.target", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& cp : c.ciphers) cp.target = CountryId(3); }); }},
+        {"country.cipher.progress", +[](Game& g) { g.world.countries.for_each([](CountryId, Country& c) { for (auto& cp : c.ciphers) cp.progress += 0.05; }); }},
         {"world.script_vars.value", +[](Game& g) { for (auto& e : g.world.script_vars) e.second += 1.0; }},
         {"world.script_vars.key", +[](Game& g) { g.world.script_vars["added"] = 1.0; }},
         {"world.delayed_events", +[](Game& g) { g.world.delayed_events.push_back(DelayedEvent{}); }},
@@ -2036,6 +2242,8 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
     CHECK_EQ(empty.content.advisors.size(), f.source.content.advisors.size());
     CHECK_EQ(empty.content.components.size(), f.source.content.components.size());
     CHECK_EQ(empty.content.designs.size(), f.source.content.designs.size());
+    CHECK_EQ(empty.content.operations.size(), f.source.content.operations.size());
+    CHECK_EQ(empty.content.agency_upgrades.size(), f.source.content.agency_upgrades.size());
     CHECK(empty.content.constants.ic_per_military_factory ==
           f.source.content.constants.ic_per_military_factory);
     // Derived key -> id maps are rebuilt, not stored: lookups must work after a load.
@@ -2091,6 +2299,16 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
         CHECK(after_model != nullptr);
         CHECK(before_model != nullptr && after_model != nullptr && before_model->key == after_model->key);
     }
+    // Intelligence operations and agency upgrades are addressed by key through the
+    // rebuilt indexes too: the intel phase and the AI look them up by key.
+    for (const OperationDef& operation : f.source.content.operations) {
+        CHECK(empty.content.operation_id(operation.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.operation(empty.content.operation_id(operation.key)) != nullptr);
+    }
+    for (const AgencyUpgradeDef& upgrade : f.source.content.agency_upgrades) {
+        CHECK(empty.content.agency_upgrade_id(upgrade.key) != 0xFFFFFFFFu);
+        CHECK(empty.content.agency_upgrade(empty.content.agency_upgrade_id(upgrade.key)) != nullptr);
+    }
     // The per-country spirit/advisor state survives the load into an empty Game.
     const Country& src_country = f.source.world.countries[CountryId(0)];
     const Country& loaded_country = empty.world.countries[CountryId(0)];
@@ -2100,6 +2318,11 @@ HOI_TEST(save_load_into_default_constructed_game_is_self_contained) {
     CHECK_EQ(loaded_country.designs.size(), src_country.designs.size());
     CHECK_EQ(loaded_country.spirit_slots, src_country.spirit_slots);
     CHECK_EQ(loaded_country.advisor_slots, src_country.advisor_slots);
+    // The intelligence agency state survives into a default-constructed Game too.
+    CHECK_EQ(loaded_country.agency_upgrades.size(), src_country.agency_upgrades.size());
+    CHECK_EQ(loaded_country.networks.size(), src_country.networks.size());
+    CHECK_EQ(loaded_country.operations.size(), src_country.operations.size());
+    CHECK_EQ(loaded_country.ciphers.size(), src_country.ciphers.size());
 
     // Continuing both runs must stay identical: this is what a lost field would break.
     Game original = f.source;

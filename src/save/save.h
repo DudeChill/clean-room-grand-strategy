@@ -30,7 +30,11 @@ inline constexpr uint32_t SAVE_MAGIC = 0x34494F48;  // "HOI4" little-endian
 //    (Country::designs). Layout changed, so version 6 files are rejected.
 // 8: ComponentDef gained its defense and breakthrough deltas, widening every
 //    serialized component record. Layout changed, so version 7 files are rejected.
-inline constexpr uint32_t SAVE_VERSION = 8;
+// 9: Intelligence. Economy gained the operation and agency-upgrade content tables
+//    (Content::operations, Content::agency_upgrades) and Politics gained each
+//    country's agency state (Country::agency_upgrades, networks, operations,
+//    ciphers). Layout changed, so version 8 files are rejected.
+inline constexpr uint32_t SAVE_VERSION = 9;
 
 enum class Subsystem : uint8_t {
     Map = 0,

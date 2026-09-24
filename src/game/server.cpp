@@ -28,6 +28,7 @@
 #include "sim/events.h"
 #include "sim/focus.h"
 #include "sim/industry.h"
+#include "sim/intel.h"
 #include "sim/map.h"
 #include "sim/navy.h"
 #include "sim/politics.h"
@@ -1063,6 +1064,80 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
         player.set("advisor_choices", advisor_choices);
         player.set("advisor_slots", Json(advisor_slots_free(g, viewer)));
         player.set("advisor_capacity", Json(c->advisor_slots));
+
+        // Intelligence: the player's agency, what its own networks know about every
+        // other country, and the operations it may start there. Only the viewer's
+        // networks appear - another country's penetration of the player is never
+        // leaked to the client.
+        Json intel = Json::object();
+        intel.set("pp", Json(c->political_power));
+
+        Json agency = Json::array();
+        for (uint32_t i = 0; i < g.content.agency_upgrades.size(); ++i) {
+            const AgencyUpgradeDef* def = g.content.agency_upgrade(i);
+            if (!def) continue;
+            bool is_owned = false;
+            for (uint32_t bought : c->agency_upgrades) {
+                if (bought == i) is_owned = true;
+            }
+            Json j = Json::object();
+            j.set("key", Json(def->key));
+            j.set("name", Json(def->name));
+            j.set("description", Json(def->description));
+            j.set("pp_cost", Json(def->pp_cost));
+            j.set("owned", Json(is_owned));
+            // The content gate only: the client also greys out what it cannot afford,
+            // so it can explain the refusal without a round trip.
+            j.set("available", Json(!is_owned && intel_upgrade_available(g, viewer, i)));
+            agency.push_back(j);
+        }
+        intel.set("agency_upgrades", agency);
+
+        Json intel_targets = Json::array();
+        w.countries.for_each([&](CountryId tid, const Country& tc) {
+            if (tid == viewer || !tc.alive) return;
+            Json t = Json::object();
+            t.set("id", Json(static_cast<uint32_t>(tid.v)));
+            t.set("tag", Json(tc.tag));
+            t.set("name", Json(tc.name));
+            t.set("network_strength", Json(network_strength(g, viewer, tid)));
+            double exposure = 0.0;
+            for (const SpyNetwork& n : c->networks) {
+                if (n.target == tid) exposure = n.exposure;
+            }
+            t.set("exposure", Json(exposure));
+            t.set("decryption", Json(decryption_level(g, viewer, tid)));
+            t.set("intel", Json(intel_level(g, viewer, tid)));
+            Json in_flight = Json::array();
+            for (const IntelOperation& op : c->operations) {
+                if (op.target != tid) continue;
+                const OperationDef* def = g.content.operation(op.operation);
+                Json o = Json::object();
+                o.set("operation", Json(def ? def->key : std::string("?")));
+                o.set("name", Json(def ? def->name : std::string("?")));
+                o.set("days", Json(def ? def->days : 0));  // total work days
+                o.set("days_left", Json(op.days_left));
+                o.set("progress", Json(op.progress));
+                in_flight.push_back(o);
+            }
+            t.set("operations", in_flight);
+            Json starts = Json::array();
+            for (uint32_t i = 0; i < g.content.operations.size(); ++i) {
+                const OperationDef* def = g.content.operation(i);
+                if (!def) continue;
+                Json o = Json::object();
+                o.set("key", Json(def->key));
+                o.set("name", Json(def->name));
+                o.set("pp_cost", Json(def->pp_cost));
+                o.set("network_required", Json(def->network_required));
+                o.set("available", Json(intel_operation_available(g, viewer, tid, i)));
+                starts.push_back(o);
+            }
+            t.set("available_operations", starts);
+            intel_targets.push_back(t);
+        });
+        intel.set("targets", intel_targets);
+        player.set("intel", intel);
 
         Json player_states = Json::array();
         w.states.for_each([&](StateId sid, const State& s) {
