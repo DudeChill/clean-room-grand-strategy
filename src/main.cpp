@@ -29,7 +29,14 @@
 #include "core/socket_compat.h"
 #if defined(_WIN32)
 // socket_compat.h pulls winsock2.h with WIN32_LEAN_AND_MEAN; windows.h then skips
-// shellapi.h, which is where ShellExecuteA lives.
+// shellapi.h, which is where ShellExecuteA lives. NOMINMAX keeps the min/max macros out
+// of the engine's std::min/std::max calls.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <shellapi.h>
 #else

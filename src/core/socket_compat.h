@@ -21,8 +21,15 @@
 #include <string>
 
 #ifdef _WIN32
+// `windows.h` (pulled in by winsock2.h and by callers that need ShellExecute) defines
+// `min`/`max` as macros unless NOMINMAX is set, which turns every `std::min(...)` in the
+// engine into a syntax error on MSVC. Both switches belong here so no translation unit can
+// forget them.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
