@@ -1,0 +1,20 @@
+[WARN] industry: country 3 released 1 military factories assignments it no longer controls (assigned 6, controlled 5) and retired 1 line(s)
+scenario data/scenarios/1936.json loaded: 2275 provinces, 332 states, 10 countries, 95 divisions
+simulated 720 ticks (30 days) ending 1936-01-31
+countries alive 10, wars 4, battles 3, divisions 195
+commands applied 2118 (of 2125 recorded)
+
+Map        0xd1ac147c90a78ba2  457396 bytes
+Countries  0xd7b720bb5b89d410  16474 bytes
+Economy    0xfc8a8585e005f3ff  107368 bytes
+Military   0x2e3257c927ef53ac  161107 bytes
+Battles    0x21e9b1caea152731  1807 bytes
+Diplomacy  0xf5108bb64889a9fb  881 bytes
+Politics   0xebf7bd6b743049f5  13357 bytes
+Ai         0xe529fa337eea2207  7815 bytes
+Rng        0x80687b01976e10b9  250 bytes
+World      0x07fe3db417454942  tick=720 date=1936-01-31T00 seed=0x0000000000003039 world_seed=0x0000000000003039
+
+performance (avg ms/tick): total 4.540 | commands 548.534 | diplomacy 58.629 | movement 7.112 | combat 30.069 | territory 28.526 | supply 1772.530 | air 2.875 | naval 3.239 | industry 117.137 | research 0.899 | training 13.511 | politics 28.263 | weather 0.231 | ai 649.725 | cleanup 0.355
+   ai detail: industry 235.2 trade 0.0 design 0.2 production 15.9 military 380.2 politics 2.2 research 0.2 diplomacy 13.7 intel 1.6
+tick p50 0.576 ms, p95 16.361 ms, p99 20.745 ms over 720 samples

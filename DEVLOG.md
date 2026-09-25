@@ -1,3 +1,27 @@
+## 2026-09-24 - v0.12.0: a Windows build, and one click to play
+
+The engine is now portable, not just POSIX: every socket call goes through one header
+(`src/core/socket_compat.h`) that spells the differences once - Winsock against POSIX,
+SOCKET against int, `SD_BOTH` against `SHUT_RDWR`, `WSAGetLastError` against `errno`,
+`ioctlsocket` against `fcntl`, and a `select`-based wait that retries on EINTR. Two real
+Windows bugs fell out of that audit: `ShellExecuteA` was declared in a header the build did
+not include, and an `accept` failure test written as `client < 0` would have been dead code
+on Windows, where `SOCKET` is unsigned.
+
+Starting the game is now one action. `--play` picks a free port, prints a short banner,
+opens the default browser without blocking (a browser that hangs must not keep the server
+from starting), and hands the player a country - no `--player` means you get the first
+living country of the scenario rather than a spectator seat, which is what a double-click
+was silently doing before. `play.bat` and `play.sh` wrap that for Windows and Unix, and
+`START_HERE.md` is five steps for someone who has never seen the project.
+
+The Windows binary is built by `.github/workflows/windows.yml` on `windows-latest` with
+MSVC: configure, build, run the unit tests, zip `game.exe` with `data/`, `web/` and the
+launchers, and attach it to the release for the tag. This machine has no Windows toolchain
+(no mingw, no wine, no passwordless sudo), so the honest statement is: the Windows artifact
+is compiled and tested by CI, its contents are verified here, and its execution is not
+verified locally - that is the one claim in this project resting on a remote build.
+
 ## 2026-09-24 - v0.11.0: multiplayer, and the last MAJOR closes
 
 Two machines can now play the same campaign and prove it: peers exchange only commands,

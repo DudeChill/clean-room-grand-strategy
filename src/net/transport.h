@@ -1,4 +1,5 @@
-// Multiplayer transport: POSIX TCP sockets plus a framing layer, and nothing else.
+// Multiplayer transport: TCP sockets (through `core/socket_compat.h`) plus a framing
+// layer, and nothing else.
 //
 // The transport moves *messages* (`lockstep.h`), never simulation state: a peer encodes
 // a `NetMessage` with `encode_message`, the bytes go over a `Link`, and the receiving
@@ -29,6 +30,7 @@
 #include <string>
 #include <vector>
 
+#include "core/socket_compat.h"
 #include "net/lockstep.h"
 
 namespace hoi::net {
@@ -114,11 +116,11 @@ class Listener {
                                        std::string* err);
 
     [[nodiscard]] uint16_t port() const { return port_; }
-    [[nodiscard]] bool listening() const { return fd_ >= 0; }
+    [[nodiscard]] bool listening() const { return fd_ != kInvalidSocket; }
     void close();
 
   private:
-    int fd_ = -1;
+    socket_t fd_ = kInvalidSocket;
     uint16_t port_ = 0;
 };
 
@@ -136,18 +138,18 @@ class Connection final : public Link {
                                               int timeout_ms, std::string* err);
 
     // Takes ownership of an accepted descriptor (used by `Listener::accept`).
-    static std::unique_ptr<Connection> adopt(int fd, std::string peer);
+    static std::unique_ptr<Connection> adopt(socket_t fd, std::string peer);
 
     long send_all(const char* data, size_t len, std::string* err) override;
     long recv_available(std::string* out, std::string* err) override;
     bool wait_readable(int timeout_ms) override;
-    [[nodiscard]] bool open() const override { return fd_ >= 0 && !closed_; }
+    [[nodiscard]] bool open() const override { return fd_ != kInvalidSocket && !closed_; }
     void close() override;
 
     [[nodiscard]] const std::string& peer() const { return peer_; }
 
   private:
-    int fd_ = -1;
+    socket_t fd_ = kInvalidSocket;
     bool closed_ = false;
     std::string peer_;
 };

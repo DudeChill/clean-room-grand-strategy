@@ -1,0 +1,8 @@
+loaded /tmp/tmp.dtj7XQCazt/r.save: data/scenarios/1936.json at 1936-01-11 (tick 240)
+simulated 120 ticks (5 days) ending 1936-01-16
+countries alive 10, wars 4, battles 3, divisions 139
+commands applied 1294 (of 1301 recorded)
+
+performance (avg ms/tick): total 5.114 | commands 91.990 | diplomacy 8.671 | movement 0.871 | combat 5.226 | territory 4.750 | supply 366.956 | air 0.486 | naval 0.541 | industry 20.238 | research 0.145 | training 1.928 | politics 4.740 | weather 0.048 | ai 105.806 | cleanup 0.059
+   ai detail: industry 35.2 trade 0.0 design 0.0 production 2.6 military 65.2 politics 0.3 research 0.0 diplomacy 2.1 intel 0.3
+tick p50 6.659 ms, p95 16.070 ms, p99 17.462 ms over 120 samples

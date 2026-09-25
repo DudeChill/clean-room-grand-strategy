@@ -32,7 +32,8 @@ prepare() {
   install -Dm755 build/genmap "$dist/$name/genmap"
   cp -r data web docs src tests tools scripts "$dist/$name/"
   cp README.md ARCHITECTURE.md ROADMAP.md TODO.md DEVLOG.md LICENSE CMakeLists.txt \
-     "$dist/$name/"
+     START_HERE.md play.sh "$dist/$name/"
+  chmod +x "$dist/$name/play.sh"
   rm -rf "$dist/$name"/docs/benchmarks/*.save "$dist/$name"/docs/benchmarks/*.log
   tar -C "$dist" -czf "$dist/$name.tar.gz" "$name"
   sha256sum "$dist/$name.tar.gz" > "$dist/$name.tar.gz.sha256"

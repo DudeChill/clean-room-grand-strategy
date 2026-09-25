@@ -75,6 +75,10 @@ void check_commands_equal(const NetMessage& a, const NetMessage& b) {
 // A real socket round trip on localhost: a peer that never connects is a timeout (not a
 // hang), a real one carries two framed messages intact, and its close is visible.
 HOI_TEST(transport_localhost_round_trip) {
+    // Winsock must be started before the first socket exists; a no-op on POSIX.
+    std::string init_err;
+    CHECK(socket_layer_init(&init_err));
+
     std::string err;
 
     Listener listener;

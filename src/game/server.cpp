@@ -3,12 +3,7 @@
 
 #include "game/server.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "core/socket_compat.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -117,7 +112,8 @@ std::string content_type_for(const std::string& path) {
 bool send_all(int fd, const std::string& data) {
     size_t sent = 0;
     while (sent < data.size()) {
-        const ssize_t n = ::send(fd, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+        const net::io_size_t n = ::send(fd, data.data() + sent,
+                                        static_cast<int>(data.size() - sent), net::kSendFlags);
         if (n <= 0) return false;
         sent += static_cast<size_t>(n);
     }
@@ -129,7 +125,7 @@ bool parse_request(int fd, Request* out) {
     char chunk[4096];
     size_t header_end = std::string::npos;
     while (header_end == std::string::npos) {
-        const ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
+        const net::io_size_t n = ::recv(fd, chunk, static_cast<int>(sizeof(chunk)), 0);
         if (n <= 0) return false;
         buffer.append(chunk, static_cast<size_t>(n));
         header_end = buffer.find("\r\n\r\n");
@@ -157,7 +153,7 @@ bool parse_request(int fd, Request* out) {
         if (key == "content-length") content_length = std::strtoul(value.c_str(), nullptr, 10);
     }
     while (rest.size() < content_length) {
-        const ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
+        const net::io_size_t n = ::recv(fd, chunk, sizeof(chunk), 0);
         if (n <= 0) break;
         rest.append(chunk, static_cast<size_t>(n));
     }
@@ -1239,20 +1235,24 @@ std::string world_snapshot_json(const Game& g, CountryId viewer) {
 }
 
 int run_server(Game& g, const ServerOptions& opts, volatile bool* stop) {
-    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        HOI_ERROR("socket() failed: %s", std::strerror(errno));
+    const net::socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == net::kInvalidSocket) {
+        HOI_ERROR("socket() failed: %s",
+                  net::socket_error_text(net::last_socket_error()).c_str());
         return 1;
     }
     int one = 1;
-    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&one),
+                 static_cast<net::socklen_compat>(sizeof(one)));
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(opts.port);
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        HOI_ERROR("bind(:%u) failed: %s", static_cast<unsigned>(opts.port), std::strerror(errno));
-        ::close(fd);
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr),
+               static_cast<net::socklen_compat>(sizeof(addr))) < 0) {
+        HOI_ERROR("bind(:%u) failed: %s", static_cast<unsigned>(opts.port),
+                  net::socket_error_text(net::last_socket_error()).c_str());
+        net::close_socket(fd);
         return 1;
     }
     ::listen(fd, 16);
@@ -1301,18 +1301,19 @@ int run_server(Game& g, const ServerOptions& opts, volatile bool* stop) {
         FD_ZERO(&readfds);
         FD_SET(fd, &readfds);
         timeval tv{0, 2000};
-        const int ready = ::select(fd + 1, &readfds, nullptr, nullptr, &tv);
+        const int ready = ::select(static_cast<int>(fd) + 1, &readfds, nullptr, nullptr, &tv);
         if (ready <= 0) continue;
 
-        const int client = ::accept(fd, nullptr, nullptr);
-        if (client < 0) continue;
-        int flag = 1;
-        ::setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+        const net::socket_t client = ::accept(fd, nullptr, nullptr);
+        // SOCKET is an unsigned handle on Windows, so `< 0` would never be true there:
+        // compare against the invalid handle instead.
+        if (client == net::kInvalidSocket) continue;
+        net::set_nodelay(client);
 
         Request req;
         Response res;
         if (!parse_request(client, &req)) {
-            ::close(client);
+            net::close_socket(client);
             continue;
         }
 
@@ -1517,9 +1518,9 @@ int run_server(Game& g, const ServerOptions& opts, volatile bool* stop) {
         }
 
         send_all(client, response_bytes(res));
-        ::close(client);
+        net::close_socket(client);
     }
-    ::close(fd);
+    net::close_socket(fd);
     return 0;
 }
 

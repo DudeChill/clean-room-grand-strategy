@@ -1,0 +1,8 @@
+scenario data/scenarios/1936.json loaded: 2275 provinces, 332 states, 10 countries, 95 divisions
+simulated 720 ticks (30 days) ending 1936-01-31
+countries alive 10, wars 4, battles 3, divisions 195
+commands applied 2118 (of 2125 recorded)
+
+performance (avg ms/tick): total 4.533 | commands 548.135 | diplomacy 58.916 | movement 6.960 | combat 29.513 | territory 28.387 | supply 1771.848 | air 2.695 | naval 3.139 | industry 117.103 | research 0.875 | training 13.722 | politics 28.234 | weather 0.222 | ai 646.635 | cleanup 0.344
+   ai detail: industry 234.6 trade 0.0 design 0.2 production 15.8 military 378.2 politics 2.1 research 0.2 diplomacy 13.4 intel 1.5
+tick p50 0.576 ms, p95 16.214 ms, p99 20.740 ms over 720 samples

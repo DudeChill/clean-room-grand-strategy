@@ -1,0 +1,58 @@
+name: Windows x64
+
+# Windows release build. On a version tag the zip is attached to that tag's
+# GitHub release; a manual run (workflow_dispatch) does the same build and keeps
+# the zip as a build artifact.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Configure (Release)
+        run: cmake -S . -B build-win -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-win --config Release --parallel
+
+      - name: Unit tests
+        run: ./build-win/Release/hoi_tests.exe
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "clean-room-grand-strategy-${{ github.ref_name }}-windows-x64"
+          $stage = "dist/$name"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "build-win/Release/game.exe" "$stage/game.exe"
+          Copy-Item "data" "$stage/data" -Recurse
+          Copy-Item "web" "$stage/web" -Recurse
+          Copy-Item "play.bat" "$stage/play.bat"
+          Copy-Item "START_HERE.md" "$stage/START_HERE.md"
+          Copy-Item "README.md" "$stage/README.md"
+          Copy-Item "LICENSE" "$stage/LICENSE"
+          Compress-Archive -Path $stage -DestinationPath "dist/$name.zip" -Force
+          Write-Host "packaged dist/$name.zip"
+
+      - name: Keep the zip as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-room-grand-strategy-windows-x64
+          path: dist/*.zip
+
+      - name: Attach the zip to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip

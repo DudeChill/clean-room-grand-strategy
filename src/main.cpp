@@ -15,7 +15,10 @@
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <deque>
 #include <map>
 #include <memory>
@@ -23,6 +26,15 @@
 #include <vector>
 
 #include "core/log.h"
+#include "core/socket_compat.h"
+#if defined(_WIN32)
+// socket_compat.h pulls winsock2.h with WIN32_LEAN_AND_MEAN; windows.h then skips
+// shellapi.h, which is where ShellExecuteA lives.
+#include <windows.h>
+#include <shellapi.h>
+#else
+#include <unistd.h>
+#endif
 #include "core/types.h"
 #include "data/mod.h"
 #include "game/game.h"
@@ -76,6 +88,7 @@ struct Options {
     bool quiet = false;
     bool verbose = false;
     bool serve = false;
+    bool play = false;   // one-click start: serve on a free port and open the browser
     bool inspect_trade = false;
     bool validate_content = false;
 };
@@ -93,6 +106,7 @@ void usage() {
         "  --load <file>         load a save instead of a scenario\n"
         "  --save-every-days <n> periodic save/load round trip (stress test)\n"
         "  --serve               run the playable browser client\n"
+        "  --play                one-click start: serve on a free port and open the browser\n"
         "  --port <n>            server port (default 8080); the session port with --host\n"
         "  --host                host a networked lockstep session (see docs/MULTIPLAYER.md)\n"
         "  --players <n>         seats in a networked session, including the host (host: default 1)\n"
@@ -151,6 +165,9 @@ bool parse_args(int argc, char** argv, Options* o) {
             std::string v;
             if (!next(&v)) return false;
             o->save_every_days = std::strtoull(v.c_str(), nullptr, 10);
+        } else if (a == "--play") {
+            o->play = true;
+            o->serve = true;
         } else if (a == "--serve") {
             o->serve = true;
         } else if (a == "--host") {
@@ -1530,6 +1547,112 @@ int run_net_session(const Options& opt, Game& game) {
 
 }  // namespace
 
+// ---------------------------------------------------------------- play mode --
+
+// True when something is already listening on this port, so `--play` can step past it
+// instead of failing on a machine that runs other servers.
+bool port_in_use(uint16_t port) {
+    net::socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == net::kInvalidSocket) return false;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    const bool taken = ::connect(fd, reinterpret_cast<sockaddr*>(&addr),
+                                 static_cast<net::socklen_compat>(sizeof(addr))) == 0;
+    net::close_socket(fd);
+    return taken;
+}
+
+// Launches the default browser without waiting for it: a blocking call here would keep
+// the server from ever starting (a browser that hangs on a headless machine is exactly
+// the case that must not stall the game).
+void open_browser_async(const std::string& url) {
+#if defined(_WIN32)
+    // ShellExecute returns as soon as the browser process is created.
+    ::ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+    const pid_t pid = ::fork();
+    if (pid == 0) {
+        ::setsid();  // detach: the browser must outlive nothing in particular
+        ::close(STDIN_FILENO);
+        ::close(STDOUT_FILENO);
+        ::close(STDERR_FILENO);
+#if defined(__APPLE__)
+        ::execlp("open", "open", url.c_str(), static_cast<char*>(nullptr));
+#else
+        ::execlp("xdg-open", "xdg-open", url.c_str(), static_cast<char*>(nullptr));
+#endif
+        ::_exit(127);  // nothing sensible left to do in the child
+    }
+#endif
+}
+
+// Opens the browser once the server has had a moment to bind, so the page loads first try.
+void open_browser_soon(const std::string& url) {
+    std::thread([url]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        open_browser_async(url);
+    }).detach();
+}
+
+// One-click start: pick a free port, serve, open the browser, and stay in the foreground
+// so closing the window stops the game.
+int run_play_mode(const Options& opt, Game& game) {
+    // A double-click should hand the player a country, not a spectator seat: with no
+    // `--player`, take the first living country of the scenario (the shipped one is the
+    // recommended power) and hand it to the human on this machine.
+    if (!game.player_country.valid()) {
+        CountryId pick;
+        game.world.countries.for_each([&](CountryId id, const Country& c) {
+            if (!pick.valid() && c.alive) pick = id;
+        });
+        if (pick.valid()) {
+            game.player_country = pick;
+            game.set_ai(pick, false);
+            const Country* c = game.world.country(pick);
+            if (c) {
+                std::printf("no --player given, so you are playing %s (%s); pass --player TAG to choose another\n",
+                            c->tag.c_str(), c->name.c_str());
+            }
+        }
+    }
+    std::string err;
+    if (!net::socket_layer_init(&err)) {
+        std::fprintf(stderr, "cannot start networking: %s\n", err.c_str());
+        return 1;
+    }
+    uint16_t port = opt.port == 0 ? 8080 : opt.port;
+    for (int attempt = 0; attempt < 20 && port_in_use(port); ++attempt) {
+        ++port;
+    }
+    char url[64];
+    std::snprintf(url, sizeof(url), "http://127.0.0.1:%u", static_cast<unsigned>(port));
+
+    std::printf("\n");
+    std::printf("  Clean Room Grand Strategy\n");
+    std::printf("  -------------------------\n");
+    {
+        const Country* me = game.world.country(game.player_country);
+        std::printf("  playing as %s   (%s)\n", me ? me->tag.c_str() : "observer",
+                    opt.scenario.c_str());
+    }
+    std::printf("  open %s in your browser (it should open by itself)\n", url);
+    std::printf("  keep this window open; close it to stop the game\n\n");
+    std::fflush(stdout);
+
+    std::signal(SIGINT, on_signal);
+    std::signal(SIGTERM, on_signal);
+    ServerOptions sopts;
+    sopts.port = port;
+    sopts.web_root = opt.web_root;
+    sopts.autosave_days = opt.autosave_days;
+    sopts.verbose = opt.verbose;
+    if (!opt.save_path.empty()) sopts.save_path = opt.save_path;
+    open_browser_soon(url);
+    return run_server(game, sopts, &g_stop_requested);
+}
+
 int main(int argc, char** argv) {
     Options opt;
     if (!parse_args(argc, argv, &opt)) return 2;
@@ -1583,7 +1706,20 @@ int main(int argc, char** argv) {
 
     const uint64_t ticks = opt.use_ticks ? opt.ticks : opt.days * static_cast<uint64_t>(TICKS_PER_DAY);
 
+    // Every mode that opens a socket (serve, play, host, join) needs the socket layer up
+    // first; on Windows that means Winsock, on Unix it is a no-op. Doing it here means no
+    // socket path can forget it.
+    {
+        std::string net_err;
+        if (!net::socket_layer_init(&net_err)) {
+            std::fprintf(stderr, "cannot start networking: %s\n", net_err.c_str());
+            return 1;
+        }
+    }
+
     if (opt.host || !opt.join_addr.empty()) return run_net_session(opt, game);
+
+    if (opt.play) return run_play_mode(opt, game);
 
     if (opt.serve) {
         std::signal(SIGINT, on_signal);

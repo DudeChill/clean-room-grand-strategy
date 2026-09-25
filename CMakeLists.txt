@@ -9,8 +9,19 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
 endif()
 
-add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wshadow)
-add_compile_options($<$<CONFIG:Debug>:-DHOI_DEBUG_BUILD=1>)
+# Warning flags are toolchain specific: MSVC's /W3 is the closest equivalent of
+# -Wall -Wextra, and /utf-8 is required because the sources are UTF-8 (MSVC would
+# otherwise read them in the machine's ANSI code page). /EHsc is the standard C++
+# exception model, which the test runner's `throw` needs. /bigobj raises the object
+# file section limit, which the largest translation units (tests/test_persistence.cpp)
+# can exceed in Debug builds.
+if(MSVC)
+  add_compile_options(/W3 /utf-8 /EHsc /bigobj)
+else()
+  add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wshadow)
+endif()
+
+add_compile_definitions($<$<CONFIG:Debug>:HOI_DEBUG_BUILD=1>)
 
 file(GLOB_RECURSE HOI_LIB_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/core/*.cpp"
@@ -23,6 +34,13 @@ file(GLOB_RECURSE HOI_LIB_SOURCES CONFIGURE_DEPENDS
 
 add_library(hoicore STATIC ${HOI_LIB_SOURCES})
 target_include_directories(hoicore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# The socket code lives in this library (src/net/transport.cpp, src/game/server.cpp) and
+# uses Winsock through src/core/socket_compat.h. PUBLIC so every executable that links
+# hoicore and opens a socket resolves WSAStartup/socket/send/recv.
+if(WIN32)
+  target_link_libraries(hoicore PUBLIC ws2_32)
+endif()
 
 add_executable(game src/main.cpp)
 target_link_libraries(game PRIVATE hoicore)

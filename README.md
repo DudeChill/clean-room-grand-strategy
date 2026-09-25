@@ -1,5 +1,19 @@
 # Clean Room Grand Strategy
 
+## Play it in one click
+
+**Windows 10/11**: unzip the `*-windows-x64.zip` release, then double-click `play.bat`.
+The browser opens the game for you; the console window it starts is the game process, so
+closing it stops the game. You play Veldoria (`VEL`) unless you pass `--player TAG`.
+
+**Linux / macOS**: unpack the release tarball and run `./play.sh` (same behaviour).
+
+Both launchers pick a free port starting at 8080, print the address, and keep the window
+open with a readable message if anything fails. `START_HERE.md` is the same instructions in
+five numbered steps. From a terminal the game is just `./game --play --player KOR` (or
+`--serve`, `--days 365 --audit`, `--host`/`--join` for a networked session).
+
+
 A from-scratch, clean-room grand-strategy engine built to reproduce the **observable
 mechanics, workflows and scale** of a Hearts of Iron IV-style game: division-based
 land warfare, an industrial production simulation, a physical supply network,

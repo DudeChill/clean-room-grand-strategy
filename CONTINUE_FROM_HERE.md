@@ -1,6 +1,6 @@
 # CONTINUE FROM HERE
 
-State of the project at the end of the session that shipped v0.10.0. Read this first when
+State of the project at the end of the session that shipped v0.12.0. Read this first when
 resuming; then `DEVLOG.md` (top entry), `docs/PARITY_MATRIX.md` and
 `docs/DISCREPANCIES.md`.
 
@@ -12,11 +12,16 @@ resuming; then `DEVLOG.md` (top entry), `docs/PARITY_MATRIX.md` and
   v0.4.0 (focus trees and decisions), v0.5.0 (national spirits and advisers),
   v0.6.0 (trade, convoys, blockade), v0.7.0 (equipment designers, scarce resources),
   v0.8.0 (equipment variants and continuous replacement), v0.9.0 (mod layer, content
-  validator, mod test pack), **v0.10.0 (intelligence: agencies, networks, operations,
-  decryption)**.
+  validator, mod test pack), v0.10.0 (intelligence: agencies, networks, operations,
+  decryption), v0.11.0 (multiplayer lockstep), **v0.12.0 (Windows build + one-click start)**.
 * Build directories in use: `build/` (main), plus per-slice dirs (`build-air/`,
-  `build-navy/`, `build-pol/`, `build-spirit/`, `build-trade/`, `build-des/`, ...).
-  Never build two agents into the same directory.
+  `build-navy/`, `build-pol/`, `build-spirit/`, `build-trade/`, `build-des/`, `build-win/`,
+  `build-net/`, `build-intel/`, ...). Never build two agents into the same directory.
+* Windows: built by `.github/workflows/windows.yml` on `windows-latest` (MSVC) and attached
+  to the release as `*-windows-x64.zip`. There is no Windows toolchain on the development
+  machine, so a Windows change must be mirrored by a CI run before it can be called done.
+  All socket code goes through `src/core/socket_compat.h` - never include a POSIX socket
+  header directly.
 
 Last verified commands (all green on a clean Release build):
 
