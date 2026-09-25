@@ -6,6 +6,7 @@
 // scenario-only state.
 
 #include <algorithm>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -18,17 +19,20 @@
 namespace hoi {
 namespace {
 
+// Path surgery goes through std::filesystem, not string cutting: a Windows path uses
+// backslashes ("C:\\dir\\scenario.json"), and a helper that only looks for '/' silently
+// resolves the map relative to the working directory instead of the scenario's own folder.
 std::string dirname_of(const std::string& path) {
-    const size_t slash = path.find_last_of('/');
-    if (slash == std::string::npos) return std::string(".");
-    if (slash == 0) return std::string("/");
-    return path.substr(0, slash);
+    const std::filesystem::path p(path);
+    const std::filesystem::path parent = p.parent_path();
+    return parent.empty() ? std::string(".") : parent.string();
 }
 
 std::string join_path(const std::string& dir, const std::string& rel) {
-    if (!rel.empty() && rel.front() == '/') return rel;
+    const std::filesystem::path r(rel);
+    if (r.is_absolute()) return rel;  // "/abs/x" or "C:\\abs\\x"
     if (dir.empty() || dir == ".") return rel;
-    return dir + "/" + rel;
+    return (std::filesystem::path(dir) / r).string();
 }
 
 bool parse_date(const std::string& s, GameDate* out) {
